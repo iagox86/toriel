@@ -4,6 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { loadGroups, saveGroups } from "../src/groups.ts";
+import { SWITCHER_COMMANDS } from "../src/commands.ts";
+import { INIT_PROMPT } from "../src/init-prompt.ts";
 import { SwitcherActions } from "../src/switcher-actions.ts";
 import { Switcher } from "../src/switcher.ts";
 
@@ -22,7 +24,7 @@ afterEach(() => {
 });
 
 /** A switcher over one ungrouped session, a group holding one session, and an empty group. */
-function setup() {
+function setup(request: (cmd: Record<string, unknown>) => Promise<unknown> = async () => ({})) {
   saveGroups({ groups: ["Full", "Empty"], assignments: { a: null, b: "Full" } });
   const sw = new Switcher();
   const local = new Map(
@@ -39,7 +41,8 @@ function setup() {
     viewing: null,
     send() {},
     notify() {},
-    request: async () => ({}),
+    request,
+    uniqueSessionName: (n: string) => n,
     metaForPath: () => undefined,
   };
   const actions = new SwitcherActions(host as never);
@@ -51,7 +54,7 @@ function setup() {
     }
     assert.equal(sw.currentHeaderTitle(), title);
   };
-  return { sw, actions, goTo };
+  return { sw, actions, goTo, host };
 }
 
 describe("deleting a group", () => {
@@ -72,5 +75,66 @@ describe("deleting a group", () => {
     assert.doesNotMatch(sw.hint, /again/);
     actions.keys(CTRL_X);
     assert.ok(loadGroups().groups.includes("Full"));
+  });
+});
+
+describe("session commands on a group heading", () => {
+  const flagged = SWITCHER_COMMANDS.filter((c) => "needsSession" in c);
+
+  it("flags the commands that act on the highlighted session", () => {
+    assert.deepEqual(
+      flagged.map((c) => c.name).sort(),
+      ["adopt", "comment", "delete", "detach", "group", "park", "rename", "stop", "ungroup"],
+    );
+  });
+
+  it("answers each of them with a red 'select a session, not a heading'", async () => {
+    const { sw, actions, goTo } = setup();
+    goTo("Full");
+    for (const c of flagged) {
+      sw.hint = "";
+      await actions.runCommand(`/${c.name}`, sw.current());
+      assert.equal(sw.hint, `${c.name}: select a session, not a heading`);
+      assert.ok(sw.render(80).some((l) => /\x1b\[[0-9;]*m[^\x1b]*select a session, not a heading/.test(l)));
+    }
+  });
+
+  it("still answers with an error when the highlighted row is not a session", async () => {
+    const { sw, actions } = setup();
+    await actions.runCommand("/stop", undefined);
+    assert.match(sw.hint, /^stop: (highlight a session first|select a session, not a heading)$/);
+  });
+});
+
+describe("/init in the switcher", () => {
+  const spawning = () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const harness = setup(async (cmd) => {
+      requests.push(cmd);
+      return { sessionId: 5 };
+    });
+    return { ...harness, requests };
+  };
+
+  it("starts a new session in the given directory and queues the init prompt as its first message", async () => {
+    const { actions, host, requests } = spawning();
+    await actions.runCommand(`/init -C ${dir}`, undefined);
+    assert.deepEqual(requests, [{ type: "spawn", cwd: dir, name: `init ${path.basename(dir)}`, agent: undefined }]);
+    assert.equal((host as { pendingPrompt?: string | null }).pendingPrompt, INIT_PROMPT);
+    assert.equal((host as { pendingEnterId?: number }).pendingEnterId, 5);
+  });
+
+  it("takes a name, and runs from the highlighted row's context without needing a session", async () => {
+    const { sw, actions, goTo, requests } = spawning();
+    goTo("Full");
+    await actions.runCommand(`/init -n docs -C ${dir}`, sw.current());
+    assert.equal(requests[0]?.name, "docs");
+  });
+
+  it("refuses a directory that does not exist, in red, without spawning", async () => {
+    const { sw, actions, requests } = spawning();
+    await actions.runCommand("/init -C /nonexistent/dir", undefined);
+    assert.equal(requests.length, 0);
+    assert.match(sw.hint, /init: \/nonexistent\/dir is not a directory/);
   });
 });

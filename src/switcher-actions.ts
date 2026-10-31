@@ -20,6 +20,7 @@ import {
 } from "./session-list.ts";
 import { detachFromParent, loadLineage, parentMap } from "./lineage.ts";
 import { arrangeTree } from "./session-tree.ts";
+import { INIT_PROMPT } from "./init-prompt.ts";
 import { loadAgentsChecked } from "./agents.ts";
 import { agentListing } from "./agents-completion.ts";
 import { runFeedback } from "./feedback-command.ts";
@@ -329,11 +330,30 @@ export class SwitcherActions {
     this.h.tui.requestRender();
   }
 
+  /** The -C directory of /new and /init, `~` expanded: `{}` (the directory toriel started in) when not given, undefined (after saying why) when it is not a directory. */
+  private startDir(verb: string, call: Invocation): { cwd?: string } | undefined {
+    const dir = call.opts.cwd as string | undefined;
+    if (dir === undefined) {
+      return {};
+    }
+    const cwd = path.resolve(dir.replace(/^~(?=$|\/)/, os.homedir()));
+    if (!(fs.existsSync(cwd) && fs.statSync(cwd).isDirectory())) {
+      this.h.switcher.alert(`${verb}: ${cwd} is not a directory`);
+      return undefined;
+    }
+    return { cwd };
+  }
+
+  /** The error for a session command run with no session highlighted: a group heading, or nothing. */
+  private noTarget(verb: string): void {
+    this.h.switcher.alert(this.h.switcher.currentIsHeader() ? `${verb}: select a session, not a heading` : `${verb}: highlight a session first`);
+  }
+
   /** A handler for a command that works on the highlighted session. */
   private needsTarget(verb: string, run: (t: SwitcherSession, arg: string, call: Invocation) => Promise<void>): CommandHandler {
     return async (call, target) => {
       if (!target) {
-        this.h.switcher.hint = `${verb}: highlight a session first`;
+        this.noTarget(verb);
         return;
       }
       await run(target, call.args.join(" "), call);
@@ -346,22 +366,26 @@ export class SwitcherActions {
   }
 
   /** Commands on a session itself: starting, stopping, deleting, renaming, adopting. */
-  private sessionCommands(): Pick<Record<SwitcherCommandName, CommandHandler>, "new" | "stop" | "delete" | "rename" | "adopt" | "detach" | "restore"> {
+  private sessionCommands(): Pick<Record<SwitcherCommandName, CommandHandler>, "new" | "init" | "stop" | "delete" | "rename" | "adopt" | "detach" | "restore"> {
     const needsTarget = this.needsTarget.bind(this);
     return {
       new: async (call) => {
-        const dir = call.opts.cwd as string | undefined;
-        const cwd = dir === undefined ? undefined : path.resolve(dir.replace(/^~(?=$|\/)/, os.homedir()));
-        if (cwd !== undefined && !(fs.existsSync(cwd) && fs.statSync(cwd).isDirectory())) {
-          this.h.switcher.hint = `new: ${cwd} is not a directory`;
-          return;
+        const dir = this.startDir("new", call);
+        if (dir) {
+          await this.newSession(undefined, call.opts.name as string | undefined, dir.cwd, call.opts.agent as string | undefined);
         }
-        await this.newSession(undefined, call.opts.name as string | undefined, cwd, call.opts.agent as string | undefined);
+      },
+      // a fresh session whose first message is the init prompt: /init is usually the first thing done in a project
+      init: async (call) => {
+        const dir = this.startDir("init", call);
+        if (dir) {
+          await this.newSession(INIT_PROMPT, (call.opts.name as string | undefined) ?? `init ${path.basename(dir.cwd ?? process.cwd())}`, dir.cwd);
+        }
       },
       stop: needsTarget("stop", (t) => this.stop(t)),
       delete: async (call, target) => {
         if (!target) {
-          this.h.switcher.hint = "delete: highlight a session first";
+          this.noTarget("delete");
           return;
         }
         await this.remove(target, call.opts.yes === true);
@@ -390,7 +414,7 @@ export class SwitcherActions {
       adopt: async (_call, target) => {
         const t = target ?? this.h.switcher.current();
         if (!t) {
-          this.h.switcher.hint = "adopt: highlight a session first";
+          this.noTarget("adopt");
         } else if (!t.key.startsWith("/")) {
           this.h.switcher.hint = "adopt: not a file-backed session";
         } else {

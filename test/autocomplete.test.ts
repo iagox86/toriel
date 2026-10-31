@@ -38,6 +38,19 @@ describe("command autocomplete", () => {
     assert.deepEqual(await suggest(ctx, "/skill"), ["skill:demo"]);
   });
 
+  it("leaves out the commands that need a session while a group heading is highlighted", async () => {
+    const offered = async (headerSelected: boolean) => (await suggest({ ...base, switcher: true, headerSelected }, "/")).sort();
+    const onSession = await offered(false);
+    const onHeader = await offered(true);
+    for (const gone of ["stop", "delete", "rename", "group", "park", "comment"]) {
+      assert.ok(onSession.includes(gone), gone);
+      assert.ok(!onHeader.includes(gone), gone);
+    }
+    for (const kept of ["new", "filter", "help"]) {
+      assert.ok(onHeader.includes(kept), kept);
+    }
+  });
+
   it("stays out of the way for plain text in the switcher", async () => {
     assert.deepEqual(await suggest({ ...base, switcher: true }, "hello"), []);
   });

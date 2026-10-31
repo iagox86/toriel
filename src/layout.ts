@@ -13,12 +13,25 @@ export interface LayoutParts {
   choicePanel: Component;
   banner: Component;
   switcher: Component;
+  /** True while a permission/extension dialog is on screen in the chat view. */
+  dialogOpen: () => boolean;
 }
 
 /** A row that takes only the height its content needs (panels that are empty take none). */
 const fit = (component: Component) => ({ component, basis: "auto" as const, grow: 0, shrink: 0, minSize: 0 });
 
+/** `component`, drawn only while `hidden()` is false; it keeps its state, so it is back when the condition clears. */
+export function hiddenWhile(hidden: () => boolean, component: Component): Component {
+  return {
+    render: (width) => (hidden() ? [] : component.render(width)),
+    invalidate: () => component.invalidate(),
+  };
+}
+
 export function buildLayouts(p: LayoutParts): { chat: VStack; switcher: VStack } {
+  // a dialog blocks the agent, so it owns the screen and the keys; a /btw answer or picker waits behind it
+  const info = hiddenWhile(p.dialogOpen, p.infoPanel);
+  const choice = hiddenWhile(p.dialogOpen, p.choicePanel);
   const dock = new VStack([
     { component: p.editor, shrink: 0, minSize: 3 },
     { component: p.statusLine, shrink: 0, minSize: 1 },
@@ -31,8 +44,8 @@ export function buildLayouts(p: LayoutParts): { chat: VStack; switcher: VStack }
       fit(p.activityLine),
       fit(p.rewindPicker),
       fit(p.dialogPanel),
-      fit(p.infoPanel),
-      fit(p.choicePanel),
+      fit(info),
+      fit(choice),
       fit(p.banner),
       dockRow,
     ]),
