@@ -26,6 +26,6 @@ The system prompt, appended to pi's own.
 
 What the launch does:
 
-- `tools` becomes `--tools`. pi keeps MCP tools unless an entry starts with `mcp__`, so a profile with no `mcp__` entry also gets `--no-mcp`. **`--tools` does not remove tools that extensions add** (memory, skills, usage); use `extensions: false` for a bare agent.
+- `tools` becomes `--tools`. pi keeps MCP tools unless an entry starts with `mcp__`, so a profile with no `mcp__` entry also gets `--no-mcp`. **An explicit `tools` list owns the loadout**: tools that extensions add are only kept if named (measured on the pinned pi 1.4.0 - a `-e` extension's tools are filtered out unless listed; pi's own agent-dir extension tools survive, so do not rely on that either). To keep messaging under `extensions: false`, name them: `tools: read, grep, toriel_message, toriel_usage`. A profile with no `tools` entry keeps toriel's tools (the daemon adds them additively); `extensions: false` alone makes a bare agent.
 - A profile with `mcp__server__*` tools only sees that server's tools, but pi still connects every enabled server in `mcp.json` when the session starts. There is no per-run server choice in pi. The loader warns when a pattern names a server that is not configured.
 - `model` and `thinking` apply when a session is created; a resumed session keeps its own. The prompt, tools and flags are re-applied on every respawn (the profile is saved per session in `~/.local/share/toriel/session-agents.json`, so editing the file later does not change existing sessions).
