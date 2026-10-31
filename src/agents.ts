@@ -15,6 +15,8 @@
 // the three agent directories.
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { piAgentDir } from "./pi-dir.ts";
+import { errText, readJsonOr } from "./util.ts";
 
 export interface AgentProfile {
   name: string;
@@ -214,12 +216,7 @@ export function mcpWarnings(profile: AgentProfile, configured: readonly string[]
 
 /** Server names in an mcp.json (`mcpServers` object); empty when unreadable. */
 export function configuredMcpServers(file: string): string[] {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as { mcpServers?: Record<string, unknown> };
-    return Object.keys(parsed.mcpServers ?? {});
-  } catch {
-    return [];
-  }
+  return Object.keys(readJsonOr<{ mcpServers?: Record<string, unknown> }>(file, {}).mcpServers ?? {});
 }
 
 export interface AgentDirs {
@@ -256,7 +253,7 @@ export function loadAgents(cwd: string, env: NodeJS.ProcessEnv = process.env): L
         const profile = parseAgent(fs.readFileSync(file, "utf8"), source, file);
         byName.set(profile.name, profile);
       } catch (err) {
-        problems.push(`${file}: ${err instanceof Error ? err.message : err}`);
+        problems.push(`${file}: ${errText(err)}`);
       }
     }
   }
@@ -265,8 +262,7 @@ export function loadAgents(cwd: string, env: NodeJS.ProcessEnv = process.env): L
 
 /** The pi MCP config files for a directory: user level, then project. */
 export function mcpConfigFiles(cwd: string, env: NodeJS.ProcessEnv = process.env): string[] {
-  const agentDir = env.PI_CODING_AGENT_DIR ?? path.join(env.HOME ?? "", ".pi", "agent");
-  return [path.join(agentDir, "mcp.json"), path.join(cwd, ".pi", "mcp.json")];
+  return [path.join(piAgentDir(env), "mcp.json"), path.join(cwd, ".pi", "mcp.json")];
 }
 
 /** Load agents and add the MCP warnings. */

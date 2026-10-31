@@ -32,7 +32,7 @@ let sessionName = flag("--name");
 // let tests see how the daemon launched this child
 mkdirSync(dirname(sessionFile), { recursive: true });
 writeFileSync(`${sessionFile}.argv.json`, JSON.stringify(args));
-writeFileSync(`${sessionFile}.env.json`, JSON.stringify({ TORIEL_SESSION_ID: process.env.TORIEL_SESSION_ID ?? null }));
+writeFileSync(`${sessionFile}.env.json`, JSON.stringify({ TORIEL_SESSION_ID: process.env.TORIEL_SESSION_ID ?? null, TORIEL_SOCK: process.env.TORIEL_SOCK ?? null }));
 const messages = [];
 
 function loadMessages(file) {

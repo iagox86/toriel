@@ -9,6 +9,21 @@ import { LineSplitter } from "../src/shared.ts";
 const DAEMON = path.join(import.meta.dirname, "..", "src", "daemon.ts");
 const FAKE_PI = path.join(import.meta.dirname, "fixtures", "fake-pi.mjs");
 
+// A run that dies mid-test (timeout, ctrl-c, crash) never reaches stop(); without this the
+// daemons it started, and their fake-pi children, outlive it.
+const started = new Set<ChildProcess>();
+process.on("exit", () => {
+  for (const proc of started) {
+    if (proc.exitCode === null && proc.pid) {
+      try {
+        process.kill(proc.pid, "SIGTERM");
+      } catch {
+        // already gone
+      }
+    }
+  }
+});
+
 export interface Harness {
   dir: string;
   sock: string;
@@ -34,6 +49,8 @@ export async function startDaemon(extraEnv: Record<string, string> = {}): Promis
     ...extraEnv,
   };
   const proc: ChildProcess = spawn(process.execPath, [DAEMON], { env, stdio: "ignore" });
+  started.add(proc);
+  proc.once("exit", () => started.delete(proc));
   const clients: Client[] = [];
   const deadline = Date.now() + 10_000;
   while (!fs.existsSync(sock)) {

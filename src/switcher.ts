@@ -23,6 +23,11 @@ import {
 
 export type SessionState = "streaming" | "idle" | "inactive" | "dead" | "compacting";
 
+/** Has a live pi child (as opposed to a file on disk, or a child that died). */
+export function isLiveState(state: SessionState): boolean {
+  return state === "streaming" || state === "idle" || state === "compacting";
+}
+
 export interface SwitcherSession {
   /** Canonical key: absolute session file path (or daemon:N before flush). */
   key: string;

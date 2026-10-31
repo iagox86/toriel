@@ -2,8 +2,11 @@
 
 toriel depends on pi at two layers, and they must stay aligned:
 
-1. **The global pi CLI** - the binary the daemon spawns for every session
-   child (found on `PATH`; normally `~/.nvm/versions/node/<ver>/bin/pi`).
+1. **The pi CLI the daemon spawns** for every session child: `piCli` in the
+   toriel settings, else the `cli.js` of the pi package in toriel's own
+   `node_modules` (in this setup a symlink to the global nvm install, so
+   `npm install -g` updates both). Children also need `node` on `PATH`; the
+   `bin/toriel` launcher arranges that.
 2. **toriel's library dependencies** - `@earendil-works/pi-coding-agent` and
    `@earendil-works/pi-tui`, pinned in `package.json`. The controller's UI and
    the docs toriel was built against come from these.
@@ -16,9 +19,10 @@ one. Check with `pi --version` against the versions in `package.json`.
 
 - **`~/.pi/agent` tree**: `sessions/<escaped-cwd>/<timestamp>_<uuid>.jsonl`
   (read directly by the controller: transcript, fork-confirm, handled-files,
-  trash/rewind), `extensions/`, `skills/`, `themes/` (written by
-  `node src/install.ts`), `mcp.json`, `settings.json`.
-- **pi on `PATH`**: the daemon spawns `pi` by name.
+  trash/rewind), `mcp.json`, `settings.json`, and the user's own `extensions/`,
+  `skills/`, `themes/` (toriel's own resources are passed by flag, not installed).
+- **The pi CLI file** (`piCli`, default from `node_modules`): the daemon runs it
+  with `node` from `PATH`.
 - **RPC verbs** the daemon uses: prompt, stream, `set_model`,
   `set_thinking_level`, `get_available_thinking_levels`, `mcp_status`,
   compaction events, dialog routing (`extension_ui_request`).
@@ -67,7 +71,7 @@ union).
    - `/think` (newest RPC surface toriel uses)
    - `/mcp list` (MCP status parsing)
    - trigger a permission dialog (ask-listed command)
-   - glance at `src/daemon.log` for errors on spawn
+   - glance at `~/.local/state/toriel/daemon.log` for errors on spawn
 
 ## Rollback
 

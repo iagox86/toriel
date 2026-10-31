@@ -19,7 +19,8 @@ interface Pi {
   }): void;
 }
 
-const sockPath = process.env.TORIEL_SOCK ?? (process.env.XDG_RUNTIME_DIR ? `${process.env.XDG_RUNTIME_DIR}/toriel.sock` : undefined);
+// the daemon puts its own socket path in every child's environment
+const sockPath = process.env.TORIEL_SOCK;
 const TIMEOUT_MS = 30_000;
 
 /** One request/response exchange with the daemon; rejects with the daemon's error text. */

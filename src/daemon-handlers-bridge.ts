@@ -7,6 +7,7 @@ import { INJECT_COMMAND, mergedQueueTexts } from "./daemon-bridge.ts";
 import type { DaemonContext } from "./daemon-context.ts";
 import type { DaemonSession } from "./daemon-session.ts";
 import { log } from "./log.ts";
+import { errText } from "./util.ts";
 
 /** Tell controllers what the strip should show: compaction-held messages, then the bridge's pending. */
 export function announceBridgeQueue(ctx: DaemonContext, s: DaemonSession): void {
@@ -33,10 +34,10 @@ export async function deliverToSession(ctx: DaemonContext, s: DaemonSession, bod
       // the command never reached the extension: nothing is pending there, so steer instead
       ctx.bridges.fail(s.id, id);
       announceBridgeQueue(ctx, s);
-      log(`session ${s.id}: bridge inject ${id} was refused (${err instanceof Error ? err.message : err}); using steering`);
+      log(`session ${s.id}: bridge inject ${id} was refused (${errText(err)}); using steering`);
     }
   } else if (ctx.bridges.shouldWarnLegacy(s.id)) {
-    log(`session ${s.id}: no session bridge; using legacy steering. Fix with node src/install.ts, then restart the session.`);
+    log(`session ${s.id}: no session bridge; using legacy steering. Restart the session.`);
   }
   await child.prompt(body, undefined, "steer");
   return "legacy";

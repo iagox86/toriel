@@ -10,8 +10,9 @@ Verified end-to-end in tmux incl. csi-u keys: switcher listing/groups,
 ctrl-n/ctrl-x deactivate/ctrl-x-x2 trash confirm, rename, group (shared
 file), lazy respawn from file replay, /abort, permission dialog forward +
 y-answer with tool actually executing, two-controller exclusivity +
-take-over + view-only refusal. pi-side groundwork lives in
-~/stuff/dotfiles/server/pi/extensions/.
+take-over + view-only refusal. (The pi-side groundwork once lived in the
+user's dotfiles; none of it is used any more: toriel's own pi resources are in
+`pi/` and are loaded by flag, see "Packaging" below.)
 
 **Current state (2026-10-23):** the session UX project is DONE except
 per-item expand (parked: not useful without mouse selection). Built since M1:
@@ -22,7 +23,7 @@ runs (ctrl-o), thinking toggle (ctrl-t), working indicator + queued-message
 strip + switcher-row spinner, Esc restores queued messages then aborts,
 rewind (esc esc), history seeded from the session file plus a slash-command
 log, wheel scroll acceleration, scroll position held while output streams,
-steeringMode "all", the toriel settings file (settings.ts), install.ts for
+steeringMode "all", the toriel settings file (settings.ts), resources.ts for
 pi/ resources. Everything is tested against a fake pi (test/fixtures/fake-pi
 .mjs, incl. FAKE_PI_SLOW=1); real-model runs are the remaining verification.
 Also built 2026-10-22 (night): ctrl-r history search (switcher rename moved to f2), /command autocomplete (registries in commands.ts; pi commands via daemon `commands`), plain text in the switcher starts a session.
@@ -47,7 +48,10 @@ an integration suite that runs the real daemon against a fake pi. Findings:
   background and prompts arriving meanwhile wait on `starting`.
 - The Controller class was split afterwards (2026-10-22/23): switcher actions
   (switcher-actions.ts) and session actions (session-actions.ts) behind the
-  Host interface in host.ts; controller.ts keeps connection, state and routing.
+  Host interface in host.ts; controller.ts keeps state and routing (2026-10-31: the
+  daemon connection, clipboard, completion lookups and layouts moved out to
+  daemon-link.ts, clipboard-actions.ts, completion-sources.ts and layout.ts; the
+  switcher filter, summaries and trash restore out of switcher-actions.ts).
 
 ## Session UX project (scoped 2026-10-22; DONE 2026-10-23 except per-item expand)
 
@@ -57,13 +61,19 @@ session view and the switcher chrome. Keyboard-only: no mouse (reporting would
 break terminal select/copy, and click hit-testing against ScrollView offsets is
 real work).
 
-Packaging (decided 2026-10-22): toriel owns its pi-side resources in the repo
-(`pi/extensions/`, `pi/themes/`) and `node src/install.ts` symlinks them into
-$PI_CODING_AGENT_DIR (default ~/.pi/agent). Idempotent; refuses to replace
-anything that is not its own link. The presence extension moves here from
-dotfiles (remove it there, or it loads twice). NOTE ~/.pi/agent/extensions is
-currently a symlink into the dotfiles repo, so the link lands inside it
-(install.ts prints where). WORKAROUND: the controller's own process loads the
+Packaging (decided 2026-10-22, revised 2026-10-31): toriel owns its pi-side
+resources in the repo (`pi/extensions/`, `pi/skills/`, `pi/themes/`). First
+version symlinked them into $PI_CODING_AGENT_DIR with `node src/install.ts`;
+that landed files in the user's dotfiles (~/.pi/agent/extensions was a symlink
+there), went stale when the repo moved, and left sessions silently without an
+extension. Now the daemon passes each resource to every child it starts as
+`-e <file>` / `--skill <dir>` (src/resources.ts; validated: with an empty agent
+dir the bridge extension and skill load, and explicit paths still load under
+--no-extensions), so nothing is installed and a child always matches the
+daemon. pi's own config dir is the user's; toriel reads it and never writes to
+it. The presence extension is the exception: it is for plain pi processes
+toriel did not start, so it is not loaded by flag; plain pi opts in with its
+`extensions` setting. The controller's own process loads the
 theme straight from the repo: pi-theme.ts points PI_CODING_AGENT_DIR at the
 repo's pi/ dir (it has themes/) for the duration of initTheme(), so it needs
 no install step. test/theme.test.ts fails if pi silently falls back. Drop the
@@ -322,7 +332,12 @@ Code's agent-list shape) mirrors Claude Code's agent list:
   start (same node binary via process.execPath; double-checked to narrow
   simultaneous-start races) and `controller.ts kill-server` SIGTERMs it via
   the pidfile (with a /proc cmdline identity check); shutdown is orderly -
-  children stop, socket and pidfile are removed.
+  children stop, socket and pidfile are removed. The pidfile doubles as the
+  single-instance lock (src/daemon-lock.ts, `daemon.pid` in the data dir, created
+  O_EXCL; a dead holder's lock is replaced). It lives in the state directory, not
+  beside the socket, because the old per-socket guard let a daemon on a renamed
+  socket run next to the old one, and a second daemon on the same socket used to
+  delete the first one's socket file and rebind it.
 - **Manual ordering (implemented)**: session-groups.json carries an `order`
   array of session UUIDs (both writers preserve it; extension updated).
   Display: ordered ids first, unordered after (bottom). Shift+arrows move
@@ -377,6 +392,11 @@ export_html; get_commands.
   yes, requirement 9 is cheap; if no, pick a TUI-markdown renderer.
 
 ## Consequences for existing extensions (dotfiles)
+
+Historical (2026-10-23): `permissions.ts` was replaced by the pi-permission-system
+package (see `permission-dialogs.md`) and `session-groups.ts` and `status-bar.ts`
+were dropped from the user's dotfiles on 2026-10-31; what follows describes the
+state when the daemon was first built.
 
 - permissions.ts: unchanged, runs in each child; dialogs forwarded through
   daemon to the driving controller.
@@ -693,7 +713,7 @@ Decisions:
 
 - **The key never leaves pi (trust boundary).** toriel does not read
   `~/.pi/agent/auth.json` or `models.json`. A small pi extension
-  (`pi/extensions/toriel-usage.ts`, linked by `node src/install.ts`) runs in
+  (`pi/extensions/toriel-usage.ts`, loaded into each child by flag) runs in
   toriel-spawned children only (`TORIEL_CHILD`), fetches the quota through pi's
   own model registry (`ctx.modelRegistry.getApiKeyForProvider`), and reports
   only percentages back as a `setStatus` record under the key `toriel-usage`.
@@ -898,7 +918,7 @@ Bigger goals - design-arounds, not scheduled:
   one place to see and control what a session can use: pi extensions, MCP
   servers and individual tools, per session or per agent profile, instead of
   hand-editing settings and dotfiles. Building blocks that exist today: toriel
-  owns pi/extensions + install.ts (symlink installer); pi's `packages`
+  owns pi/extensions and loads them by flag (resources.ts); pi's `packages`
   setting and `pi install` / `pi config`; `defaultTools` with +name/-name
   entries; `--tools` / `--no-tools` / `--no-extensions` / `--no-mcp` child
   flags; `tool_search`/`codemode` built-ins; `pi.registerMcpServer()`. Likely
@@ -908,9 +928,8 @@ Bigger goals - design-arounds, not scheduled:
   of the extensions toriel ships. Open: whether to flip tools on a LIVE
   session (pi's RPC surface for active tools is unverified) or only at
   spawn; where profiles live (the toriel settings file is the natural home).
-  Today's de-facto version is install.ts plus pi's own settings. toriel's own
-  pieces (the presence extension and the solarized theme in pi/) are the
-  first things the manager should take over from install.ts; not needed yet.
+  Today's de-facto version is resources.ts (toriel's own pieces, by flag) plus
+  pi's own settings for everything the user chose.
 
 ## Risks
 
@@ -1019,8 +1038,8 @@ re-sync keeps held and bridge-pending texts in the strip.
 ### Visibility
 
 A running session without the extension has `sessionBridge: false`; the
-switcher notice line says how many and how to fix it (`bridgeNotice`:
-`node src/install.ts`, restart them). It was log-only in the first version.
+switcher notice line says how many (`bridgeNotice`; restart them). It was
+log-only in the first version.
 
 ### Controller rendering
 

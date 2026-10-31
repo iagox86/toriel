@@ -1,7 +1,7 @@
 // Starting, stopping and listening to the pi child processes behind sessions.
 import * as fs from "node:fs";
 import { RpcClient } from "@earendil-works/pi-coding-agent";
-import { DIALOG_METHODS } from "./config.ts";
+import { DIALOG_METHODS, SOCK } from "./config.ts";
 import { type BridgeTracker, INJECT_COMMAND, injectedId, mergedQueueTexts, parseBridgeReport } from "./daemon-bridge.ts";
 import type { ClientHub } from "./daemon-hub.ts";
 import type { DaemonSession } from "./daemon-session.ts";
@@ -9,12 +9,13 @@ import { randomUUID } from "node:crypto";
 import { type AgentProfile, profileArgs } from "./agents.ts";
 import { recordHandled } from "./handled-files.ts";
 import { historyOf } from "./daemon-history.ts";
-import { TORIEL_TOOLS } from "./required.ts";
+import { resourceArgs, TORIEL_TOOLS } from "./resources.ts";
 import { lineageArgs, sessionIdOfFile } from "./lineage.ts";
 import { profileOfSession, saveSessionAgent } from "./session-agents.ts";
 import { log } from "./log.ts";
 import type { UsageReport } from "./shared.ts";
 import { type ChildConfig, loadSettings, resolveChildConfig, settingsMtime } from "./settings.ts";
+import { errText } from "./util.ts";
 
 export interface SlashCommand {
   name: string;
@@ -30,7 +31,7 @@ export interface StartOptions {
   agent?: AgentProfile;
 }
 
-const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+const errorText = (err: unknown): string => (errText(err));
 
 export class ChildManager {
   private readonly hub: ClientHub;
@@ -80,7 +81,7 @@ export class ChildManager {
       cliPath: cfg.piCli,
       cwd: s.cwd,
       args,
-      env: { ...process.env, TORIEL_CHILD: "1", ...(s.sessionId ? { TORIEL_SESSION_ID: s.sessionId } : {}) },
+      env: { ...process.env, TORIEL_CHILD: "1", TORIEL_SOCK: SOCK, ...(s.sessionId ? { TORIEL_SESSION_ID: s.sessionId } : {}) },
     });
     client.onEvent((event) => this.onEvent(s, event as Record<string, unknown>));
     await client.start();
@@ -92,6 +93,60 @@ export class ChildManager {
     return client;
   }
 
+  /**
+   * The pi arguments for starting `s` from a file, a fork source or fresh. Also settles
+   * the session's id and profile, which the child's environment and later respawns need.
+   */
+  private startArgs(s: DaemonSession, opts: StartOptions): { args: string[]; cfg: ChildConfig } {
+    const useFile = opts.forkPath ? undefined : (opts.sessionFile ?? s.sessionFile);
+    const args: string[] = [];
+    if (opts.forkPath) {
+      args.push("--fork", opts.forkPath);
+    } else if (useFile) {
+      args.push("--session", useFile);
+    }
+    if (opts.name) {
+      args.push("--name", opts.name);
+    }
+    args.push(...lineageArgs(useFile ? sessionIdOfFile(useFile) : undefined));
+    const cfg = this.configFor(s);
+    // The toriel settings' provider/model/thinking are defaults for NEW sessions.
+    // A session that already has a file resumes with its own (pi restores them
+    // from the file), so a restart, /reload or /clear must not reset them.
+    const isNew = !opts.forkPath && !(useFile && fs.existsSync(useFile));
+    // The profile a session was started with is saved by UUID, so lazy respawns, /reload and /clear keep its loadout.
+    // Known before pi starts, so the child's tools can say who it is: a new session
+    // gets an id chosen here (pi takes --session-id), a resumed one has it in its file.
+    if (isNew) {
+      s.sessionId = randomUUID();
+      args.push("--session-id", s.sessionId);
+    } else if (useFile) {
+      s.sessionId = sessionIdOfFile(useFile) ?? s.sessionId;
+    }
+    const agent = opts.agent ?? profileOfSession(useFile ? sessionIdOfFile(useFile) : undefined) ?? s.agent;
+    s.agent = agent;
+    if (agent) {
+      args.push(...profileArgs(agent, { isNew }));
+    }
+    args.push(...resourceArgs({ skills: !agent?.minimal }));
+    // A resume restores the tool list recorded in the transcript, so tools of extensions
+    // installed since never reach the model. +name entries join them to that loadout. A
+    // profile that lists tools owns the loadout (pi forbids mixing the two forms).
+    if (!agent?.tools) {
+      args.push("--tools", TORIEL_TOOLS.join(","));
+    }
+    if (isNew && cfg.thinking && !agent?.thinking) {
+      args.push("--thinking", cfg.thinking);
+    }
+    if (isNew && cfg.model && !agent?.model) {
+      args.push("--model", cfg.model);
+    }
+    if (isNew && cfg.provider && !agent?.model) {
+      args.push("--provider", cfg.provider);
+    }
+    return { args, cfg };
+  }
+
   /** Bring an inactive session's child up (from its file, a fork source, or fresh). */
   async start(s: DaemonSession, opts: StartOptions = {}): Promise<void> {
     if (s.child) {
@@ -100,51 +155,7 @@ export class ChildManager {
     s.spawning = true;
     this.hub.broadcastSessions();
     try {
-      const useFile = opts.forkPath ? undefined : (opts.sessionFile ?? s.sessionFile);
-      const args: string[] = [];
-      if (opts.forkPath) {
-        args.push("--fork", opts.forkPath);
-      } else if (useFile) {
-        args.push("--session", useFile);
-      }
-      if (opts.name) {
-        args.push("--name", opts.name);
-      }
-      args.push(...lineageArgs(useFile ? sessionIdOfFile(useFile) : undefined));
-      const cfg = this.configFor(s);
-      // The toriel settings' provider/model/thinking are defaults for NEW sessions.
-      // A session that already has a file resumes with its own (pi restores them
-      // from the file), so a restart, /reload or /clear must not reset them.
-      const isNew = !opts.forkPath && !(useFile && fs.existsSync(useFile));
-      // The profile a session was started with is saved by UUID, so lazy respawns, /reload and /clear keep its loadout.
-      // Known before pi starts, so the child's tools can say who it is: a new session
-      // gets an id chosen here (pi takes --session-id), a resumed one has it in its file.
-      if (isNew) {
-        s.sessionId = randomUUID();
-        args.push("--session-id", s.sessionId);
-      } else if (useFile) {
-        s.sessionId = sessionIdOfFile(useFile) ?? s.sessionId;
-      }
-      const agent = opts.agent ?? profileOfSession(useFile ? sessionIdOfFile(useFile) : undefined) ?? s.agent;
-      s.agent = agent;
-      if (agent) {
-        args.push(...profileArgs(agent, { isNew }));
-      }
-      // A resume restores the tool list recorded in the transcript, so tools of extensions
-      // installed since never reach the model. +name entries join them to that loadout. A
-      // profile that lists tools owns the loadout (pi forbids mixing the two forms).
-      if (!agent?.tools) {
-        args.push("--tools", TORIEL_TOOLS.join(","));
-      }
-      if (isNew && cfg.thinking && !agent?.thinking) {
-        args.push("--thinking", cfg.thinking);
-      }
-      if (isNew && cfg.model && !agent?.model) {
-        args.push("--model", cfg.model);
-      }
-      if (isNew && cfg.provider && !agent?.model) {
-        args.push("--provider", cfg.provider);
-      }
+      const { args, cfg } = this.startArgs(s, opts);
       s.sessionBridge = undefined;
       s.child = await this.launch(s, args, cfg);
       s.dead = false;
@@ -157,7 +168,7 @@ export class ChildManager {
         try {
           recordHandled(s.sessionFile);
         } catch (err) {
-          log(`could not record ${s.sessionFile} as handled: ${err instanceof Error ? err.message : err}`);
+          log(`could not record ${s.sessionFile} as handled: ${errText(err)}`);
         }
       }
       log(`session ${s.id} child started (file=${s.sessionFile ?? "new"})`);
@@ -457,7 +468,7 @@ export class ChildManager {
         this.hub.broadcast({ type: "digest", session: s.id, messages, streaming: s.streaming });
       }
     } catch (err) {
-      log(`session ${s.id}: digest failed: ${err instanceof Error ? err.message : err}`);
+      log(`session ${s.id}: digest failed: ${errText(err)}`);
     }
   }
 }

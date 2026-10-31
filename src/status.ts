@@ -80,7 +80,7 @@ export function bridgeNotice(metas: Iterable<SessionMeta>): string {
     return "";
   }
   const noun = without === 1 ? "running session has" : "running sessions have";
-  return `${without} ${noun} no session bridge, so messages from other sessions can be lost - run node src/install.ts, then restart ${without === 1 ? "it" : "them"}`;
+  return `${without} ${noun} no session bridge, so messages from other sessions can be lost - restart ${without === 1 ? "it" : "them"}`;
 }
 
 export interface StatusInputs {

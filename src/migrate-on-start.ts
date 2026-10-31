@@ -1,5 +1,5 @@
-// Imported first by the daemon and controller entry points, so legacy state is
-// moved before anything reads it. Imports nothing from config.ts on purpose.
+// Imported first by the daemon and (once preflight has passed) the controller entry
+// point, so legacy state is moved before anything reads it. Imports nothing from config.ts on purpose.
 import { migrateLegacyState } from "./migrate.ts";
 
 for (const line of migrateLegacyState()) {

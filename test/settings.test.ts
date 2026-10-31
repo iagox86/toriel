@@ -31,6 +31,11 @@ describe("loadSettings", () => {
     assert.match(loadSettings(tmp('{"summaryMinNewMessages":0}')).problems[0] as string, /at least 1/);
   });
 
+  it("reads warnNoPermissionSystem as a boolean and rejects other types", () => {
+    assert.equal(loadSettings(tmp('{"warnNoPermissionSystem":false}')).settings.warnNoPermissionSystem, false);
+    assert.match(loadSettings(tmp('{"warnNoPermissionSystem":"no"}')).problems[0] as string, /true or false/);
+  });
+
   it("reads the summary settings, and rejects bad numbers", () => {
     const ok = loadSettings(tmp('{"summaryModel":"a/b","summaryIntervalMinutes":30,"summaryMinNewMessages":4}'));
     assert.deepEqual(ok.settings, { summaryModel: "a/b", summaryIntervalMinutes: 30, summaryMinNewMessages: 4 });
@@ -124,8 +129,8 @@ describe("bridgeNotice", () => {
     assert.equal(bridgeNotice([meta({ sessionBridge: true }), meta({ id: 2 })]), "");
   });
 
-  it("counts running sessions known to lack it, and says how to fix it", () => {
-    assert.match(bridgeNotice([meta({ sessionBridge: false })]), /1 running session has no session bridge.*node src\/install\.ts, then restart it/);
+  it("counts running sessions known to lack it and says to restart them", () => {
+    assert.match(bridgeNotice([meta({ sessionBridge: false })]), /1 running session has no session bridge.*restart it/);
     assert.match(bridgeNotice([meta({ sessionBridge: false }), meta({ id: 2, sessionBridge: false })]), /2 running sessions have no session bridge.*restart them/);
   });
 

@@ -15,11 +15,10 @@
     "typescript": "^7.0.2"
   },
   "bin": {
-    "toriel": "toriel.ts"
+    "toriel": "bin/toriel"
   },
   "scripts": {
     "start": "node toriel.ts",
-    "install-pi": "node src/install.ts",
     "lint": "biome lint .",
     "test": "node --test test/*.test.ts",
     "typecheck": "tsc -p ."

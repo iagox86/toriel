@@ -7,6 +7,7 @@ import * as os from "node:os";
 import { prettyError } from "./error-format.ts";
 import { messageText } from "./format.ts";
 import { loadSettings, resolveChildConfig } from "./settings.ts";
+import { errText } from "./util.ts";
 
 export const DEFAULT_SUMMARY_MODEL = "litellm/gemma4:12b";
 /** Local models are slow; wait a good while before giving up. */
@@ -199,7 +200,7 @@ export function runSummarizer(opts: SummarizerOptions): Promise<string> {
  * `seen` is what to remember for the next call (null after a success).
  */
 export function autoSummaryFailure(previous: string | null, err: unknown): { notify?: string; seen: string } {
-  const message = err instanceof Error ? err.message : String(err);
+  const message = errText(err);
   return message === previous ? { seen: message } : { notify: `auto-summary is failing: ${message} (retrying every hour)`, seen: message };
 }
 

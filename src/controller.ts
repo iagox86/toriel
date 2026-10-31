@@ -9,7 +9,6 @@
 //
 // Run: node controller.ts
 import * as fs from "node:fs";
-import * as net from "node:net";
 import {
   Container,
   isKeyRelease,
@@ -19,18 +18,19 @@ import {
   Text,
   truncateToWidth,
   TuiAltScreen,
-  VStack,
   type EditorTheme,
+  type VStack,
 } from "@earendil-works/pi-tui";
 import { loadLineage, type Lineage } from "./lineage.ts";
 import { bannerText, childCost, relationOf } from "./session-tree.ts";
 import { uniqueName } from "./session-id.ts";
 import { loadAgents } from "./agents.ts";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { DIALOG_METHODS, HISTORY_FILE, KEY_LOG, SOCK } from "./config.ts";
+import { DIALOG_METHODS, HISTORY_FILE, KEY_LOG } from "./config.ts";
+import { DaemonLink } from "./daemon-link.ts";
+import { buildLayouts } from "./layout.ts";
 
 /** Reconnect tries (backoff 0.5s doubling to 5s) before the controller gives up and exits. */
-const RECONNECT_ATTEMPTS = 20;
 import { type DialogRequest, DialogPanel, isTextDialog, withOrigin } from "./dialogs.ts";
 
 // How long a reason typed on the select waits for the chained input dialog.
@@ -40,36 +40,35 @@ import { lastLine } from "./format.ts";
 import { RewindPicker } from "./rewind-picker.ts";
 import { CommandAutocomplete } from "./autocomplete.ts";
 import { HistorySearch } from "./history-search.ts";
-import { settingsMtime } from "./settings.ts";
+import { loadSettings, settingsMtime } from "./settings.ts";
 import { loadCommands, mergeHistory, recordCommand, trimCommands } from "./history.ts";
 import { rewindTargets } from "./rewind.ts";
 import { guardClicks } from "./click-guard.ts";
 import { autocompleteMaxVisible, hideThinkingBlock, wheelScrollLines } from "./pi-settings.ts";
 import { SessionActions } from "./session-actions.ts";
 import { SwitcherActions } from "./switcher-actions.ts";
-import { ensureDaemon, killServer } from "./lifecycle.ts";
+import { killServer } from "./lifecycle.ts";
 import { selectListTheme } from "./pi-theme.ts";
 import {
   displayName,
   sessionKey,
   type LocalSession,
 } from "./session-list.ts";
-import { type ClientCommand, type DaemonMessage, type DistributiveOmit, encodeLine, LineSplitter, type SessionMeta } from "./shared.ts";
+import type { ClientCommand, DaemonMessage, DistributiveOmit, SessionMeta } from "./shared.ts";
 import { drifted } from "./drift.ts";
 import { MOUSE_OFF, MOUSE_ON, mouseNotice, nextMouse, parseMouseArg } from "./mouse.ts";
-import { osc52Output, osc52Result } from "./osc52.ts";
-import { agentDir } from "./install.ts";
-import { auditRequired, describeProblems } from "./required.ts";
+import { piAgentDir } from "./pi-dir.ts";
+import { describeResourceProblems } from "./resources.ts";
 import { clearTransient, viewFromHistory } from "./resync.ts";
 import { buildStatusLine, fleetStats, bridgeNotice, settingsNotice } from "./status.ts";
 import { ActivityLine } from "./activity.ts";
 import { Dimmed } from "./components.ts";
 import { ChoicePanel } from "./choice-panel.ts";
-import { Attachments, MAX_IMAGE_BYTES, fmtBytes } from "./attachments.ts";
-import { Clipboard, copyFailureMessage, isTextType } from "./clipboard.ts";
+import { Attachments } from "./attachments.ts";
+import { ClipboardActions } from "./clipboard-actions.ts";
+import { CompletionSources } from "./completion-sources.ts";
 import { ClipboardTerminal } from "./clipboard-terminal.ts";
 import { InfoPanel } from "./info-panel.ts";
-import { type McpServer, parseMcpStatus } from "./mcp.ts";
 import type { ToolRun } from "./tool-run.ts";
 import { accent, assertTruecolor, dim, OSC_RESET_BG, OSC_SET_BG, streaming } from "./theme.ts";
 import { Switcher, } from "./switcher.ts";
@@ -78,11 +77,13 @@ import {
   dropEcho,
   echoUser,
   type Item,
+  itemsFromFile,
   itemsFromMessages,
   newView,
   type SessionView,
   showRawError,
 } from "./transcript.ts";
+import { errText } from "./util.ts";
 
 configureEditorKeys();
 const editorTheme: EditorTheme = {
@@ -127,7 +128,7 @@ class Controller {
   private activityTimer?: ReturnType<typeof setInterval>;
   editor: InputEditor;
   switcher = new Switcher();
-  socket?: net.Socket;
+  private readonly link: DaemonLink;
 
   /** Daemon-known sessions by daemon id. */
   sessions = new Map<number, SessionMeta>();
@@ -138,7 +139,8 @@ class Controller {
   /** Last message text per session key, for the switcher description. */
   summaries = new Map<string, string>();
   readonly attachments = new Attachments();
-  private readonly clipboard = new Clipboard();
+  private readonly clip: ClipboardActions;
+  private readonly completions: CompletionSources;
   /** Path key of the session on screen; null = none (switcher behind). */
   viewing: string | null = null;
 
@@ -155,17 +157,12 @@ class Controller {
   private searchDraft = "";
   /** The daemon's initial session list has arrived (false while connecting or reconnecting). */
   private sessionsLoaded = false;
-  /** The daemon socket is down and a reconnect is under way (the editor stays usable). */
-  private daemonDown = false;
   /** Views still to be replaced by the daemon's replay after a reconnect. */
   private staleViews = new Set<string>();
-  private disposing = false;
   /** toriel has the mouse (reporting on); /mouse off hands it to the terminal. */
   private mouseOn = true;
   /** Required toriel resources missing from the pi agent dir; re-checked with the session list. */
   private resourceNotice = "";
-  private reqSeq = 0;
-  private responses = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   private flash = "";
   private flashTimer?: ReturnType<typeof setTimeout>;
   private listTimer?: ReturnType<typeof setInterval>;
@@ -173,10 +170,29 @@ class Controller {
   constructor() {
     this.switching = new SwitcherActions(this);
     this.session = new SessionActions(this);
+    this.link = new DaemonLink({
+      message: (msg) => this.handleDaemonMessage(msg),
+      loaded: () => this.sessionsLoaded,
+      lost: () => this.onDaemonLost(),
+      retrying: () => {
+        this.sessionsLoaded = false;
+      },
+      reconnected: () => {
+        this.renderChrome();
+        this.notify("reconnected to the toriel daemon");
+      },
+      gaveUp: () => {
+        process.stdout.write("\ntoriel daemon disconnected and did not come back; exiting.\n");
+        this.dispose();
+      },
+      notify: (text) => this.notify(text),
+    });
+    this.clip = new ClipboardActions(this, () => this.canPaste());
+    this.completions = new CompletionSources(this);
     this.tui = guardClicks(
-      new TuiAltScreen(new ClipboardTerminal(() => this.onMiddleClick()), true, undefined, {
+      new TuiAltScreen(new ClipboardTerminal(() => this.clip.onMiddleClick()), true, undefined, {
         wheelScrollLines: wheelScrollLines(),
-        copySelection: (text) => this.copySelection(text),
+        copySelection: (text) => this.clip.copyText(text),
       }),
     );
     this.scroll = new ScrollView(this.chatRoot, { follow: "end", primary: true, overscroll: "chain", scrollbar: "auto" });
@@ -195,10 +211,10 @@ class Controller {
         piCommands: this.piCommands,
         cwd: (this.viewing && (this.metaForPath(this.viewing)?.cwd ?? this.local.get(this.viewing)?.cwd)) || process.cwd(),
         sources: {
-          models: () => this.modelNames(),
-          thinkingLevels: () => this.thinkingLevels(),
+          models: () => this.completions.models(),
+          thinkingLevels: () => this.completions.thinkingLevels(),
           groups: () => this.switching.groups.groups,
-          mcpServers: () => this.mcpServers(),
+          mcpServers: () => this.completions.mcpServers(),
           agents: () => loadAgents(process.cwd()).agents,
         },
       })),
@@ -206,29 +222,9 @@ class Controller {
     this.editor.debugLog = KEY_LOG;
     this.editor.onSubmit = (text) => this.submit(text);
     this.editor.onKey = (data) => this.keys(data);
-    const dock = new VStack([
-      { component: this.editor, shrink: 0, minSize: 3 },
-      { component: this.statusLine, shrink: 0, minSize: 1 },
-    ]);
-    // Two roots over one shared dock: the chat view, and the switcher view
-    // (full-screen minus the dock, so the input box is never covered).
-    this.chatLayout = new VStack([
-      { component: this.scroll, basis: 0, grow: 1, shrink: 1, minSize: 1 },
-      { component: this.activityLine, basis: "auto", grow: 0, shrink: 0, minSize: 0 },
-      { component: this.rewindPicker, basis: "auto", grow: 0, shrink: 0, minSize: 0 },
-      { component: this.dialogPanel, basis: "auto", grow: 0, shrink: 0, minSize: 0 },
-      { component: this.infoPanel, basis: "auto", grow: 0, shrink: 0, minSize: 0 },
-      { component: this.choicePanel, basis: "auto", grow: 0, shrink: 0, minSize: 0 },
-      { component: this.banner, basis: "auto", grow: 0, shrink: 0, minSize: 0 },
-      // never compress the dock: a shrunken editor was the "cut off" bug
-      { component: dock, basis: "auto", grow: 0, shrink: 0, minSize: 4 },
-    ]);
-    this.switcherLayout = new VStack([
-      { component: this.switcher, basis: 0, grow: 1, shrink: 1, minSize: 1 },
-      { component: this.infoPanel, basis: "auto", grow: 0, shrink: 0, minSize: 0 },
-      { component: this.choicePanel, basis: "auto", grow: 0, shrink: 0, minSize: 0 },
-      { component: dock, basis: "auto", grow: 0, shrink: 0, minSize: 4 },
-    ]);
+    const layouts = buildLayouts(this);
+    this.chatLayout = layouts.chat;
+    this.switcherLayout = layouts.switcher;
     this.tui.setLayoutRoot(this.chatLayout);
     this.tui.setFocus(this.editor);
 
@@ -240,12 +236,7 @@ class Controller {
 
   async run(): Promise<void> {
     trimCommands(HISTORY_FILE);
-    try {
-      await this.connect();
-    } catch {
-      await ensureDaemon();
-      await this.connect();
-    }
+    await this.link.open();
     await this.loadLocal();
     this.renderChrome();
     try {
@@ -272,92 +263,14 @@ class Controller {
     }
   }
 
-  connect(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const socket = net.connect(SOCK);
-      socket.once("connect", () => {
-        this.socket = socket;
-        // Announce ourselves: the daemon classifies connections by their
-        // first command (presence heartbeats vs controllers), and its
-        // initial sync + broadcast membership are keyed on that. Without
-        // this the controller never enters the broadcast set and misses
-        // every session update until its first user-driven command.
-        this.send({ type: "list" });
-        const splitter = new LineSplitter();
-        // Resolve only once the first session list has arrived, so the
-        // initial switcher render already knows which sessions are live
-        // in pi (no [pi] tag popping in a tick later). Timeout = fallback.
-        let resolved = false;
-        const done = () => {
-          if (!resolved) {
-            resolved = true;
-            resolve();
-          }
-        };
-        setTimeout(done, 3000).unref?.();
-        socket.on("data", (chunk: Buffer) => {
-          for (const line of splitter.push(chunk.toString("utf8"))) {
-            try {
-              this.handleDaemonMessage(JSON.parse(line) as DaemonMessage);
-            } catch (err) {
-              console.error(`bad daemon line: ${err}`);
-            }
-          }
-          if (this.sessionsLoaded) {
-            done();
-          }
-        });
-        socket.on("close", () => {
-          if (this.socket === socket) {
-            this.daemonLost();
-          }
-        });
-        socket.on("error", () => {});
-      });
-      socket.once("error", (err) => {
-        reject(new Error(`cannot reach daemon at ${SOCK} even after auto-start attempt (${err.message})`));
-      });
-    });
-  }
-
-  /** The socket closed: keep the UI and the editor text, and reconnect with backoff. */
-  daemonLost(): void {
-    if (this.disposing || this.daemonDown) {
-      return;
-    }
-    this.daemonDown = true;
-    this.socket = undefined;
+  /** The connection dropped: keep the UI and the editor text; views are replaced by the daemon's replay on reconnect. */
+  private onDaemonLost(): void {
     for (const [key, view] of this.views) {
       clearTransient(view);
       this.staleViews.add(key);
     }
-    for (const [id, pending] of this.responses) {
-      this.responses.delete(id);
-      pending.reject(new Error("daemon connection lost"));
-    }
     this.syncActivity(true);
     this.renderChrome();
-    void this.reconnect();
-  }
-
-  private async reconnect(): Promise<void> {
-    let delay = 500;
-    for (let attempt = 1; attempt <= RECONNECT_ATTEMPTS && !this.disposing; attempt++) {
-      try {
-        await ensureDaemon();
-        this.sessionsLoaded = false;
-        await this.connect();
-        this.daemonDown = false;
-        this.renderChrome();
-        this.notify("reconnected to the toriel daemon");
-        return;
-      } catch {
-        await new Promise((r) => setTimeout(r, delay));
-        delay = Math.min(delay * 2, 5000);
-      }
-    }
-    process.stdout.write("\ntoriel daemon disconnected and did not come back; exiting.\n");
-    this.dispose();
   }
 
   /** /mouse: report (no argument), turn on, off or toggle mouse reporting by writing the codes pi-tui wrote at start; pi-tui's own flag stays set so stop still resets the terminal. */
@@ -377,40 +290,22 @@ class Controller {
   }
 
   dispose(): void {
-    this.disposing = true;
+    this.link.close(); // first: a closing socket must not start a reconnect
     process.stdout.write(OSC_RESET_BG);
     try {
       this.tui.stop();
     } catch {
       // best effort
     }
-    this.socket?.destroy();
     process.exit(0);
   }
 
   send(msg: Record<string, unknown>): void {
-    if (!this.socket) {
-      if (this.daemonDown) {
-        this.notify("daemon is not connected - reconnecting");
-      }
-      return;
-    }
-    this.socket.write(encodeLine(msg));
+    this.link.send(msg);
   }
 
-  /** Send a command with response correlation. */
-  request(cmd: DistributiveOmit<ClientCommand, "id">, timeoutMs = 30_000): Promise<unknown> {
-    const id = `req-${++this.reqSeq}`;
-    return new Promise((resolve, reject) => {
-      this.responses.set(id, { resolve, reject });
-      this.send({ ...cmd, id });
-      setTimeout(() => {
-        if (this.responses.has(id)) {
-          this.responses.delete(id);
-          reject(new Error("daemon request timed out"));
-        }
-      }, timeoutMs).unref?.();
-    });
+  request(cmd: DistributiveOmit<ClientCommand, "id">, timeoutMs?: number): Promise<unknown> {
+    return this.link.request(cmd, timeoutMs);
   }
 
   handleDaemonMessage(msg: DaemonMessage): void {
@@ -442,18 +337,6 @@ class Controller {
         const meta = this.sessions.get(msg.session);
         if (meta && this.keyFor(meta) === this.viewing) {
           this.notify(msg.reason ? `child exited - ${msg.reason}` : "child exited");
-        }
-        return;
-      }
-      case "response": {
-        const pending = this.responses.get(msg.id);
-        if (pending) {
-          this.responses.delete(msg.id);
-          if (msg.ok) {
-            pending.resolve(msg.data);
-          } else {
-            pending.reject(new Error(msg.error ?? "daemon command failed"));
-          }
         }
         return;
       }
@@ -556,166 +439,13 @@ class Controller {
     }
   }
 
-  // ---------------- clipboard ----------------
-
-  /** Text into the chat box the way a terminal paste would put it. */
-  private insertPaste(text: string): void {
-    this.editor.pasteText(text);
-    this.tui.requestRender();
-  }
-
   /** Whether a paste has somewhere to go: not while a panel or dialog is waiting for its own keys. */
   private canPaste(): boolean {
     return !(this.choicePanel.isOpen || this.infoPanel.isOpen || this.historySearch.isOpen || this.openDialog(this.viewing));
   }
 
-  /** ctrl-v: the clipboard's text, or its image. */
-  async pasteClipboard(): Promise<void> {
-    if (!this.canPaste()) {
-      return;
-    }
-    if (this.clipboard.problem) {
-      this.notify(`paste is off: ${this.clipboard.problem}`);
-      return;
-    }
-    const types = await this.clipboard.types("clipboard");
-    if (types.some(isTextType)) {
-      const text = await this.clipboard.readText("clipboard");
-      if (text) {
-        this.insertPaste(text);
-        return;
-      }
-    }
-    await this.pasteImage();
-  }
-
-  /** The clipboard's image goes in as a marker in the chat box; the picture travels with the message. */
-  private async pasteImage(): Promise<void> {
-    const meta = this.switching.isOpen || !this.viewing ? undefined : this.metaForPath(this.viewing);
-    if (this.switching.isOpen || !this.viewing) {
-      this.notify("images can only be pasted inside a session");
-      return;
-    }
-    if (meta?.acceptsImages === false) {
-      this.notify(`${meta.model.split("/").pop()} does not take images - pick a model that does (/model)`);
-      return;
-    }
-    const image = await this.clipboard.readImage();
-    if (!image) {
-      this.notify("the clipboard is empty (nothing to paste)");
-      return;
-    }
-    if (image.data.length > MAX_IMAGE_BYTES) {
-      this.notify(`that image is ${fmtBytes(image.data.length)}; the limit is ${fmtBytes(MAX_IMAGE_BYTES)}`);
-      return;
-    }
-    this.insertPaste(this.attachments.add(image.mimeType, image.data));
-    this.notify(`image attached (${fmtBytes(image.data.length)}) - it goes with your next message`);
-  }
-
-  /**
-   * Middle click: paste whatever was last highlighted anywhere (the primary
-   * selection). Returns false when there is no clipboard tool, so the click
-   * goes on to the terminal layer as if toriel did not know about it.
-   */
-  onMiddleClick(): boolean {
-    if (!this.clipboard.available) {
-      // said, not silent: the click still goes on to the terminal layer
-      if (this.canPaste()) {
-        this.notify(`middle-click paste is off: ${this.clipboard.problem}`);
-      }
-      return false;
-    }
-    if (this.canPaste()) {
-      void this.pastePrimary();
-    }
-    return true;
-  }
-
-  private async pastePrimary(): Promise<void> {
-    const text = await this.clipboard.readText("primary");
-    if (text) {
-      this.insertPaste(text);
-    }
-  }
-
-  /** Text selected in toriel goes to the clipboard and the primary selection, so ctrl-v and middle click both get it. */
   copyText(text: string): Promise<boolean | string> {
-    return this.copySelection(text);
-  }
-
-  private async copySelection(text: string): Promise<boolean | string> {
-    if (!this.clipboard.available) {
-      // no clipboard tool (typically over ssh): ask the terminal, which never says whether it did
-      this.tui.terminal.write(osc52Output(text));
-      return osc52Result();
-    }
-    const ok = await this.clipboard.writeText(text, ["clipboard", "primary"]);
-    return ok ? true : copyFailureMessage(this.clipboard.backend);
-  }
-
-  /** Models the viewed live session can switch to; cached briefly since completion asks per keystroke. */
-  private modelCache?: { session: number; at: number; names: string[] };
-
-  /** Thinking levels the viewed session's model supports; cached briefly since completion asks per keystroke. Keyed by model too: /model changes the supported levels. */
-  private thinkCache?: { session: number; model: string; at: number; levels: string[] };
-
-  async thinkingLevels(): Promise<string[]> {
-    const meta = this.switching.isOpen || !this.viewing ? undefined : this.metaForPath(this.viewing);
-    if (!meta?.active) {
-      return [];
-    }
-    const cached = this.thinkCache;
-    if (cached && cached.session === meta.id && cached.model === meta.model && Date.now() - cached.at < 60_000) {
-      return cached.levels;
-    }
-    try {
-      const r = (await this.request({ type: "think", session: meta.id })) as { levels: string[] };
-      this.thinkCache = { session: meta.id, model: meta.model, at: Date.now(), levels: r.levels };
-      return r.levels;
-    } catch {
-      return [];
-    }
-  }
-
-  async modelNames(): Promise<string[]> {
-    const meta = this.switching.isOpen || !this.viewing ? undefined : this.metaForPath(this.viewing);
-    if (!meta?.active) {
-      return [];
-    }
-    const cached = this.modelCache;
-    if (cached && cached.session === meta.id && Date.now() - cached.at < 60_000) {
-      return cached.names;
-    }
-    try {
-      const r = (await this.request({ type: "model", session: meta.id })) as { models: string[] };
-      this.modelCache = { session: meta.id, at: Date.now(), names: r.models };
-      return r.models;
-    } catch {
-      return [];
-    }
-  }
-
-  /** MCP servers of the viewed session; cached briefly since completion asks per keystroke. */
-  private mcpCache?: { session: number; at: number; servers: McpServer[] };
-
-  async mcpServers(): Promise<McpServer[]> {
-    const meta = this.switching.isOpen || !this.viewing ? undefined : this.metaForPath(this.viewing);
-    if (!meta?.active) {
-      return [];
-    }
-    const cached = this.mcpCache;
-    if (cached && cached.session === meta.id && Date.now() - cached.at < 10_000) {
-      return cached.servers;
-    }
-    try {
-      const r = (await this.request({ type: "mcp_status", session: meta.id })) as { text: string };
-      const servers = parseMcpStatus(r.text);
-      this.mcpCache = { session: meta.id, at: Date.now(), servers };
-      return servers;
-    } catch {
-      return [];
-    }
+    return this.clip.copyText(text);
   }
 
   keyById(sessionId: number): string | null {
@@ -731,6 +461,17 @@ class Controller {
     return [...this.sessions.values()].find((m) => this.keyFor(m) === key);
   }
 
+  cwdFor(key: string): string {
+    return this.metaForPath(key)?.cwd ?? this.local.get(key)?.cwd ?? process.cwd();
+  }
+
+  reloadView(key: string): void {
+    this.views.set(key, { ...newView(), items: itemsFromFile(key, this.tui, this.cwdFor(key)) });
+    this.summaries.delete(key);
+    this.rebuildChat();
+    this.syncHistory(true); // the dropped messages are no longer history
+  }
+
   viewFor(key: string): SessionView {
     let view = this.views.get(key);
     if (!view) {
@@ -741,7 +482,7 @@ class Controller {
   }
 
   async loadLocal(): Promise<void> {
-    this.resourceNotice = describeProblems(auditRequired(agentDir())) ?? "";
+    this.resourceNotice = describeResourceProblems(piAgentDir(), undefined, { permissionSystem: loadSettings().settings.warnNoPermissionSystem !== false }) ?? "";
     try {
       const infos = await SessionManager.listAll();
       this.local.clear();
@@ -796,7 +537,7 @@ class Controller {
       return this.searchKeys(data);
     }
     if (matchesKey(data, Key.ctrl("v"))) {
-      void this.pasteClipboard();
+      void this.clip.paste();
       return true;
     }
     if (matchesKey(data, Key.ctrl("r")) && !this.rewindPicker.isOpen && !this.switching.isOpen) {
@@ -848,7 +589,7 @@ class Controller {
   applyEvent(key: string, view: SessionView, ev: Record<string, unknown>): void {
     const effects = applyEvent(view, ev, {
       tui: this.tui,
-      cwd: this.metaForPath(key)?.cwd ?? this.local.get(key)?.cwd ?? process.cwd(),
+      cwd: this.cwdFor(key),
       addItem: (item) => this.addItem(view, key, item),
     });
     if (effects.summary) {
@@ -1126,7 +867,7 @@ class Controller {
       activity: key ? this.views.get(key)?.activity?.label : undefined,
       width,
       // a clipboard problem is worth a standing note while the switcher is up; it is not an error
-      notice: (this.daemonDown ? "daemon connection lost - reconnecting (your input is kept)" : "") || this.resourceNotice || settingsNotice(this.sessions.values(), settingsMtime()) || bridgeNotice(this.sessions.values()) || (this.clipboard.problem ? `clipboard: ${this.clipboard.problem}` : ""),
+      notice: (this.link.down ? "daemon connection lost - reconnecting (your input is kept)" : "") || this.resourceNotice || settingsNotice(this.sessions.values(), settingsMtime()) || bridgeNotice(this.sessions.values()) || (this.clip.clipboard.problem ? `clipboard: ${this.clip.clipboard.problem}` : ""),
     });
     this.statusLine.setText(truncateToWidth(status, width));
     this.tui.requestRender();
@@ -1156,7 +897,7 @@ function main(): void {
     throw err;
   });
   controller.run().catch((err) => {
-    process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+    process.stderr.write(`${errText(err)}\n`);
     process.exit(1);
   });
 }

@@ -5,6 +5,7 @@
 // null = explicit ungroup (tombstone so fork-inheritance and ungroups stick).
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { writeJsonAtomic } from "./util.ts";
 
 export interface GroupsFile {
   groups: string[];
@@ -31,44 +32,37 @@ export function groupsFile(): string {
   return path.join(dataDir, "toriel", "session-groups.json");
 }
 
-function legacyGroupsFile(): string {
-  const agentDir = process.env.PI_CODING_AGENT_DIR ?? path.join(process.env.HOME ?? "", ".pi", "agent");
-  return path.join(agentDir, "session-groups.json");
-}
-
 export function loadGroups(): GroupsFile {
-  for (const file of [groupsFile(), legacyGroupsFile()]) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<GroupsFile>;
-      // Self-heal case-insensitive duplicate group names (e.g. legacy
-      // "Ron" vs "ron"): first-seen casing wins; assignments remap to it.
-      const canonical = new Map<string, string>();
-      const merged: string[] = [];
-      const canonicalize = (g: string): string => {
-        const key = g.toLowerCase();
-        let c = canonical.get(key);
-        if (c === undefined) {
-          c = g;
-          canonical.set(key, c);
-          merged.push(c);
-        }
-        return c;
-      };
-      for (const g of parsed.groups ?? []) {
-        canonicalize(g);
+  try {
+    const parsed = JSON.parse(fs.readFileSync(groupsFile(), "utf8")) as Partial<GroupsFile>;
+    // Self-heal case-insensitive duplicate group names (e.g. legacy
+    // "Ron" vs "ron"): first-seen casing wins; assignments remap to it.
+    const canonical = new Map<string, string>();
+    const merged: string[] = [];
+    const canonicalize = (g: string): string => {
+      const key = g.toLowerCase();
+      let c = canonical.get(key);
+      if (c === undefined) {
+        c = g;
+        canonical.set(key, c);
+        merged.push(c);
       }
-      const normalized: Record<string, string | null> = {};
-      for (const [id, g] of Object.entries(parsed.assignments ?? {})) {
-        normalized[id] = g === null ? null : canonicalize(g);
-      }
-      // keep fields this code does not know about, so a save never drops another writer's data
-      // park marks used to be stored as `done`; read them under the new name (the next save drops the old key)
-      const { done: legacyParked, ...rest } = parsed as Partial<GroupsFile> & { done?: Record<string, number> };
-      const parked = parsed.parked ?? legacyParked;
-      return { ...rest, groups: merged, assignments: normalized, order: parsed.order, ...(parked ? { parked } : {}) };
-    } catch {
-      // try the next location
+      return c;
+    };
+    for (const g of parsed.groups ?? []) {
+      canonicalize(g);
     }
+    const normalized: Record<string, string | null> = {};
+    for (const [id, g] of Object.entries(parsed.assignments ?? {})) {
+      normalized[id] = g === null ? null : canonicalize(g);
+    }
+    // keep fields this code does not know about, so a save never drops another writer's data
+    // park marks used to be stored as `done`; read them under the new name (the next save drops the old key)
+    const { done: legacyParked, ...rest } = parsed as Partial<GroupsFile> & { done?: Record<string, number> };
+    const parked = parsed.parked ?? legacyParked;
+    return { ...rest, groups: merged, assignments: normalized, order: parsed.order, ...(parked ? { parked } : {}) };
+  } catch {
+    // missing or unreadable file: start empty
   }
   return { groups: [], assignments: {} };
 }
@@ -82,11 +76,7 @@ export function saveGroups(data: GroupsFile): void {
       seen.add(g);
     }
   }
-  const file = groupsFile();
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp.${process.pid}`;
-  fs.writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, "utf8");
-  fs.renameSync(tmp, file);
+  writeJsonAtomic(groupsFile(), data);
 }
 
 /** Resolve a group name to an existing group (case-insensitive) or append it. */

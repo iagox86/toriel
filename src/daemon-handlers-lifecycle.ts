@@ -12,6 +12,7 @@ import { forkNote, recordFork, sessionIdOfFile } from "./lineage.ts";
 import { wasHandled } from "./handled-files.ts";
 import { log } from "./log.ts";
 import { restoreTrashedSession, trashSessionFile } from "./trash.ts";
+import { errText } from "./util.ts";
 
 export async function handlePrompt(
   ctx: DaemonContext,
@@ -131,7 +132,7 @@ export async function handleSpawn(
       s.starting = undefined;
     });
     s.starting.catch((err: unknown) => {
-      log(`session ${s.id} spawn failed: ${err instanceof Error ? err.message : err}`);
+      log(`session ${s.id} spawn failed: ${errText(err)}`);
       s.attachedTo = undefined;
       ctx.hub.broadcastSessions();
     });

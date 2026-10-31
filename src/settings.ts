@@ -6,6 +6,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { DEFAULT_PI_CLI } from "./config.ts";
+import { errText } from "./util.ts";
 
 export type SteeringMode = "all" | "one-at-a-time";
 
@@ -24,6 +25,8 @@ export interface TorielSettings {
   summaryIntervalMinutes?: number;
   /** A summary is refreshed once its session has this many new messages (default 6). */
   summaryMinNewMessages?: number;
+  /** Warn when pi-permission-system is not installed or has no usable config (default true). */
+  warnNoPermissionSystem?: boolean;
 }
 
 export interface LoadedSettings {
@@ -63,7 +66,7 @@ export function loadSettings(file: string = settingsFile()): LoadedSettings {
   try {
     json = JSON.parse(raw);
   } catch (err) {
-    return { settings: {}, problems: [`${file}: ${err instanceof Error ? err.message : String(err)}`] };
+    return { settings: {}, problems: [`${file}: ${errText(err)}`] };
   }
   if (typeof json !== "object" || json === null || Array.isArray(json)) {
     return { settings: {}, problems: [`${file}: expected a JSON object`] };
@@ -77,6 +80,12 @@ export function loadSettings(file: string = settingsFile()): LoadedSettings {
         settings.steeringMode = value;
       } else {
         problems.push(`steeringMode must be "all" or "one-at-a-time"`);
+      }
+    } else if (key === "warnNoPermissionSystem") {
+      if (typeof value === "boolean") {
+        settings.warnNoPermissionSystem = value;
+      } else {
+        problems.push("warnNoPermissionSystem must be true or false");
       }
     } else if ((STRING_KEYS as readonly string[]).includes(key)) {
       if (typeof value === "string" && value.length > 0) {

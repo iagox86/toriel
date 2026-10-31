@@ -47,6 +47,10 @@ export interface Host {
   metaForPath(key: string): SessionMeta | undefined;
   loadLocal(): Promise<void>;
   rebuildChat(): void;
+  /** Working directory of a session: its daemon meta, else its file's header, else ours. */
+  cwdFor(key: string): string;
+  /** Re-read a session's transcript from its file after the file changed under it (rewind, restore). */
+  reloadView(key: string): void;
   syncHistory(force?: boolean): void;
   /** Show a sent prompt immediately in the session's transcript (and start the spinner). */
   echoPrompt(key: string, text: string): void;

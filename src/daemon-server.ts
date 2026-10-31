@@ -7,6 +7,7 @@ import { dispatch } from "./daemon-dispatch.ts";
 import { historyOf } from "./daemon-history.ts";
 import { log } from "./log.ts";
 import { type ClientCommand, LineSplitter } from "./shared.ts";
+import { errText } from "./util.ts";
 
 /** A new controller's initial sync: its own session view, then the transcript of every live child. */
 function syncController(ctx: DaemonContext, socket: net.Socket): void {
@@ -60,7 +61,7 @@ export function createServer(ctx: DaemonContext): net.Server {
         }
         const res = makeResponder(ctx.hub, socket, cmd.id);
         void dispatch(ctx, cmd, socket, res).catch((err: unknown) => {
-          const msg = err instanceof Error ? err.message : String(err);
+          const msg = errText(err);
           log(`command ${cmd.type} failed: ${msg}`);
           res(false, msg);
         });

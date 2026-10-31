@@ -3,19 +3,12 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { KEY_LOG, TRASH_DIR } from "./config.ts";
-import { matching } from "./completion.ts";
-import { fmtAge, firstMessageLabel } from "./format.ts";
-import { listTrashedSessions, type TrashedSession } from "./trash.ts";
-import { log } from "./log.ts";
+import { KEY_LOG } from "./config.ts";
 import { Key, matchesKey } from "@earendil-works/pi-tui";
 import { type Invocation, listing, parseCommandLine } from "./cli.ts";
 import { SWITCHER_COMMANDS, type SwitcherCommandName } from "./commands.ts";
 import type { Host } from "./host.ts";
 import { loadGroups, pruneStale, resolveGroup, saveGroups, type GroupsFile, withComment, withParked } from "./groups.ts";
-import { compileFilter, type Filter } from "./session-filter.ts";
-import { loadSettings } from "./settings.ts";
-import { DEFAULT_INTERVAL_MINUTES, needsResummary, type SummaryEntry, summarizeFile, summaryModel, transcriptOf, autoSummaryFailure } from "./summarize.ts";
 import {
   buildSessionList,
   appendUnranked,
@@ -30,8 +23,12 @@ import { arrangeTree } from "./session-tree.ts";
 import { loadAgentsChecked } from "./agents.ts";
 import { agentListing } from "./agents-completion.ts";
 import { runFeedback } from "./feedback-command.ts";
-import type { SwitcherSession } from "./switcher.ts";
+import { SwitcherFilter } from "./switcher-filter.ts";
+import { SwitcherSummaries } from "./switcher-summaries.ts";
+import { restoreFromTrash } from "./switcher-trash.ts";
+import { isLiveState, type SwitcherSession } from "./switcher.ts";
 import { itemsFromFile, newView } from "./transcript.ts";
+import { errText } from "./util.ts";
 
 const LOCK_BITS = 64 | 128; // kitty caps_lock / num_lock, reported in the modifier field
 
@@ -48,12 +45,15 @@ export function isF2(data: string): boolean {
   return m !== null && ((Number(m[1]) - 1) & ~LOCK_BITS) === 0;
 }
 
-/** Most sessions one automatic pass will summarize (a local model is slow). */
-const MAX_AUTO_PER_RUN = 10;
+/** What runs a switcher /command: its parsed call and the highlighted session, if any. */
+type CommandHandler = (call: Invocation, target: SwitcherSession | undefined) => Promise<void>;
 
 export class SwitcherActions {
   groups: GroupsFile = { groups: [], assignments: {} };
   isOpen = false;
+
+  /** The temporary list filter (/filter, ctrl-f). */
+  readonly filter: SwitcherFilter;
 
   private lastRefused: string | null = null;
   private armedDelete: string | null = null;
@@ -61,9 +61,12 @@ export class SwitcherActions {
   private switchOrder: string[] | null = null;
 
   private readonly h: Host;
+  private readonly summaries: SwitcherSummaries;
 
   constructor(host: Host) {
     this.h = host;
+    this.filter = new SwitcherFilter(host, () => this.refresh());
+    this.summaries = new SwitcherSummaries(host, { refresh: () => this.refresh(), isOpen: () => this.isOpen, groups: () => this.groups });
   }
 
   open(): void {
@@ -75,9 +78,7 @@ export class SwitcherActions {
       }
     }
     this.groups = loadGroups();
-    this.filter = null;
-    this.liveFilter = false;
-    this.h.editor.onChange = undefined;
+    this.filter.reset();
     this.switchOrder = null;
     this.armedDelete = null;
     this.lastRefused = null;
@@ -98,9 +99,7 @@ export class SwitcherActions {
 
   close(): void {
     this.isOpen = false;
-    this.filter = null;
-    this.liveFilter = false;
-    this.h.editor.onChange = undefined;
+    this.filter.reset();
     this.h.tui.setLayoutRoot(this.h.chatLayout);
     this.h.rebuildChat();
     this.h.renderChrome();
@@ -138,11 +137,12 @@ export class SwitcherActions {
         // debug only
       }
     }
-    const shown = this.filter ? list.filter((x) => this.filter!.test(x)) : list;
-    this.h.switcher.filterNote = this.filter
-      ? `filter${this.filter.regex ? " (regex)" : ""}: ${this.filter.text}  -  ${shown.length} of ${list.length}  -  /filter clears`
+    const filter = this.filter.current;
+    const shown = filter ? list.filter((x) => filter.test(x)) : list;
+    this.h.switcher.filterNote = filter
+      ? `filter${filter.regex ? " (regex)" : ""}: ${filter.text}  -  ${shown.length} of ${list.length}  -  /filter clears`
       : "";
-    this.h.switcher.groupMatches = this.filter ? (title) => this.filter!.testGroup(title) : undefined;
+    this.h.switcher.groupMatches = filter ? (title) => filter.testGroup(title) : undefined;
     this.h.switcher.sessions = shown;
     this.h.switcher.groups = this.groups.groups;
     this.h.switcher.collapsed = new Set(this.groups.collapsed);
@@ -163,13 +163,13 @@ export class SwitcherActions {
   }
 
   async enter(s: SwitcherSession): Promise<void> {
-    if (s.daemonId !== undefined && (s.state === "streaming" || s.state === "idle" || s.state === "compacting")) {
+    if (s.daemonId !== undefined && isLiveState(s.state)) {
       try {
         await this.h.request({ type: "attach", session: s.daemonId, force: this.lastRefused === s.key });
         this.lastRefused = null;
       } catch (err) {
         this.lastRefused = s.key;
-        this.h.switcher.hint = `${err instanceof Error ? err.message : err} - enter again to take over`;
+        this.h.switcher.hint = `${errText(err)} - enter again to take over`;
         this.h.tui.requestRender();
         return;
       }
@@ -204,7 +204,7 @@ export class SwitcherActions {
       if (firstMessage) {
         this.h.editor.setText(firstMessage);
       }
-      this.h.switcher.hint = `spawn failed: ${err instanceof Error ? err.message : err}`;
+      this.h.switcher.hint = `spawn failed: ${errText(err)}`;
       this.h.tui.requestRender();
     }
   }
@@ -212,7 +212,7 @@ export class SwitcherActions {
   /** Stop a live session's child; the file stays and it respawns on the next prompt. */
   async stop(s: SwitcherSession): Promise<void> {
     try {
-      if (s.state !== "streaming" && s.state !== "idle" && s.state !== "compacting") {
+      if (!isLiveState(s.state)) {
         this.h.switcher.hint = `${s.name} is not running`;
       } else if (s.daemonId === undefined) {
         throw new Error("no daemon session");
@@ -222,7 +222,7 @@ export class SwitcherActions {
         this.refresh();
       }
     } catch (err) {
-      this.h.switcher.hint = `stop failed: ${err instanceof Error ? err.message : err}`;
+      this.h.switcher.hint = `stop failed: ${errText(err)}`;
     }
     this.h.tui.requestRender();
   }
@@ -232,7 +232,7 @@ export class SwitcherActions {
     try {
       if (!confirmed && this.armedDelete !== s.key) {
         this.armedDelete = s.key;
-        const live = s.state === "streaming" || s.state === "idle" || s.state === "compacting";
+        const live = isLiveState(s.state);
         const kids = s.descendants ?? 0;
         const orphans = kids > 0 ? ` (its ${kids} ${kids === 1 ? "child stays" : "children stay"}, listed on their own)` : "";
         this.h.switcher.hint = `${s.name}: press ctrl-x again to ${live ? "stop it and " : ""}move to trash${orphans}`;
@@ -249,241 +249,14 @@ export class SwitcherActions {
       this.h.switcher.hint = `${s.name} moved to trash (/restore brings it back)`;
       this.refresh();
     } catch (err) {
-      this.h.switcher.hint = `delete failed: ${err instanceof Error ? err.message : err}`;
+      this.h.switcher.hint = `delete failed: ${errText(err)}`;
     }
     this.h.tui.requestRender();
   }
 
-  /** Deleted sessions to pick from; a single match (or a lone entry) is restored directly. */
-  private async restoreFromTrash(query: string): Promise<void> {
-    const saved = loadGroups().summaries ?? {};
-    const label = (t: TrashedSession): string => {
-      const title = t.name ?? (t.sessionId ? saved[t.sessionId]?.text : undefined) ?? firstMessageLabel(t.firstMessage ?? "", 50);
-      const age = t.trashedAt ? `${fmtAge(Date.now() - Date.parse(t.trashedAt))} ago` : "earlier";
-      const where = path.basename(t.cwd ?? path.dirname(t.originalPath));
-      return `${title || "<unnamed>"}  [deleted ${age}, ${t.messages} msgs, ${where}] ${(t.sessionId ?? "").slice(0, 8)}`;
-    };
-    const entries = listTrashedSessions(TRASH_DIR).map((t) => ({ t, text: label(t) }));
-    const shown = matching(entries.map((e) => e.text), query);
-    const choices = entries.filter((e) => shown.includes(e.text));
-    if (entries.length === 0) {
-      this.h.switcher.hint = "the trash has no deleted sessions";
-    } else if (choices.length === 0) {
-      this.h.switcher.hint = `restore: nothing in the trash matches "${query}"`;
-    } else if (choices.length === 1 && query) {
-      await this.restoreOne(choices[0]!.t, choices[0]!.text);
-    } else {
-      this.h.choicePanel.open(
-        "Restore which deleted session?",
-        choices.map((e) => e.text),
-        undefined,
-        (picked) => {
-          const chosen = choices.find((e) => e.text === picked);
-          if (chosen) {
-            void this.restoreOne(chosen.t, chosen.text);
-          }
-        },
-      );
-    }
-    this.h.tui.requestRender();
-  }
-
-  private async restoreOne(t: TrashedSession, text: string): Promise<void> {
-    try {
-      await this.h.request({ type: "restore", trashedTo: t.trashedTo });
-      await this.h.loadLocal();
-      this.refresh();
-      this.h.switcher.hint = `restored ${text.split("  [")[0]}`;
-    } catch (err) {
-      this.h.switcher.hint = `restore failed: ${err instanceof Error ? err.message : err}`;
-    }
-    this.h.tui.requestRender();
-  }
-
-  private summarizing = false;
-  /** The reason the last unattended summary pass failed, so it is announced once. */
-  private autoSummaryError: string | null = null;
-  /** The temporary list filter (null = none). */
-  private filter: Filter | null = null;
-  /** ctrl-f: the box text is the filter and applies as it is typed. */
-  private liveFilter = false;
-
-  /** Set the filter from /filter-style text; returns an error message for a bad pattern. */
-  private setFilter(text: string, regex: boolean): string | undefined {
-    try {
-      this.filter = compileFilter(text, regex);
-    } catch (err) {
-      return err instanceof Error ? err.message : String(err);
-    }
-    this.refresh();
-    this.h.renderChrome(); // the status line names the highlighted row
-    return undefined;
-  }
-
-  private clearFilter(): void {
-    this.filter = null;
-    this.liveFilter = false;
-    this.h.editor.onChange = undefined;
-    this.refresh();
-    this.h.renderChrome();
-  }
-
-  /** ctrl-f: start filtering as you type (the box takes the same text as /filter). */
-  private startLiveFilter(): void {
-    this.liveFilter = true;
-    this.h.editor.setText("");
-    this.h.editor.onChange = (text) => this.applyLiveText(text);
-    this.h.switcher.hint = "filter as you type - up/down move - enter keeps it - esc clears it (-r for a regex)";
-    this.h.tui.requestRender();
-  }
-
-  private applyLiveText(text: string): void {
-    const parsed = parseCommandLine(SWITCHER_COMMANDS, `/filter ${text}`);
-    if (parsed.kind !== "run") {
-      return; // a half-typed flag or quote: keep what is shown
-    }
-    const error = this.setFilter(parsed.call.args.join(" "), parsed.call.opts.regex === true);
-    if (error) {
-      this.h.switcher.hint = `filter: ${error}`;
-      this.h.tui.requestRender();
-    }
-  }
-
-  /** Keys while ctrl-f filtering; true when consumed. */
-  private liveFilterKeys(data: string): boolean {
-    if (matchesKey(data, Key.up) || matchesKey(data, Key.down)) {
-      this.h.switcher.move(matchesKey(data, Key.up) ? -1 : 1);
-      this.h.tui.requestRender();
-      return true;
-    }
-    if (matchesKey(data, Key.enter)) {
-      // keep the filter, give the box back
-      this.liveFilter = false;
-      this.h.editor.onChange = undefined;
-      this.h.editor.setText("");
-      this.h.switcher.hint = "filter kept - esc or /filter clears it";
-      this.h.tui.requestRender();
-      return true;
-    }
-    if (matchesKey(data, Key.escape)) {
-      this.h.editor.onChange = undefined;
-      this.h.editor.setText("");
-      this.clearFilter();
-      this.h.switcher.hint = "";
-      return true;
-    }
-    return false;
-  }
-  private autoSummaryLast = 0;
-
-  /** Read-modify-write on a fresh copy, so a group edit made meanwhile is not lost. */
-  private saveSummary(sessionId: string, entry: SummaryEntry): void {
-    const groups = loadGroups();
-    groups.summaries = { ...groups.summaries, [sessionId]: entry };
-    saveGroups(groups);
-  }
-
-  /**
-   * While toriel is open, every `summaryIntervalMinutes` (settings; default 60, 0 = off)
-   * summarize sessions that have no summary yet or have changed since theirs.
-   */
+  /** Start the unattended summary pass (while toriel is open). */
   startAutoSummary(): void {
-    const timer = setInterval(() => void this.autoSummaryTick(), 60_000);
-    timer.unref?.();
-  }
-
-  private async autoSummaryTick(): Promise<void> {
-    const cfg = loadSettings().settings;
-    const minutes = cfg.summaryIntervalMinutes ?? DEFAULT_INTERVAL_MINUTES;
-    if (!minutes || this.summarizing || Date.now() - this.autoSummaryLast < minutes * 60_000) {
-      return;
-    }
-    this.autoSummaryLast = Date.now();
-    const saved = loadGroups().summaries ?? {};
-    const live = new Map([...this.h.sessions.values()].map((m) => [m.sessionFile, m]));
-    const todo = [...this.h.local.values()].filter((info) => {
-      try {
-        return needsResummary({
-          entry: saved[info.id],
-          messages: transcriptOf(info.path, 1).messages,
-          modifiedMs: info.modified,
-          now: Date.now(),
-          streaming: live.get(info.path)?.streaming ?? false,
-          minNew: cfg.summaryMinNewMessages,
-        });
-      } catch {
-        return false;
-      }
-    });
-    if (todo.length === 0) {
-      return;
-    }
-    // most recently touched first, so live sessions are covered before a backlog of old ones
-    todo.sort((a, b) => b.modified - a.modified);
-    this.summarizing = true;
-    try {
-      const model = summaryModel();
-      for (const info of todo.slice(0, MAX_AUTO_PER_RUN)) {
-        this.saveSummary(info.id, await summarizeFile(info.path, model));
-      }
-      this.autoSummaryError = null;
-    } catch (err) {
-      // unattended: log every failure, but tell the user only when the reason changes
-      log(`auto-summary failed: ${err instanceof Error ? err.message : err}`);
-      const { notify, seen } = autoSummaryFailure(this.autoSummaryError, err);
-      this.autoSummaryError = seen;
-      if (notify) {
-        this.h.notify(notify);
-      }
-    } finally {
-      this.summarizing = false;
-    }
-    if (this.isOpen) {
-      this.refresh();
-      this.h.tui.requestRender();
-    }
-  }
-
-  /** Summarize one session and save it; returns false (with a hint) on failure. */
-  private async summarizeOne(t: SwitcherSession, model: string, chars?: number): Promise<boolean> {
-    if (!t.key.startsWith("/") || !t.sessionId) {
-      this.h.switcher.hint = `summarize: ${t.name} has no session file yet`;
-      return false;
-    }
-    try {
-      this.saveSummary(t.sessionId, await summarizeFile(t.key, model, chars));
-      this.refresh();
-      return true;
-    } catch (err) {
-      this.h.switcher.hint = `summarize ${t.name} failed: ${err instanceof Error ? err.message : err}`;
-      return false;
-    }
-  }
-
-  /** Sessions with no summary, or one for a different message count, one at a time (local models are slow). */
-  private async summarizeAll(model: string, chars?: number): Promise<void> {
-    const todo = this.h.switcher.sessions.filter((s) => {
-      if (!s.key.startsWith("/") || !s.sessionId) {
-        return false;
-      }
-      try {
-        return this.groups.summaries?.[s.sessionId]?.messages !== transcriptOf(s.key).messages;
-      } catch {
-        return false;
-      }
-    });
-    if (todo.length === 0) {
-      this.h.switcher.hint = "summarize: every session already has a current summary";
-      return;
-    }
-    for (const [i, t] of todo.entries()) {
-      this.h.switcher.hint = `summarizing ${i + 1}/${todo.length}: ${t.name} (${model})...`;
-      this.h.tui.requestRender();
-      if (!(await this.summarizeOne(t, model, chars))) {
-        return; // the hint says why; the same model would likely fail again
-      }
-    }
-    this.h.switcher.hint = `summarized ${todo.length} session${todo.length === 1 ? "" : "s"} with ${model}`;
+    this.summaries.startAuto();
   }
 
   /** Persist a group/order mutation and refresh; shows the mutation's hint. */
@@ -556,19 +329,25 @@ export class SwitcherActions {
     this.h.tui.requestRender();
   }
 
-  /** One handler per SWITCHER_COMMANDS entry (the Record type makes a missing one a compile error). */
-  private commandHandlers(): Record<SwitcherCommandName, (call: Invocation, target: SwitcherSession | undefined) => Promise<void>> {
-    const needsTarget = (verb: string, run: (t: SwitcherSession, arg: string, call: Invocation) => Promise<void>) =>
-      async (call: Invocation, target: SwitcherSession | undefined) => {
-        if (!target) {
-          this.h.switcher.hint = `${verb}: highlight a session first`;
-          return;
-        }
-        await run(target, call.args.join(" "), call);
-      };
-    const leave = async () => {
-      this.h.dispose();
+  /** A handler for a command that works on the highlighted session. */
+  private needsTarget(verb: string, run: (t: SwitcherSession, arg: string, call: Invocation) => Promise<void>): CommandHandler {
+    return async (call, target) => {
+      if (!target) {
+        this.h.switcher.hint = `${verb}: highlight a session first`;
+        return;
+      }
+      await run(target, call.args.join(" "), call);
     };
+  }
+
+  /** One handler per SWITCHER_COMMANDS entry (the Record type makes a missing one a compile error). */
+  private commandHandlers(): Record<SwitcherCommandName, CommandHandler> {
+    return { ...this.sessionCommands(), ...this.groupCommands(), ...this.miscCommands() };
+  }
+
+  /** Commands on a session itself: starting, stopping, deleting, renaming, adopting. */
+  private sessionCommands(): Pick<Record<SwitcherCommandName, CommandHandler>, "new" | "stop" | "delete" | "rename" | "adopt" | "detach" | "restore"> {
+    const needsTarget = this.needsTarget.bind(this);
     return {
       new: async (call) => {
         const dir = call.opts.cwd as string | undefined;
@@ -579,11 +358,6 @@ export class SwitcherActions {
         }
         await this.newSession(undefined, call.opts.name as string | undefined, cwd, call.opts.agent as string | undefined);
       },
-      agents: async () => {
-        const { agents, problems } = loadAgentsChecked(process.cwd());
-        this.h.infoPanel.show(agentListing(agents, problems));
-      },
-      feedback: async (call, target) => runFeedback(this.h, call, target?.key),
       stop: needsTarget("stop", (t) => this.stop(t)),
       delete: async (call, target) => {
         if (!target) {
@@ -610,9 +384,53 @@ export class SwitcherActions {
           this.refresh();
           this.h.switcher.hint = unique === arg ? `renamed to ${arg}` : `renamed to ${unique} (${arg} is taken)`;
         } catch (err) {
-          this.h.switcher.hint = `rename failed: ${err instanceof Error ? err.message : err}`;
+          this.h.switcher.hint = `rename failed: ${errText(err)}`;
         }
       }),
+      adopt: async (_call, target) => {
+        const t = target ?? this.h.switcher.current();
+        if (!t) {
+          this.h.switcher.hint = "adopt: highlight a session first";
+        } else if (!t.key.startsWith("/")) {
+          this.h.switcher.hint = "adopt: not a file-backed session";
+        } else {
+          try {
+            const data = (await this.h.request({ type: "adopt", path: t.key, cwd: t.cwd ?? process.cwd() })) as {
+              sessionId?: number;
+            };
+            if (typeof data?.sessionId === "number") {
+              const meta = this.h.sessions.get(data.sessionId);
+              if (meta) {
+                this.h.viewing = this.h.keyFor(meta);
+                this.close();
+              } else {
+                this.h.pendingEnterId = data.sessionId;
+                this.h.switcher.hint = "adopting...";
+              }
+            }
+          } catch (err) {
+            this.h.switcher.hint = `adopt failed: ${errText(err)}`;
+          }
+        }
+      },
+      detach: needsTarget("detach", async (t) => {
+        const parent = t.sessionId ? detachFromParent(t.sessionId) : undefined;
+        if (!parent) {
+          this.h.switcher.hint = `${t.name} was not started by an agent - nothing to detach`;
+        } else {
+          this.h.forgetLineage();
+          this.refresh();
+          this.h.switcher.hint = `${t.name} detached from ${parent.name} - it is top-level now`;
+        }
+      }),
+      restore: async (call) => restoreFromTrash(this.h, call.args.join(" "), () => this.refresh()),
+    };
+  }
+
+  /** Commands that file sessions and shape the list: groups, parking, notes, the filter, summaries. */
+  private groupCommands(): Pick<Record<SwitcherCommandName, CommandHandler>, "group" | "ungroup" | "park" | "comment" | "filter" | "summarize"> {
+    const needsTarget = this.needsTarget.bind(this);
+    return {
       group: needsTarget("group", async (t, arg) => {
         if (!arg) {
           this.h.editor.setText("/group ");
@@ -627,8 +445,20 @@ export class SwitcherActions {
             this.refresh();
             this.h.switcher.hint = `${t.name} -> ${group}`;
           } catch (err) {
-            this.h.switcher.hint = `group failed: ${err instanceof Error ? err.message : err}`;
+            this.h.switcher.hint = `group failed: ${errText(err)}`;
           }
+        }
+      }),
+      ungroup: needsTarget("ungroup", async (t) => {
+        if (!t.sessionId) {
+          this.h.switcher.hint = "ungroup: session has no id yet";
+        } else if (!t.group) {
+          this.h.switcher.hint = `${t.name} is not in a group`;
+        } else {
+          this.groups.assignments[t.sessionId] = null;
+          saveGroups(this.groups);
+          this.refresh();
+          this.h.switcher.hint = `${t.name} removed from ${t.group}`;
         }
       }),
       park: needsTarget("park", async (t, _arg, call) => {
@@ -657,101 +487,37 @@ export class SwitcherActions {
         this.refresh();
         this.h.switcher.hint = call.opts.clear === true ? `${t.name}: comment removed` : `${t.name}: comment saved (searchable with /filter)`;
       }),
-      detach: needsTarget("detach", async (t) => {
-        const parent = t.sessionId ? detachFromParent(t.sessionId) : undefined;
-        if (!parent) {
-          this.h.switcher.hint = `${t.name} was not started by an agent - nothing to detach`;
-        } else {
-          this.h.forgetLineage();
-          this.refresh();
-          this.h.switcher.hint = `${t.name} detached from ${parent.name} - it is top-level now`;
-        }
-      }),
-      ungroup: needsTarget("ungroup", async (t) => {
-        if (!t.sessionId) {
-          this.h.switcher.hint = "ungroup: session has no id yet";
-        } else if (!t.group) {
-          this.h.switcher.hint = `${t.name} is not in a group`;
-        } else {
-          this.groups.assignments[t.sessionId] = null;
-          saveGroups(this.groups);
-          this.refresh();
-          this.h.switcher.hint = `${t.name} removed from ${t.group}`;
-        }
-      }),
-      summarize: async (call, target) => {
-        const model = (call.opts.model as string | undefined) ?? summaryModel();
-        const chars = call.opts.chars as number | undefined;
-        if (chars !== undefined && !(chars >= 200)) {
-          this.h.switcher.hint = "summarize: --chars must be a number, at least 200";
-          return;
-        }
-        if (this.summarizing) {
-          this.h.switcher.hint = "summarize: already running - wait for it to finish";
-          return;
-        }
-        this.summarizing = true;
-        try {
-          if (call.opts.all === true) {
-            await this.summarizeAll(model, chars);
-          } else if (!target) {
-            this.h.switcher.hint = "summarize: highlight a session first";
-          } else {
-            this.h.switcher.hint = `summarizing ${target.name} with ${model} (a slow model can take minutes)...`;
-            this.h.tui.requestRender();
-            if (await this.summarizeOne(target, model, chars)) {
-              this.h.switcher.hint = `summarized ${target.name}`;
-            }
-          }
-        } finally {
-          this.summarizing = false;
-        }
-      },
       filter: async (call) => {
         const text = call.args.join(" ");
         if (!text.trim()) {
-          this.clearFilter();
+          this.filter.clear();
           this.h.switcher.hint = "filter cleared";
           return;
         }
-        const error = this.setFilter(text, call.opts.regex === true);
+        const error = this.filter.set(text, call.opts.regex === true);
         this.h.switcher.hint = error ? `filter: ${error}` : "";
       },
+      summarize: async (call, target) => this.summaries.run(call, target),
+    };
+  }
+
+  /** The rest: help, listings, feedback, leaving, stopping the daemon. */
+  private miscCommands(): Pick<Record<SwitcherCommandName, CommandHandler>, "agents" | "feedback" | "mouse" | "help" | "exit" | "quit" | "kill-daemon"> {
+    const leave = async () => {
+      this.h.dispose();
+    };
+    return {
+      agents: async () => {
+        const { agents, problems } = loadAgentsChecked(process.cwd());
+        this.h.infoPanel.show(agentListing(agents, problems));
+      },
+      feedback: async (call, target) => runFeedback(this.h, call, target?.key),
       mouse: async (call) => this.h.setMouse(call.args[0] ?? ""),
-      exit: leave,
-      quit: leave,
       help: async () => {
         this.h.infoPanel.show(listing(SWITCHER_COMMANDS));
       },
-      restore: async (call) => {
-        await this.restoreFromTrash(call.args.join(" "));
-      },
-      adopt: async (_call, target) => {
-        const t = target ?? this.h.switcher.current();
-        if (!t) {
-          this.h.switcher.hint = "adopt: highlight a session first";
-        } else if (!t.key.startsWith("/")) {
-          this.h.switcher.hint = "adopt: not a file-backed session";
-        } else {
-          try {
-            const data = (await this.h.request({ type: "adopt", path: t.key, cwd: t.cwd ?? process.cwd() })) as {
-              sessionId?: number;
-            };
-            if (typeof data?.sessionId === "number") {
-              const meta = this.h.sessions.get(data.sessionId);
-              if (meta) {
-                this.h.viewing = this.h.keyFor(meta);
-                this.close();
-              } else {
-                this.h.pendingEnterId = data.sessionId;
-                this.h.switcher.hint = "adopting...";
-              }
-            }
-          } catch (err) {
-            this.h.switcher.hint = `adopt failed: ${err instanceof Error ? err.message : err}`;
-          }
-        }
-      },
+      exit: leave,
+      quit: leave,
       "kill-daemon": async () => {
         this.h.send({ type: "shutdown" });
         this.h.switcher.hint = "daemon shutting down (children stop too)";
@@ -760,11 +526,11 @@ export class SwitcherActions {
   }
 
   keys(data: string): boolean {
-    if (this.liveFilter && this.liveFilterKeys(data)) {
+    if (this.filter.live && this.filter.liveKeys(data)) {
       return true;
     }
     if (matchesKey(data, Key.ctrl("f"))) {
-      this.startLiveFilter();
+      this.filter.startLive();
       return true;
     }
     const editorEmpty = this.h.editor.getText().trim().length === 0;
@@ -792,8 +558,8 @@ export class SwitcherActions {
       if (this.h.editor.getText().trim().length > 0) {
         this.h.editor.setText("");
         this.h.switcher.hint = "";
-      } else if (this.filter) {
-        this.clearFilter();
+      } else if (this.filter.current) {
+        this.filter.clear();
         this.h.switcher.hint = "filter cleared";
         this.h.tui.requestRender();
       }
@@ -869,12 +635,12 @@ export class SwitcherActions {
   }
 
   private isFolded(s: SwitcherSession): boolean {
-    return !this.filter && s.sessionId !== undefined && (this.groups.collapsed ?? []).includes(s.sessionId);
+    return !this.filter.current && s.sessionId !== undefined && (this.groups.collapsed ?? []).includes(s.sessionId);
   }
 
   /** Fold or unfold the children of a session; remembered across runs (same list as folded groups). */
   private setSessionFolded(s: SwitcherSession, fold: boolean): void {
-    if (this.filter) {
+    if (this.filter.current) {
       this.h.switcher.hint = "children can't be folded while a filter is on";
       this.h.tui.requestRender();
       return;
@@ -895,7 +661,7 @@ export class SwitcherActions {
 
   /** Fold or unfold a group in the switcher; remembered across runs. */
   private setCollapsed(title: string, collapse: boolean): void {
-    if (this.filter) {
+    if (this.filter.current) {
       this.h.switcher.hint = "groups can't be folded while a filter is on";
       this.h.tui.requestRender();
       return;

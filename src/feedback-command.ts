@@ -4,6 +4,7 @@ import { LOG } from "./config.ts";
 import { appendFeedback, formatFeedback, piVersion, readFeedback, torielRevision, sessionPosition } from "./feedback.ts";
 import type { Host } from "./host.ts";
 import { loadSettings, resolveChildConfig } from "./settings.ts";
+import { errText } from "./util.ts";
 
 /** `key` is the session file of the session on screen or highlighted, if any. */
 export function runFeedback(h: Host, call: Invocation, key: string | undefined): void {
@@ -38,6 +39,6 @@ export function runFeedback(h: Host, call: Invocation, key: string | undefined):
     });
     h.notify("feedback recorded");
   } catch (err) {
-    h.notify(`feedback failed: ${err instanceof Error ? err.message : String(err)}`);
+    h.notify(`feedback failed: ${errText(err)}`);
   }
 }

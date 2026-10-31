@@ -1,0 +1,28 @@
+#!/bin/sh
+# Launcher, so toriel runs from any directory: symlink this file onto PATH
+# (ln -s ~/projects/toriel/bin/toriel ~/.local/bin/toriel). toriel is TypeScript
+# run directly by node and needs the major version in .nvmrc; when the node on
+# PATH is older (nvm's default often is), use that version from nvm's directory
+# and put it first on PATH, since the daemon starts pi through PATH too.
+# The working directory is left alone: it is where new sessions start.
+root=$(dirname "$(dirname "$(readlink -f "$0")")")
+want=$(tr -d 'v \n' < "$root/.nvmrc" 2>/dev/null | cut -d. -f1)
+want=${want:-26}
+
+major() {
+  "$1" --version 2>/dev/null | sed -n 's/^v\([0-9][0-9]*\)\..*/\1/p'
+}
+
+have=$(major node)
+if [ -z "$have" ] || [ "$have" -lt "$want" ]; then
+  found=$(ls -d "${NVM_DIR:-$HOME/.nvm}/versions/node/v$want."*/bin 2>/dev/null | sort -V | tail -n 1)
+  if [ -z "$found" ]; then
+    echo "toriel needs node $want or newer (found: ${have:-none}); install it with: nvm install $want" >&2
+    exit 1
+  fi
+  PATH="$found:$PATH"
+  export PATH
+fi
+
+# (src/preflight.ts checks the rest of the setup, once node is running)
+exec node "$root/toriel.ts" "$@"

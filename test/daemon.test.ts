@@ -15,6 +15,41 @@ afterEach(async () => {
 
 const isSettled = (m: Msg) => m.type === "event" && m.event?.type === "agent_settled";
 
+describe("daemon: single instance", () => {
+  /** Run a second daemon against the same state directory, optionally on its own socket. */
+  function second(h: Harness, sock: string): Promise<{ code: number | null; stderr: string }> {
+    return new Promise((resolve) => {
+      const proc = spawn(process.execPath, [path.join(import.meta.dirname, "..", "src", "daemon.ts")], {
+        env: { ...process.env, TORIEL_SOCK: sock, TORIEL_LOG: path.join(h.dir, "second.log"), XDG_DATA_HOME: path.join(h.dir, "data") },
+      });
+      let stderr = "";
+      proc.stderr.on("data", (d) => {
+        stderr += d;
+      });
+      proc.once("exit", (code) => resolve({ code, stderr }));
+    });
+  }
+
+  it("refuses to start beside a running daemon, even on a different socket, and leaves it serving", async () => {
+    harness = await startDaemon();
+    const r = await second(harness, path.join(harness.dir, "other.sock"));
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /a toriel daemon is already running \(pid \d+/);
+    assert.ok(!fs.existsSync(path.join(harness.dir, "other.sock")));
+    const c = await harness.connect();
+    await c.request({ type: "list" });
+    await c.waitFor((m) => m.type === "sessions");
+  });
+
+  it("does not take over the socket of a running daemon", async () => {
+    harness = await startDaemon();
+    const before = fs.statSync(harness.sock).ino;
+    const r = await second(harness, harness.sock);
+    assert.equal(r.code, 1);
+    assert.equal(fs.statSync(harness.sock).ino, before, "the socket file was not replaced");
+  });
+});
+
 describe("daemon: sessions", () => {
   it("sends the session list to a newly connected controller", async () => {
     harness = await startDaemon();
@@ -736,6 +771,45 @@ describe("daemon: lifecycle", () => {
     const f = c.sessions().find((x) => x.id === explore.sessionId)?.sessionFile;
     const eargv = JSON.parse(fs.readFileSync(`${f}.argv.json`, "utf8")) as string[];
     assert.equal(eargv.filter((a) => a === "--tools").length, 1, "a profile's own --tools is not mixed with modifiers");
+  });
+
+  it("loads toriel's own extensions and skill into every child by flag, keeping the extensions for a profile with discovery off and dropping the skill for a minimal one", async () => {
+    harness = await startDaemon({ TORIEL_AGENTS_DIR: path.join(os.tmpdir(), "toriel-no-user-agents") });
+    const c = await harness.connect();
+    const argvOf = (id: number): string[] => {
+      const f = c.sessions().find((x) => x.id === id)?.sessionFile;
+      return JSON.parse(fs.readFileSync(`${f}.argv.json`, "utf8")) as string[];
+    };
+    const flagged = (argv: string[], flag: string): string[] => argv.flatMap((a, i) => (a === flag ? [argv[i + 1] as string] : []));
+    const plain = await c.request({ type: "spawn", cwd: harness.dir });
+    await c.waitFor((m) => m.type === "history");
+    const argv = argvOf(plain.sessionId as number);
+    assert.deepEqual(flagged(argv, "-e").map((f) => path.basename(f)).sort(), [
+      "toriel-agents.ts",
+      "toriel-cache-warn.ts",
+      "toriel-session-bridge.ts",
+      "toriel-usage.ts",
+    ]);
+    assert.ok(flagged(argv, "-e").every((f) => path.isAbsolute(f) && fs.existsSync(f)));
+    assert.deepEqual(flagged(argv, "--skill").map((f) => path.basename(f)), ["messaging"]);
+
+    // explore is a profile with extension discovery off and no skills (minimal)
+    const explore = await c.request({ type: "spawn", cwd: harness.dir, agent: "explore" });
+    await c.waitFor((m) => m.type === "history" && m.session === explore.sessionId);
+    const eargv = argvOf(explore.sessionId as number);
+    assert.ok(eargv.includes("--no-extensions"));
+    assert.equal(flagged(eargv, "-e").length, 4, "explicit -e still loads under --no-extensions");
+    assert.deepEqual(flagged(eargv, "--skill"), []);
+  });
+
+  it("tells every child which socket its daemon listens on, so the extensions need no path rule of their own", async () => {
+    harness = await startDaemon();
+    const c = await harness.connect();
+    const { sessionId } = await c.request({ type: "spawn", cwd: harness.dir });
+    await c.waitFor((m) => m.type === "history");
+    const f = c.sessions().find((x) => x.id === sessionId)?.sessionFile;
+    const env = JSON.parse(fs.readFileSync(`${f}.env.json`, "utf8")) as { TORIEL_SOCK: string };
+    assert.equal(env.TORIEL_SOCK, harness.sock);
   });
 
   it("reports how many messages pi holds when a run settles, and replays history on a resync request", async () => {

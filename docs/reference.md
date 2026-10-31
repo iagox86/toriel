@@ -12,13 +12,16 @@ exclusive input attach and explicit take-over.
 ```fish
 cd ~/projects/toriel
 npm install                # once; symlinks the global pi + pi-tui
-node toriel.ts              # auto-starts the daemon in the background if none is running
-node toriel.ts kill-server  # stop the daemon (orderly: children shut down too)
+toriel              # auto-starts the daemon in the background if none is running
+toriel kill-server  # stop the daemon (orderly: children shut down too)
 ```
 
 The daemon detaches and keeps running when the controller exits; restarting
 a controller reattaches to everything. Multiple controllers can run against
-one daemon. `kill-server` uses the pidfile next to the socket and refuses to
+one daemon. There is only ever one daemon per state directory: it takes a lock
+(`daemon.pid` under `~/.local/share/toriel`, holding its pid) and a second one
+refuses to start, naming the running pid, whatever socket it was given. A lock
+left by a dead daemon is replaced. `kill-server` uses that pidfile and refuses to
 signal anything that is not the toriel daemon.
 
 ## Sessions opened in plain pi
@@ -143,11 +146,12 @@ summary column says `compacting`:
 - Deletes never unlink: the session file moves to
   `$XDG_DATA_HOME/toriel/trash/` with a `.json` manifest (original path +
   timestamp), because the session file is the only copy that exists.
-  Groups live in `$XDG_DATA_HOME/toriel/session-groups.json`, shared with
-  the stock pi session-groups extension (legacy `~/.pi/agent` path still
-  read as fallback).
-- Permission dialogs: children running permissions.ts block on ask-listed
-  commands; the dialog routes to the attached controller (y/n, digits for
+  Groups live in `$XDG_DATA_HOME/toriel/session-groups.json`.
+- Permission dialogs: toriel has no permission system of its own. Children that load
+  the `pi-permission-system` package (listed under `packages` in pi's `settings.json`;
+  its rules are `~/.pi/agent/extensions/pi-permission-system/config.json`) block on
+  ask-listed tools, and any extension's confirm/select/input dialog is handled the
+  same way; the dialog routes to the attached controller (y/n, digits for
   select, esc cancels select). The dialog is labeled with the session that
   raised it (e.g. "Session 3 'Worker'", id alone when unnamed) in its title
   and the status-line hint. Unattached or unanswered dialogs keep the
@@ -155,15 +159,14 @@ summary column says `compacting`:
   re-sent on attach). No timeout anywhere.
 - Transcript replay renders tool calls/results from the session file,
   matching the live view (args matched from toolCall blocks).
-- Known gaps: `/restore` not built; `input`/`editor` dialogs auto-deny;
-  a ctrl-chord in the first second after start can be swallowed by pi-tui's
-  keyboard negotiation.
+- Known gap: a ctrl-chord in the first second after start can be swallowed by
+  pi-tui's keyboard negotiation.
 
 ## Settings
 
 `~/.config/toriel/settings.json` (`$XDG_CONFIG_HOME`, or `TORIEL_SETTINGS` for
 a different path). All keys optional: `steeringMode` (`"all"`, the default, or
-`"one-at-a-time"`), `provider`, `model`, `thinking`, `piCli`. Layers: built-in
+`"one-at-a-time"`), `provider`, `model`, `thinking`, `piCli`, `warnNoPermissionSystem` (boolean, default true: see "Resources audit"). Layers: built-in
 defaults, then this file, then the `TORIEL_*` environment variables below. The
 daemon re-reads the file every time it starts a child, so edits apply to new
 and respawned sessions without a restart; running sessions keep the values
@@ -194,10 +197,11 @@ A session's address is its UUID (pi's session id). toriel picks it before pi sta
 
 ## Env
 
-- `TORIEL_SOCK` - socket path (default `$XDG_RUNTIME_DIR/toriel.sock`; the
-  pidfile lives next to it as `toriel.sock.pid`)
+- `TORIEL_SOCK` - socket path (default `$XDG_RUNTIME_DIR/toriel.sock`). The daemon
+  also puts it in every child's environment as `TORIEL_SOCK`, which is how the
+  extensions find it. The pidfile/lock is `daemon.pid` in the data dir, not next to the socket.
 - `TORIEL_PI_CLI` - pi cli.js the daemon spawns as children (tests point this at the fake pi)
-- `TORIEL_LOG` - daemon log (default `daemon.log` next to daemon.ts)
+- `TORIEL_LOG` - daemon log (default `~/.local/state/toriel/daemon.log`, `$XDG_STATE_HOME` honored; kept under 5 MB: over that it moves to `daemon.log.1`, checked at start and every 10 minutes)
 - `TORIEL_TRASH` - trash dir (default `$XDG_DATA_HOME/toriel/trash`)
 - `TORIEL_PROVIDER` / `TORIEL_MODEL` / `TORIEL_THINKING` / `TORIEL_STEERING_MODE` -
   override the settings file: provider, model and
@@ -205,6 +209,13 @@ A session's address is its UUID (pi's session id). toriel picks it before pi sta
   children (e.g. `TORIEL_PROVIDER=litellm TORIEL_MODEL=gemma4:12b` for free
   local tests, or `TORIEL_MODEL=glm-4.7 TORIEL_THINKING=low` for cheap test
   fleets); unset = your normal pi settings
+- `TORIEL_SETTINGS` - path of the toriel settings file (see Settings)
+- `TORIEL_SUMMARY_MODEL` - model for /summarize and /why (overrides `summaryModel`)
+- `TORIEL_AGENTS_DIR` - replaces the user agent-profile directory (default `~/.config/toriel/agents`; tests)
+- `TORIEL_HISTORY`, `TORIEL_LINEAGE`, `TORIEL_SESSION_AGENTS`, `TORIEL_HANDLED`, `TORIEL_FEEDBACK` - paths of the slash-command history, fork lineage, per-session agent profile, handled-files and feedback files (default: under `$XDG_DATA_HOME/toriel/`; tests)
+- `TORIEL_CACHE_TTL_FILE` - where the cache-warning extension keeps what it has learned about prompt-cache lifetimes (default `~/.config/toriel/cache-ttl.json`)
+- `TORIEL_KEYS` - set to anything to log key and UI events to `logs/key-debug.log` in the repo (a value containing `/` is used as the file path)
+- `TORIEL_CHILD`, `TORIEL_SESSION_ID`, `TORIEL_SOCK` - set by the daemon in every child's environment (the extensions read them; do not set them yourself)
 - `PI_CODING_AGENT_DIR` - pass to BOTH processes in tests to isolate
   sessions/settings/extensions from your real agent dir
 
@@ -244,7 +255,7 @@ Daemon side:
 - `received.ts` (label on messages between sessions), `daemon-handlers-messages.ts` / `daemon-resolve.ts` (deliver / find a session), `daemon-bridge.ts` + `daemon-handlers-bridge.ts` (session bridge: inject tracking, routing, confirmation)
 - `mouse.ts` (/mouse: the reporting on/off codes and the argument parsing)
 - `osc52.ts` (copy through the terminal, tmux passthrough wrapping)
-- `resync.ts` (what a view keeps when history is replayed; a replay after a reconnect keeps nothing transient), `drift.ts` (message counts and the digest check), `required.ts` (the toriel pi resources that must be linked, the `--tools +name` modifiers for their tools, the startup audit)
+- `resync.ts` (what a view keeps when history is replayed; a replay after a reconnect keeps nothing transient), `drift.ts` (message counts and the digest check), `resources.ts` (the toriel pi resources, the `-e` / `--skill` arguments and `--tools +name` modifiers that load them into each child, the startup audit), `pi-dir.ts` (where pi keeps its own config)
 - `mcp.ts` / `mcp-doctor.ts` / `mcp-explore-prompt.ts` - /mcp: parse pi's status, add/remove servers, the /mcp status troubleshooting report, the merged one-line /mcp list rendering (state plus skill presence) and the /mcp explore prompt
 - `btw.ts` - /btw: ask a throwaway copy of the session one question; `click-guard.ts` - only double clicks reach the transcript
 - `session-tree.ts` - parent/child rows: nesting, folding, hiding parked children, the banner and cost rollup helpers
@@ -252,24 +263,37 @@ Daemon side:
 - `trash.ts` - delete-to-trash with manifest; `rewind.ts` - cut a session file back to before a user message (tail to trash)
 - `settings.ts` - toriel settings file, layered with `TORIEL_*` env, re-read at every child spawn
 - `config.ts`, `log.ts` - env-derived paths, daemon log
+- `lineage.ts` - which session was forked from which (and agent-started children), in `lineage.json`; `fork-placement.ts` - where a fork lands in the list
+- `summarize.ts` (one-line summaries through pi's print mode), `why.ts` (/why: explain the last thinking block with the summary model), `feedback.ts` / `feedback-command.ts` (/feedback notes), `init-prompt.ts` (the /init prompt)
+- `compact-wait.ts` (manual compaction that outlives pi's RPC timeout), `model-match.ts` / `think-match.ts` (resolve what was typed after /model and /think)
+- `migrate.ts` / `migrate-on-start.ts` - one-time move of state left under the project's former name (run first by `toriel.ts` and the daemon)
+- `pi/extensions/` (run inside pi; loaded by `resources.ts`): `toriel-session-bridge.ts` (delivers messages from other sessions), `toriel-agents.ts` (the `toriel_message` tool), `toriel-usage.ts` (quota/spend reporting and the `toriel_usage` tool), `toriel-cache-warn.ts` (warns before a prompt hits an expired prompt cache), `toriel-presence.ts` (opt-in, for plain pi); `pi/skills/messaging` (how agents use `toriel_message`)
 
 Controller side:
-- `controller.ts` - connection, state, key routing, display toggles; `host.ts` - what the action classes need from it
-- `switcher-actions.ts` / `session-actions.ts` - switcher keys and commands / chat-view keys, prompting, rewind, Esc
+- `controller.ts` - state, key routing, display toggles; `host.ts` - what the action classes need from it; `daemon-link.ts` - the socket, request/response matching and reconnect with backoff (the controller hears about outages through `LinkHooks`); `clipboard-actions.ts` - ctrl-v, middle-click paste, copy; `completion-sources.ts` - cached model/thinking/MCP lookups for tab completion; `layout.ts` - the chat and switcher screen layouts
+- `switcher-actions.ts` / `session-actions.ts` - switcher keys and commands / chat-view keys, prompting, rewind, Esc; split out of the switcher: `switcher-filter.ts` (/filter and ctrl-f), `switcher-summaries.ts` (the unattended pass and /summarize), `switcher-trash.ts` (/restore)
+- `util.ts` - `errText`, `writeFileAtomic` / `writeJsonAtomic`, `readJsonOr`, `rotateLog`; `daemon-lock.ts` - the one-daemon-per-state-directory lock; `preflight.ts` - the startup checks `toriel.ts` runs before importing anything else; `bin/toriel` - the launcher
 - `session-list.ts` - pure: daemon sessions + files -> rows, ordering, group moves
 - `transcript.ts` - live events and file replays -> pi message components; `tool-run.ts` (collapsible tool runs), `tool-defs.ts` (pi's built-in tool renderers), `components.ts` (user/assistant message tweaks)
 - `activity.ts` - working indicator and queued-message strip (events -> state -> lines)
 - `rewind-picker.ts` - the esc-esc message list; `history.ts` - slash-command log and history merge
 - `status.ts`, `dialogs.ts`, `commands.ts`, `format.ts` - small pure helpers
-- `editor.ts` - chat box (key interception, history bindings), `switcher.ts` - the list UI
+- `editor.ts` - chat box (key interception, history bindings), `autocomplete.ts` (/command, @file and path completion), `history-search.ts` (ctrl-r), `switcher.ts` - the list UI, `session-filter.ts` (the filter's matching)
+- `info-panel.ts`, `choice-panel.ts` - the docked text and pick-one panels; `binary-view.ts` - hexdump for binary files read by a session; `error-format.ts` - provider errors made readable
 - `pi-settings.ts` - the few pi settings.json options toriel honors (wheel speed, hide thinking)
 - `lifecycle.ts` - find/start/stop the daemon, `pi-theme.ts` - pi theme init
 
 Shared: `shared.ts` (wire protocol, LF framing), `groups.ts` (session-groups.json),
 `theme.ts` (all colors, read from `../pi/themes/solarized-dark.json`).
 
-Repo root: `pi/` holds the pi-side resources toriel owns (presence extension, theme);
-`node src/install.ts` symlinks them into `$PI_CODING_AGENT_DIR` (default `~/.pi/agent`).
+Repo root: `pi/` holds the pi-side resources toriel owns (extensions, the messaging skill,
+the theme). `resources.ts` lists them and builds the `-e` / `--skill` arguments the daemon
+adds to every child (explicit paths still load under `--no-extensions` / `--no-skills`, so a
+profile with discovery off keeps toriel's plumbing; a minimal profile gets no skill).
+Nothing is installed into pi's own config dir (`pi-dir.ts`: `$PI_CODING_AGENT_DIR`, default
+`~/.pi/agent`), which holds the user's settings, models, MCP config and packages.
+`toriel-presence.ts` is not loaded by toriel (it is for pi processes toriel did not start);
+list its path under `extensions` in pi's `settings.json` to use it.
 `theme-preview.ts` prints sample components in the active theme.
 
 ## Checks
@@ -285,10 +309,11 @@ npm run lint        # biome (lint only; see ../.editorconfig for style: 2-space 
   (a stub speaking enough of pi's RPC protocol); `test/helpers.ts` is the harness.
   Daemon tests set `TORIEL_PI_CLI` to point the daemon at the stub.
 - `test/smoke-client.mjs` - manual: connect to a running daemon, prompt, wait for settle.
-- Controller UI smoke (manual): run `node toriel.ts` in a detached tmux session with an
-  isolated `TORIEL_SOCK` (keep the path short: unix sockets cap at 107 bytes), `TORIEL_LOG`,
-  `TORIEL_PI_CLI=test/fixtures/fake-pi.mjs`, `XDG_DATA_HOME`, `PI_CODING_AGENT_DIR`, then drive it
-  with `tmux send-keys` / `capture-pane`.
+- Controller UI smoke (manual): run `bin/toriel` (or `node toriel.ts`) in a detached tmux
+  session with an isolated `TORIEL_SOCK` (keep the path short: unix sockets cap at 107 bytes),
+  `TORIEL_LOG`, `TORIEL_PI_CLI=test/fixtures/fake-pi.mjs`, `XDG_DATA_HOME` (the daemon lock lives
+  there, so a smoke daemon never meets your real one), `XDG_STATE_HOME`, `PI_CODING_AGENT_DIR`,
+  then drive it with `tmux send-keys` / `capture-pane`.
 
 ## Command syntax
 
@@ -359,7 +384,7 @@ of that state, so whenever the daemon refreshes a child's state it also checks
 pi's pending-message count: if pi has nothing queued, it re-announces an empty
 queue, so a strip can no longer stick on stale entries after a lost update.
 
-When a session has the session bridge extension (`pi/extensions/toriel-session-bridge.ts`, which adds the command `/toriel-inject`), messages from other sessions skip pi's steering queue entirely: the daemon sends the command over the child's own pipe with an id, and the extension delivers them as `toriel-inject` custom messages - at the next turn boundary mid-run (pi announces these as `entry_appended`), at the settle boundary at the end of a run, or by starting a turn when idle (`message_end`). The daemon confirms each from that announcement, so a lost event cannot strand the message or its strip entry; the strip shows what the bridge still holds. Anything handed to pi that never reached the transcript is put back and sent again; a refused or failed inject falls back to steering; a session that stops with unconfirmed injects says so (`exited` with a reason). Only messages from other sessions take this route, not your own prompts. A session without the bridge (extension not linked: `node src/install.ts`, then restart the session) falls back to steering, is marked `sessionBridge: false`, and the switcher notice line counts such sessions. Design notes: docs/design.md, "Session bridge".
+When a session has the session bridge extension (`pi/extensions/toriel-session-bridge.ts`, which adds the command `/toriel-inject`), messages from other sessions skip pi's steering queue entirely: the daemon sends the command over the child's own pipe with an id, and the extension delivers them as `toriel-inject` custom messages - at the next turn boundary mid-run (pi announces these as `entry_appended`), at the settle boundary at the end of a run, or by starting a turn when idle (`message_end`). The daemon confirms each from that announcement, so a lost event cannot strand the message or its strip entry; the strip shows what the bridge still holds. Anything handed to pi that never reached the transcript is put back and sent again; a refused or failed inject falls back to steering; a session that stops with unconfirmed injects says so (`exited` with a reason). Only messages from other sessions take this route, not your own prompts. A session without the bridge (its extension failed to load; see the daemon log) falls back to steering, is marked `sessionBridge: false`, and the switcher notice line counts such sessions. Design notes: docs/design.md, "Session bridge".
 
 A compaction shows as pi's own summary row ("Compacted from N tokens", ctrl-o
 expands it). Pi keeps the whole file, so when a session is replayed from its
@@ -371,8 +396,8 @@ compaction and warns that rewinding there also undoes the compaction.
 
 Quota windows (z.ai's 5h / weekly) and LiteLLM budget spend show after the
 context figure, e.g. `5h 16% 7d 4%`, colored green to red. They come from a pi
-extension, so toriel never handles your API keys: link it once with
-`node src/install.ts` (it also links `toriel-presence`; it refuses to replace a plain file, so remove an older copy of `~/.pi/agent/extensions/toriel-presence.ts` first), then restart toriel. It runs
+extension, so toriel never handles your API keys: it ships
+with toriel and is loaded into every child by flag. It runs
 only in children toriel starts, asks pi's own model registry for the key, makes
 one request per minute at most, and reports percentages only. To check what
 z.ai returns for your key by hand (this sends the key to z.ai's own host):
@@ -387,6 +412,6 @@ nothing. See design.md (in this folder) for the adapters, their sources and what
 
 - **Daemon connection lost.** The controller no longer exits. It keeps the screen and the editor text (nothing typed is sent or dropped), shows "daemon connection lost - reconnecting" in the notice line, and retries with backoff (0.5s doubling to 5s, 20 tries; each try starts a daemon if none is running). On reconnect the daemon's initial sync replays every live session's history; each view is then replaced outright, so activity, queue strip, dialogs and unechoed prompts from before the loss are dropped. After the tries run out it exits as before. Requests in flight fail with "daemon connection lost".
 - **Drift check.** When a run settles the daemon broadcasts `digest {session, messages, streaming}`, the number of messages a history replay would hold. A controller counts the messages it has seen (the replay's length plus `message_end` / appended custom entries since); if a settled session's counts differ it sends `resync {session}` and the daemon replays that session's history to it alone. A false alarm (a `!command` result, which has no message event) costs one replay.
-- **Tools after /reload.** Every child without a profile tool list is started with `--tools +toriel_message,+toriel_usage` (from `required.ts`), so a resume, which restores the tool list recorded in the transcript, still declares the tools of extensions installed since. A profile that lists tools owns its loadout.
-- **Required resources audit.** At daemon start (log) and on the controller's 10-second refresh (notice line) the pi agent dir is checked for the extensions and skill in `required.ts`; anything missing or a dangling link is named with the fix (`node src/install.ts`, restart affected sessions). It never links anything itself.
+- **Tools after /reload.** Every child without a profile tool list is started with `--tools +toriel_message,+toriel_usage` (from `resources.ts`), so a resume, which restores the tool list recorded in the transcript, still declares the tools of extensions installed since. A profile that lists tools owns its loadout.
+- **Resources audit.** At daemon start (log) and on the controller's 10-second refresh (notice line) toriel checks that the files listed in `resources.ts` exist in the checkout, and that pi's agent dir holds no old toriel links (left by the removed symlink installer, they would load every extension twice); stale links are named with the `rm` command. It also checks for `pi-permission-system`, which gates the tools your rules mark `ask` but is your own pi package, not shipped by toriel: it warns when the package is not in pi's `packages` (sessions then run without permission prompts) or its `config.json` is missing or invalid (it then asks about everything). Set `warnNoPermissionSystem` to `false` in the toriel settings to silence that check. All problems found are shown together. The audit never changes anything itself.
 - **Prompting a sleeping session (#58).** The first prompt starts the session's child, which takes seconds. The controller allows one such prompt per session file at a time: a repeated enter with the same text is ignored with a notice (its echo is kept), different text typed meanwhile is put back in the editor. The daemon's "changed N seconds ago - may be open in another pi" confirmation is skipped for files toriel itself has run a child on (`handled-files.ts`, persisted in `handled-files.json` under the toriel data dir), so a daemon restart does not ask about toriel's own sessions.

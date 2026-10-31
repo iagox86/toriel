@@ -4,6 +4,7 @@
 // editor and the switcher box. Up-arrow history merges the two by time.
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { writeFileAtomic } from "./util.ts";
 
 export interface HistoryEntry {
   ts: number;
@@ -48,9 +49,7 @@ export function trimCommands(file: string, keep = 500): void {
     return;
   }
   try {
-    const tmp = `${file}.tmp-${process.pid}`;
-    fs.writeFileSync(tmp, entries.slice(-keep).map((e) => `${JSON.stringify(e)}\n`).join(""));
-    fs.renameSync(tmp, file);
+    writeFileAtomic(file, entries.slice(-keep).map((e) => `${JSON.stringify(e)}\n`).join(""));
   } catch {
     // best effort
   }

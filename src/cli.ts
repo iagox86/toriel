@@ -4,6 +4,7 @@
 // works from that, so adding a command needs no parsing code.
 import { Command, CommanderError } from "commander";
 import type { McpServer } from "./mcp.ts";
+import { errText } from "./util.ts";
 
 /** Live data an argument completer may draw on. */
 export interface CompletionSources {
@@ -146,7 +147,7 @@ export function parseCommandLine(specs: readonly CommandSpec[], line: string): P
   try {
     words = tokenize(line.slice(1 + name.length));
   } catch (err) {
-    return { kind: "error", spec, message: err instanceof Error ? err.message : String(err) };
+    return { kind: "error", spec, message: errText(err) };
   }
   const out: string[] = [];
   const cmd = commandFor(spec, out);

@@ -11,7 +11,7 @@ On 2026-10-23 the hand-written bash permission gate
 (`~/.pi/agent/extensions/permissions.ts`, saved to `~/tmp/permissions.ts`)
 was retired and replaced by `@gotgenes/pi-permission-system` (unversioned
 npm spec in `~/.pi/agent/settings.json`; installed copy 41.0.0). Policy
-lives in `~/.pi/agent/extensions/pi-permission-system/config.json`:
+lives in `~/.pi/agent/extensions/pi-permission-system/config.json` (a plain local file since 2026-10-31, no longer linked from the dotfiles repo; toriel warns when the package or the file is missing):
 top-level `"*": "allow"`, `bash: {"*": "allow", ...ask rules}`, where ask
 rules are prefixes written as `"git push *": "ask"` etc. Unmatched
 commands are allowed silently. There is no deny list and no path gate yet.

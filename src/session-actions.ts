@@ -9,10 +9,23 @@ import { fmtAge } from "./format.ts";
 import { TRASH_DIR } from "./config.ts";
 import { latestClearBackup, rewindTargets } from "./rewind.ts";
 import type { Host } from "./host.ts";
+import type { SessionMeta } from "./shared.ts";
 import { SessionCommands } from "./session-commands.ts";
-import { itemsFromFile, newView, type SessionView } from "./transcript.ts";
+import type { SessionView } from "./transcript.ts";
+import { errText } from "./util.ts";
 
 const DOUBLE_ESC_MS = 600;
+
+/** A prompt as it goes to the daemon. */
+interface Outgoing {
+  /** The text without image markers. */
+  message: string;
+  images: ReturnType<Host["attachments"]["take"]>["images"];
+  /** What is sent (a placeholder when only an image was pasted). */
+  sent: string;
+  /** Show it in the transcript at once. */
+  echo: boolean;
+}
 /** The daemon stops a command after 10 minutes; wait a little longer than that for its answer. */
 const BANG_TIMEOUT_MS = 11 * 60_000;
 
@@ -186,15 +199,11 @@ export class SessionActions {
     const meta = this.h.metaForPath(key);
     try {
       await this.h.request(meta ? { type: "restore_clear", session: meta.id } : { type: "restore_clear", path: key });
-      const cwd = meta?.cwd ?? this.h.local.get(key)?.cwd ?? process.cwd();
-      this.h.views.set(key, { ...newView(), items: itemsFromFile(key, this.h.tui, cwd) });
-      this.h.summaries.delete(key);
-      this.h.rebuildChat();
-      this.h.syncHistory(true);
+      this.h.reloadView(key);
       this.h.notify("restored the cleared conversation");
       void this.h.loadLocal();
     } catch (err) {
-      this.h.notify(`restore failed: ${err instanceof Error ? err.message : String(err)}`);
+      this.h.notify(`restore failed: ${errText(err)}`);
     }
   }
 
@@ -208,16 +217,12 @@ export class SessionActions {
       const r = (await this.h.request(
         meta ? { type: "rewind", session: meta.id, entryId } : { type: "rewind", path: key, entryId },
       )) as { text: string; removed: number };
-      const cwd = meta?.cwd ?? this.h.local.get(key)?.cwd ?? process.cwd();
-      this.h.views.set(key, { ...newView(), items: itemsFromFile(key, this.h.tui, cwd) });
-      this.h.summaries.delete(key);
-      this.h.rebuildChat();
-      this.h.syncHistory(true); // the removed messages are no longer history
+      this.h.reloadView(key);
       this.h.editor.setText(r.text);
       this.h.notify(`rewound - ${r.removed} entries moved to trash`);
       void this.h.loadLocal();
     } catch (err) {
-      this.h.notify(`rewind failed: ${err instanceof Error ? err.message : String(err)}`);
+      this.h.notify(`rewind failed: ${errText(err)}`);
     }
   }
 
@@ -381,7 +386,7 @@ export class SessionActions {
       await this.h.request({ type: "bash", session: meta.id, command }, BANG_TIMEOUT_MS);
       this.h.notify("");
     } catch (err) {
-      this.h.notify(`!${command}: ${err instanceof Error ? err.message : err}`);
+      this.h.notify(`!${command}: ${errText(err)}`);
     } finally {
       this.bangSession = undefined;
       this.h.renderChrome();
@@ -408,17 +413,66 @@ export class SessionActions {
         this.h.pendingPrompt = text;
       }
     } catch (err) {
-      this.h.notify(`fork failed: ${err instanceof Error ? err.message : err}`);
+      this.h.notify(`fork failed: ${errText(err)}`);
       this.h.editor.setText(text);
     }
   }
 
+  /**
+   * Send `text` to the viewed session. False when it was not sent (the reason is
+   * on screen, and the text is back in the box when the user should retry it).
+   */
   async prompt(text: string): Promise<boolean> {
     const key = this.h.viewing;
     if (!key) {
       return false;
     }
     const meta = this.h.metaForPath(key);
+    const blocked = this.blockedByOtherWriter(key, meta, text);
+    if (blocked !== undefined) {
+      return blocked;
+    }
+    const out = this.outgoing(text, meta);
+    if (!out) {
+      return false;
+    }
+    // A session with no live child starts on its first prompt, which takes seconds and answers
+    // only then. Another enter meanwhile would be a second delivery (or fail on "spawn in
+    // progress" and retract the first one's echo), so one prompt per file is in flight at a time.
+    const starting = !meta;
+    if (starting && !this.claimStart(key, out)) {
+      return false;
+    }
+    try {
+      const sent = meta ? await this.sendToLive(key, meta, out) : await this.sendToSleeping(key, out, text);
+      if (!sent) {
+        return false;
+      }
+      this.h.editor.addToHistory(out.message);
+      // starting a sleeping session takes seconds: only clear the box if it still holds what was sent,
+      // not something typed meanwhile
+      if (this.h.editor.getText() === text) {
+        this.h.editor.setText("");
+      }
+      return true;
+    } catch (err) {
+      this.h.dropEcho(key, out.sent);
+      this.h.notify(`prompt failed: ${errText(err)}`);
+      // give the images back, under fresh markers, so the message can be sent again
+      this.giveBack([out.message, ...out.images.map((image) => this.h.attachments.put(image))].join(" "));
+      return false;
+    } finally {
+      if (starting) {
+        this.startingPrompts.delete(key);
+      }
+    }
+  }
+
+  /**
+   * Another controller or a plain pi process has the session. Returns what `prompt`
+   * should return, or undefined when nothing stands in the way.
+   */
+  private blockedByOtherWriter(key: string, meta: SessionMeta | undefined, text: string): boolean | undefined {
     if (meta?.attachedElsewhere) {
       this.h.notify("view-only: this session is attached in another controller");
       return false;
@@ -440,103 +494,95 @@ export class SessionActions {
         return false;
       }
       this.armedFork = null;
-      const cwd = meta.cwd || path.dirname(key);
-      void this.adoptAndPrompt(key, cwd, text);
+      void this.adoptAndPrompt(key, meta.cwd || path.dirname(key), text);
       return true;
     }
-    // Show the prompt now rather than when pi echoes it back. Slash lines may be
-    // handled by an extension without ever becoming a message, and a prompt sent
-    // mid-run is shown in the queue strip instead.
-    // pasted images ride with the message; the markers that stood for them leave the text
+    return undefined;
+  }
+
+  /** What goes to the daemon for `text`: pasted images ride with the message, and the markers that stood for them leave the text. */
+  private outgoing(text: string, meta: SessionMeta | undefined): Outgoing | undefined {
     const { text: message, images } = text.startsWith("/") ? { text, images: [] } : this.h.attachments.take(text);
     if (images.length > 0 && meta?.acceptsImages === false) {
       this.h.notify(`${meta.model.split("/").pop()} does not take images - delete the [image] marker or switch model (/model)`);
       this.h.editor.setText(text);
-      return false;
+      return undefined;
     }
-    const sent = message || (images.length > 0 ? "(see the attached image)" : message);
-    const echo = !text.startsWith("/") && !meta?.streaming;
-    // A session with no live child starts on its first prompt, which takes seconds and answers
-    // only then. Another enter meanwhile would be a second delivery (or fail on "spawn in
-    // progress" and retract the first one's echo), so one prompt per file is in flight at a time.
-    const starting = !meta;
-    if (starting) {
-      if (this.startingPrompts.has(key)) {
-        if (this.startingPrompts.get(key) === sent) {
-          this.h.notify("already sending that - the session is still starting");
-        } else {
-          this.giveBack([message, ...images.map((image) => this.h.attachments.put(image))].join(" "));
-          this.h.notify("the session is still starting - your new text is kept, send it in a moment");
-        }
-        return false;
-      }
-      this.startingPrompts.set(key, sent);
-    }
-    try {
-      if (meta) {
-        if (echo) {
-          this.h.echoPrompt(key, sent);
-        }
-        await this.h.request({ type: "prompt", session: meta.id, message: sent, images: images.length > 0 ? images : undefined });
-      } else {
-        const info = this.h.local.get(key);
-        if (!key.startsWith("/") || !info) {
-          this.h.notify("cannot start this session (no session file)");
-          return false;
-        }
-        // The file may be open in an external (non-daemon) pi process -
-        // undetectable from here, so the daemon decides: it refuses files a
-        // presence-covered pi holds, and flags brand-new recently-modified
-        // files (a fork risk) with a confirmFork response instead of
-        // touching them. Files it has handled before are toriel's own and
-        // just continue, whatever their mtime (a resume makes them look
-        // freshly written).
-        // Echo before sending: the confirmed request can take seconds (it
-        // returns after the child spawns), and if pi's own user message
-        // lands in that window there is no pending echo to consume, so the
-        // text would render twice. dropEcho retracts the echo on a refusal.
-        if (echo) {
-          this.h.echoPrompt(key, sent);
-        }
-        const data = (await this.h.request({
-          type: "prompt",
-          sessionFile: key,
-          cwd: info.cwd || path.dirname(key),
-          message: sent,
-          images: images.length > 0 ? images : undefined,
-          confirmFork: this.armedFork === key,
-        })) as { confirmFork?: boolean; ageMs?: number } | undefined;
-        if (data?.confirmFork) {
-          this.h.dropEcho(key, sent);
-          this.armedFork = key;
-          this.h.notify(
-            `changed ${fmtAge(data.ageMs ?? 0)} ago - may be open in another pi; enter again to continue here (the conversation may fork), esc to cancel`,
-          );
-          this.h.editor.setText(text);
-          return false;
-        }
-        this.armedFork = null;
-        // the request above already delivered; after a confirmed fork it only
-        // returns once the child is up, so clear the box late (below) rather
-        // than sending again
-      }
-      this.h.editor.addToHistory(message);
-      // starting a sleeping session takes seconds: only clear the box if it still holds what was sent,
-      // not something typed meanwhile
-      if (this.h.editor.getText() === text) {
-        this.h.editor.setText("");
-      }
+    return {
+      message,
+      images,
+      sent: message || (images.length > 0 ? "(see the attached image)" : message),
+      // Show the prompt now rather than when pi echoes it back. Slash lines may be handled by an
+      // extension without ever becoming a message, and a prompt sent mid-run is shown in the queue strip.
+      echo: !text.startsWith("/") && !meta?.streaming,
+    };
+  }
+
+  /** Take the one in-flight slot for a sleeping session's file; false (with a notice) when it is taken. */
+  private claimStart(key: string, out: Outgoing): boolean {
+    if (!this.startingPrompts.has(key)) {
+      this.startingPrompts.set(key, out.sent);
       return true;
-    } catch (err) {
-      this.h.dropEcho(key, sent);
-      this.h.notify(`prompt failed: ${err instanceof Error ? err.message : err}`);
-      // give the images back, under fresh markers, so the message can be sent again
-      this.giveBack([message, ...images.map((image) => this.h.attachments.put(image))].join(" "));
-      return false;
-    } finally {
-      if (starting) {
-        this.startingPrompts.delete(key);
-      }
     }
+    if (this.startingPrompts.get(key) === out.sent) {
+      this.h.notify("already sending that - the session is still starting");
+    } else {
+      this.giveBack([out.message, ...out.images.map((image) => this.h.attachments.put(image))].join(" "));
+      this.h.notify("the session is still starting - your new text is kept, send it in a moment");
+    }
+    return false;
+  }
+
+  private async sendToLive(key: string, meta: SessionMeta, out: Outgoing): Promise<boolean> {
+    if (out.echo) {
+      this.h.echoPrompt(key, out.sent);
+    }
+    await this.h.request({ type: "prompt", session: meta.id, message: out.sent, images: out.images.length > 0 ? out.images : undefined });
+    return true;
+  }
+
+  /** Start a session that has only a file; false when it was not sent (no file, or the fork confirmation is pending). */
+  private async sendToSleeping(key: string, out: Outgoing, text: string): Promise<boolean> {
+    const info = this.h.local.get(key);
+    if (!key.startsWith("/") || !info) {
+      this.h.notify("cannot start this session (no session file)");
+      return false;
+    }
+    // The file may be open in an external (non-daemon) pi process -
+    // undetectable from here, so the daemon decides: it refuses files a
+    // presence-covered pi holds, and flags brand-new recently-modified
+    // files (a fork risk) with a confirmFork response instead of
+    // touching them. Files it has handled before are toriel's own and
+    // just continue, whatever their mtime (a resume makes them look
+    // freshly written).
+    // Echo before sending: the confirmed request can take seconds (it
+    // returns after the child spawns), and if pi's own user message
+    // lands in that window there is no pending echo to consume, so the
+    // text would render twice. dropEcho retracts the echo on a refusal.
+    if (out.echo) {
+      this.h.echoPrompt(key, out.sent);
+    }
+    const data = (await this.h.request({
+      type: "prompt",
+      sessionFile: key,
+      cwd: info.cwd || path.dirname(key),
+      message: out.sent,
+      images: out.images.length > 0 ? out.images : undefined,
+      confirmFork: this.armedFork === key,
+    })) as { confirmFork?: boolean; ageMs?: number } | undefined;
+    if (data?.confirmFork) {
+      this.h.dropEcho(key, out.sent);
+      this.armedFork = key;
+      this.h.notify(
+        `changed ${fmtAge(data.ageMs ?? 0)} ago - may be open in another pi; enter again to continue here (the conversation may fork), esc to cancel`,
+      );
+      this.h.editor.setText(text);
+      return false;
+    }
+    this.armedFork = null;
+    // the request above already delivered; after a confirmed fork it only
+    // returns once the child is up, so the box is cleared late (by prompt) rather
+    // than sending again
+    return true;
   }
 }

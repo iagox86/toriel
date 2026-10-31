@@ -68,7 +68,7 @@ a requirement.
 4c. Decided: no ctrl-c anywhere (feels like hard-kill); abort is /abort
    in the session view or an action on the running switcher entry; quit
    is /exit in either view.
-5. Permission gating end to end: children run permissions.ts; confirm
+5. Permission gating end to end: children run pi-permission-system; confirm
    dialogs forward to the driving controller; badge-and-block (no timeout,
    child waits indefinitely); dismissal always means deny.
 6. Per-child model/provider choice at spawn.

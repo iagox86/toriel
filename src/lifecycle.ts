@@ -5,6 +5,7 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
 import { PID_FILE, SOCK } from "./config.ts";
+import { runningDaemon } from "./daemon-lock.ts";
 
 const DAEMON_FILE = path.join(import.meta.dirname, "daemon.ts");
 
@@ -34,13 +35,17 @@ function spawnDaemon(): void {
   child.unref();
 }
 
-async function waitForDaemon(timeoutMs: number): Promise<void> {
+async function waitForDaemon(timeoutMs: number, alreadyRunning?: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (await socketAlive()) {
       return;
     }
     await sleep(250);
+  }
+  if (alreadyRunning !== undefined) {
+    // a second daemon would refuse to start (one per state directory), so say what is wrong
+    throw new Error(`toriel daemon ${alreadyRunning} is running but not listening on ${SOCK} (started with another TORIEL_SOCK?); stop it with toriel kill-server`);
   }
   throw new Error(`daemon did not come up within ${Math.round(timeoutMs / 1000)}s (check ${SOCK} and the daemon log)`);
 }
@@ -55,8 +60,12 @@ export async function ensureDaemon(): Promise<void> {
   }
   await sleep(400);
   if (!(await socketAlive())) {
-    spawnDaemon();
-    await waitForDaemon(20_000);
+    // one already running but not answering is either mid-start or on another socket: wait, do not start a second
+    const running = runningDaemon(PID_FILE);
+    if (running === undefined) {
+      spawnDaemon();
+    }
+    await waitForDaemon(running === undefined ? 20_000 : 5_000, running);
   }
 }
 

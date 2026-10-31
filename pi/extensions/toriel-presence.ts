@@ -5,6 +5,8 @@
 import { connect } from "node:net";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
+// Unlike the other extensions this one runs in pi processes toriel did not start, so it
+// works out the default socket itself (the same rule as src/config.ts).
 const sockPath = process.env.TORIEL_SOCK ?? (process.env.XDG_RUNTIME_DIR ? `${process.env.XDG_RUNTIME_DIR}/toriel.sock` : undefined);
 
 export default function (pi: ExtensionAPI) {

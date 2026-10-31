@@ -16,19 +16,22 @@
 // this env, including pi settings/auth/extensions.)
 import "./migrate-on-start.ts";
 import * as fs from "node:fs";
-import { PID_FILE, SOCK } from "./config.ts";
+import { LOG, PID_FILE, SOCK } from "./config.ts";
 import { BridgeTracker } from "./daemon-bridge.ts";
 import { ChildManager } from "./daemon-children.ts";
 import type { DaemonContext } from "./daemon-context.ts";
+import { acquireDaemonLock, releaseDaemonLock } from "./daemon-lock.ts";
 import { ClientHub } from "./daemon-hub.ts";
 import { sessionMetas } from "./daemon-meta.ts";
 import { createServer } from "./daemon-server.ts";
 import { SessionRegistry } from "./daemon-session.ts";
-import { agentDir } from "./install.ts";
+import { piAgentDir } from "./pi-dir.ts";
 import { log } from "./log.ts";
 import { Presence } from "./presence.ts";
-import { auditRequired, describeProblems } from "./required.ts";
+import { describeResourceProblems } from "./resources.ts";
+import { loadSettings } from "./settings.ts";
 import type { UsageReport } from "./shared.ts";
+import { errText, rotateLog } from "./util.ts";
 
 /** Wire the daemon's collaborators together; `shutdown` is late-bound because they need each other first. */
 function createContext(shutdown: () => void): DaemonContext {
@@ -59,13 +62,21 @@ async function main(): Promise<void> {
       }
     }
     fs.rmSync(SOCK, { force: true });
-    fs.rmSync(PID_FILE, { force: true });
+    releaseDaemonLock(PID_FILE);
     process.exit(0);
   }
 
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 
+  const lock = acquireDaemonLock(PID_FILE);
+  if (!lock.acquired) {
+    // the socket (and with it the running daemon's clients) must not be taken over
+    const msg = `a toriel daemon is already running (pid ${lock.pid}, lock ${PID_FILE}); not starting another`;
+    log(msg);
+    process.stderr.write(`${msg}\n`);
+    process.exit(1);
+  }
   log("daemon starting");
   fs.rmSync(SOCK, { force: true });
   // The socket is an unauthenticated command channel (spawn, prompt, ...), so it
@@ -79,16 +90,15 @@ async function main(): Promise<void> {
     });
   } catch (err) {
     // the daemon runs detached with no stdio, so the log is the only place this shows
-    log(`cannot listen on ${SOCK}: ${err instanceof Error ? err.message : err}`);
+    log(`cannot listen on ${SOCK}: ${errText(err)}`);
+    releaseDaemonLock(PID_FILE);
     process.exit(1);
   } finally {
     process.umask(prevMask);
   }
   fs.chmodSync(SOCK, 0o600);
-  fs.writeFileSync(PID_FILE, `${process.pid}\n`, { mode: 0o600 });
   log(`listening on ${SOCK} (pid ${process.pid})`);
-  // Warn only: linking files into the pi agent dir unasked would be a surprise.
-  const missing = describeProblems(auditRequired(agentDir()));
+  const missing = describeResourceProblems(piAgentDir(), undefined, { permissionSystem: loadSettings().settings.warnNoPermissionSystem !== false });
   if (missing) {
     log(`WARNING: ${missing}`);
   }
@@ -106,6 +116,11 @@ async function main(): Promise<void> {
     }
   }, 3_000);
   pruner.unref();
+
+  // the log lives for as long as the daemon does; keep it bounded
+  rotateLog(LOG);
+  const logKeeper = setInterval(() => rotateLog(LOG), 10 * 60_000);
+  logKeeper.unref();
 
   // Liveness poll: refresh metadata, notice crashed children. Also detect
   // orphaning: if our socket file is deleted (rm -rf of the runtime dir),

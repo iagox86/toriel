@@ -1,5 +1,6 @@
-// Daemon smoke test: connect, read tabs, prompt a live child, wait for settle.
-// Usage: node test/smoke-client.mjs
+// Daemon smoke test: connect, pick a live session (or spawn one in the current
+// directory), prompt it, wait for the run to settle.
+// Usage: node test/smoke-client.mjs     (TORIEL_SOCK / XDG_RUNTIME_DIR pick the daemon)
 import net from "node:net";
 
 const SOCK = process.env.TORIEL_SOCK ?? (process.env.XDG_RUNTIME_DIR ? `${process.env.XDG_RUNTIME_DIR}/toriel.sock` : undefined);
@@ -11,6 +12,11 @@ let buf = "";
 const messages = [];
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+const send = (msg) => sock.write(`${JSON.stringify(msg)}\n`);
+const fail = (why) => {
+  console.error(`SMOKE FAIL: ${why}`);
+  process.exit(1);
+};
 
 sock.on("data", (d) => {
   buf += d.toString("utf8");
@@ -23,39 +29,38 @@ sock.on("data", (d) => {
   }
 });
 
-sock.on("error", (err) => {
-  console.error("SMOKE FAIL (socket):", err.message);
-  process.exit(1);
-});
+sock.on("error", (err) => fail(`socket: ${err.message}`));
+
+/** The latest session list the daemon sent. */
+const sessions = () => [...messages].reverse().find((m) => m.type === "sessions")?.sessions ?? [];
 
 sock.on("connect", async () => {
-  await wait(2000); // let tabs + history arrive
-  const tabsMsg = messages.find((m) => m.type === "tabs");
-  const tabs = tabsMsg?.tabs ?? [];
-  console.error("TABS:", JSON.stringify(tabs.map((t) => ({ id: t.id, name: t.name, model: t.model, dead: t.dead }))));
-  const tab = tabs.find((t) => !t.dead);
-  if (!tab) {
-    console.error("SMOKE FAIL: no live tab");
-    process.exit(1);
+  send({ type: "list" }); // announces this connection as a controller
+  await wait(1000);
+  let session = sessions().find((s) => s.active && !s.dead);
+  if (!session) {
+    send({ id: "spawn-1", type: "spawn", cwd: process.cwd() });
+    for (let i = 0; i < 40 && !session; i++) {
+      await wait(250);
+      const reply = messages.find((m) => m.type === "response" && m.id === "spawn-1");
+      if (reply && !reply.ok) {
+        fail(`spawn: ${reply.error}`);
+      }
+      session = sessions().find((s) => s.active && !s.dead);
+    }
   }
-  const history = messages.find((m) => m.type === "history" && m.tab === tab.id);
-  console.error(`HISTORY for tab ${tab.id}: ${history?.messages?.length ?? "?"} messages`);
-  sock.write(`${JSON.stringify({ type: "prompt", tab: tab.id, message: "Reply with exactly: SMOKE-OK" })}\n`);
+  if (!session) {
+    fail("no live session");
+  }
+  console.error("SESSION:", JSON.stringify({ id: session.id, name: session.name, model: session.model }));
+  send({ id: "prompt-1", type: "prompt", session: session.id, message: "Reply with exactly: SMOKE-OK" });
 
   const start = Date.now();
   const timer = setInterval(() => {
-    const settled = messages.some(
-      (m) => m.type === "event" && m.tab === tab.id && m.event.type === "agent_settled",
-    );
-    if (settled) {
-      const assistant = messages
-        .filter(
-          (m) =>
-            m.type === "event" &&
-            m.tab === tab.id &&
-            m.event.type === "message_end" &&
-            m.event.message?.role === "assistant",
-        )
+    const events = messages.filter((m) => m.type === "event" && m.session === session.id);
+    if (events.some((m) => m.event.type === "agent_settled")) {
+      const assistant = events
+        .filter((m) => m.event.type === "message_end" && m.event.message?.role === "assistant")
         .map((m) =>
           (m.event.message.content ?? [])
             .filter((b) => b.type === "text")
@@ -64,18 +69,13 @@ sock.on("connect", async () => {
         )
         .join(" || ");
       console.error("ASSISTANT TEXT:", assistant.slice(0, 300));
-      const usage = messages.find(
-        (m) => m.type === "event" && m.tab === tab.id && m.event.type === "message_update" && m.event.usage,
-      )?.event?.usage;
-      console.error("USAGE sample:", JSON.stringify(usage));
       console.error("SMOKE PASS");
       clearInterval(timer);
       process.exit(0);
     }
     if (Date.now() - start > 120_000) {
-      console.error("SMOKE TIMEOUT");
       console.error("event types seen:", [...new Set(messages.map((m) => m.event?.type ?? m.type))].join(","));
-      process.exit(1);
+      fail("timeout");
     }
   }, 500);
 });

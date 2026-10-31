@@ -3,17 +3,12 @@
 // running a minute ago has a fresh mtime; without this record the "may be open
 // in another pi" check (daemon-handlers-lifecycle.ts) would ask about toriel's own
 // sessions. Keyed by absolute path; only ever grows (a few hundred bytes a session).
-import * as fs from "node:fs";
-import * as path from "node:path";
 import { HANDLED_FILE } from "./config.ts";
+import { readJsonOr, writeJsonAtomic } from "./util.ts";
 
 function load(file: string): Set<string> {
-  try {
-    const list = JSON.parse(fs.readFileSync(file, "utf8")) as unknown;
-    return new Set(Array.isArray(list) ? list.filter((x): x is string => typeof x === "string") : []);
-  } catch {
-    return new Set();
-  }
+  const list = readJsonOr<unknown>(file, []);
+  return new Set(Array.isArray(list) ? list.filter((x): x is string => typeof x === "string") : []);
 }
 
 export function wasHandled(sessionFile: string, file = HANDLED_FILE): boolean {
@@ -27,8 +22,5 @@ export function recordHandled(sessionFile: string, file = HANDLED_FILE): void {
     return;
   }
   set.add(sessionFile);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp.${process.pid}`;
-  fs.writeFileSync(tmp, `${JSON.stringify([...set], null, 2)}\n`, "utf8");
-  fs.renameSync(tmp, file);
+  writeJsonAtomic(file, [...set]);
 }

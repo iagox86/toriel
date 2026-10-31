@@ -6,22 +6,17 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import { groupsFile, isParked, PARK_KEEP_MS, pruneStale, loadGroups, resolveGroup, saveGroups, withComment, withParked } from "../src/groups.ts";
 
 let dir: string;
-const saved = { data: process.env.XDG_DATA_HOME, agent: process.env.PI_CODING_AGENT_DIR };
+const saved = { data: process.env.XDG_DATA_HOME };
 
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-groups-"));
   process.env.XDG_DATA_HOME = path.join(dir, "data");
-  process.env.PI_CODING_AGENT_DIR = path.join(dir, "agent");
 });
 
 afterEach(() => {
   process.env.XDG_DATA_HOME = saved.data;
-  process.env.PI_CODING_AGENT_DIR = saved.agent;
   if (saved.data === undefined) {
     delete process.env.XDG_DATA_HOME;
-  }
-  if (saved.agent === undefined) {
-    delete process.env.PI_CODING_AGENT_DIR;
   }
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -47,13 +42,6 @@ describe("loadGroups / saveGroups", () => {
     const loaded = loadGroups();
     assert.deepEqual(loaded.groups, ["Ron"]);
     assert.equal(loaded.assignments.s1, "Ron");
-  });
-
-  it("falls back to the legacy pi agent location for reading", () => {
-    const legacy = path.join(process.env.PI_CODING_AGENT_DIR as string, "session-groups.json");
-    fs.mkdirSync(path.dirname(legacy), { recursive: true });
-    fs.writeFileSync(legacy, JSON.stringify({ groups: ["old"], assignments: {} }));
-    assert.deepEqual(loadGroups().groups, ["old"]);
   });
 });
 

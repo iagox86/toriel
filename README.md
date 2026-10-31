@@ -15,8 +15,9 @@ closing or crashing the UI never touches a running agent.
 Requirements:
 
 - Node v26.12.0 or newer (the code is TypeScript run directly by node; the
-  `.nvmrc` pins it). With nvm: `nvm install 26.12.0`. Note that an older
-  default node will not work.
+  `.nvmrc` pins it). With nvm: `nvm install 26.12.0`. The `toriel` launcher
+  (below) finds it even when your default node is older; `npm test` and the
+  other commands need it on your PATH.
 - pi installed globally under that node (`npm install -g @earendil-works/pi-coding-agent`)
   and logged in to at least one provider
 - A truecolor terminal; one with the kitty keyboard protocol (kitty, ghostty, wezterm, ...) gives the best key handling
@@ -27,23 +28,36 @@ Requirements:
 git clone <this repo> ~/projects/toriel
 cd ~/projects/toriel
 npm install
-node src/install.ts     # links toriel's pi extensions and theme into ~/.pi/agent
 ```
 
-Agent profiles (`/agents`, `/new --agent explore`) are described in [agents/README.md](agents/README.md).
+There is no install step for pi: the daemon loads toriel's extensions and skill
+into every session it starts, by path from this checkout (`-e` / `--skill`
+flags), so moving or updating the repo needs nothing else. toriel never writes
+into `~/.pi/agent`; your pi settings, models, MCP servers and packages there
+are used as they are. [pi-permission-system](https://www.npmjs.com/package/@gotgenes/pi-permission-system)
+is a good package to have in pi's `packages`: it asks before the tools your
+rules mark `ask`, and toriel shows those prompts. toriel does not install or
+manage it; it only warns in the notice line when it is missing (turn that off
+with `warnNoPermissionSystem: false`).
 
-`node src/install.ts` refuses to replace a file that is not its own link; move
-an older copy aside and rerun. It honors `PI_CODING_AGENT_DIR`.
+At startup toriel checks its setup and says what is wrong instead of failing
+later: node too old, `npm install` not run, no `XDG_RUNTIME_DIR`, pi never set
+up or a `settings.json` pi cannot read, files missing from the checkout, old
+toriel links in `~/.pi/agent`.
+
+Agent profiles (`/agents`, `/new --agent explore`) are described in [agents/README.md](agents/README.md).
 
 ## Run
 
 ```fish
-node toriel.ts              # starts the daemon if needed, opens the switcher
-node toriel.ts kill-server  # stop the daemon and every session it owns
+ln -s ~/projects/toriel/bin/toriel ~/.local/bin/toriel   # once, so `toriel` works from anywhere
+toriel              # starts the daemon if needed, opens the switcher
+toriel kill-server  # stop the daemon and every session it owns
 ```
 
-Put a shell function or alias on that command to get a short name, for
-example in fish: `alias piron 'node ~/projects/toriel/toriel.ts'`.
+`bin/toriel` finds the node version in `.nvmrc` even when your default node is
+older (it looks in `~/.nvm`), and starts new sessions in the directory you ran
+it from. Without the link, `node toriel.ts` in the checkout does the same.
 
 Quitting toriel (`/exit`) leaves the daemon and all running sessions alone;
 starting it again reattaches to everything.
@@ -90,27 +104,30 @@ Anything else starting with `/` goes to pi (its skills and prompt templates).
 
 `!command` in a session (the chat box border turns yellow while you type it) runs a shell command in the session's directory and shows the output. The agent gets the command and output immediately, as a message wrapped in `<local-command>` tags with a note that you ran it yourself, so it reacts right away (or queues it behind its current turn). `esc` stops a running command; a command is stopped after 10 minutes; very long output is cut to its start and end. It needs a running session. `!!` is not supported.
 
-Sessions can message each other: ask an agent to "tell the session called Mealie that the schema changed" and it uses the `toriel_message` tool (installed by `node src/install.ts`, along with a short `messaging` skill). The text arrives in the other session labelled `[from <name> (<id>)]` and shown as "from <name>" in the transcript; an idle session is started to read it. Delivered messages ride toriel's session bridge when the receiving session has it (see `docs/reference.md`), so they cannot strand in pi's steering queue; otherwise they fall back to plain steering. Agents are told to do this only when you ask. If the daemon goes away the controller keeps its screen and your typed text, reconnects on its own and redraws every session from the daemon; the status area names any toriel extension or skill that is not installed. `/name` with no argument shows the session's name and id.
+Sessions can message each other: ask an agent to "tell the session called Mealie that the schema changed" and it uses the `toriel_message` tool (loaded into every session by toriel, along with a short `messaging` skill). The text arrives in the other session labelled `[from <name> (<id>)]` and shown as "from <name>" in the transcript; an idle session is started to read it. Delivered messages ride toriel's session bridge when the receiving session has it (see `docs/reference.md`), so they cannot strand in pi's steering queue; otherwise they fall back to plain steering. Agents are told to do this only when you ask. If the daemon goes away the controller keeps its screen and your typed text, reconnects on its own and redraws every session from the daemon; the notice line warns if toriel's own files are missing from the checkout or old toriel links are left in `~/.pi/agent`. `/name` with no argument shows the session's name and id.
 
-Sessions opened in plain pi appear in the list too. With the `toriel-presence`
-extension (installed by `node src/install.ts`) they are marked as live in pi;
-continuing one in toriel forks it.
+Sessions opened in plain pi appear in the list too. To have them marked as live
+in pi, add `/path/to/toriel/pi/extensions/toriel-presence.ts` to the `extensions`
+list in pi's own `settings.json` (toriel does not load it itself: it is only for
+pi processes toriel did not start); continuing one in toriel forks it.
 
 ## Settings
 
 `~/.config/toriel/settings.json` (all keys optional): `steeringMode`, `provider`,
-`model`, `thinking`, `piCli`. Environment variables (`TORIEL_*`) override it.
+`model`, `thinking`, `piCli`, `warnNoPermissionSystem`. Environment variables (`TORIEL_*`) override it.
 Full list and semantics: [docs/reference.md](docs/reference.md).
 
 ## Upgrading from ronpi
 
 toriel was called ronpi until 2026-10-30. To move over: stop the old daemon,
-update, run `node src/install.ts` (it removes the old `ronpi-*` extension
-links), start `toriel`, and `/reload` running sessions. On first start the
+update, remove the old links the installer made in pi's agent dir (the notice
+line prints the exact `rm` command; `ronpi-*`, `toriel-*` and `messaging`
+entries under `~/.pi/agent/extensions` and `skills`), start `toriel`, and `/reload` running sessions. On first start the
 `~/.config/ronpi` and `~/.local/share/ronpi` directories are renamed to
 `toriel` (nothing is merged; if both exist you get a warning). Every `RONPI_*`
 environment variable is now `TORIEL_*` with the same suffix, with no fallback
-to the old names. The agent tools are `toriel_message` and `toriel_usage`;
+to the old names. The daemon log moved to `~/.local/state/toriel/daemon.log`.
+The agent tools are `toriel_message` and `toriel_usage`;
 sessions recorded before the rename still display their injected messages.
 
 ## Development
@@ -123,10 +140,10 @@ npm run lint        # biome
 
 Layout:
 
-- `toriel.ts` - entry point
+- `toriel.ts` - entry point (runs the startup checks, then loads everything else); `bin/toriel` - the launcher
 - `src/` - daemon and controller source (see "Code layout" in docs/reference.md)
 - `test/` - tests and the fake-pi fixture
-- `pi/` - what toriel installs into pi: extensions (presence, usage, cache warning, session bridge) and the theme
+- `pi/` - what toriel loads into the pi sessions it starts (extensions: session bridge, messaging tool, usage, cache warning; the messaging skill) plus the theme and the opt-in presence extension
 - `docs/` - `reference.md` (keys, semantics, env), `design.md` (architecture, findings, backlog),
   `updates.md` (updating pi and its packages),
   `requirements.md`, `permission-dialogs.md`

@@ -2,6 +2,8 @@
 // records toriel can list and complete from.
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { piAgentDir } from "./pi-dir.ts";
+import { errText, readJsonOr, writeJsonAtomic } from "./util.ts";
 
 export interface McpServer {
   name: string;
@@ -95,8 +97,7 @@ export function mcpEntry(target: readonly string[]): McpEntry {
 
 /** Where pi reads its MCP servers from. */
 export function mcpConfigFile(): string {
-  const agentDir = process.env.PI_CODING_AGENT_DIR ?? path.join(process.env.HOME ?? "", ".pi", "agent");
-  return path.join(agentDir, "mcp.json");
+  return path.join(piAgentDir(), "mcp.json");
 }
 
 /**
@@ -166,7 +167,7 @@ export function addMcpServer(file: string, name: string, entry: McpEntry): void 
     try {
       config = JSON.parse(fs.readFileSync(file, "utf8"));
     } catch (err) {
-      throw new Error(`${file} is not valid JSON (${err instanceof Error ? err.message : err}); fix it by hand first`);
+      throw new Error(`${file} is not valid JSON (${errText(err)}); fix it by hand first`);
     }
   }
   const servers = config.mcpServers ?? {};
@@ -174,10 +175,7 @@ export function addMcpServer(file: string, name: string, entry: McpEntry): void 
     throw new Error(`server "${name}" already exists in ${file}`);
   }
   config.mcpServers = { ...servers, [name]: entry };
-  const tmp = `${file}.${process.pid}.tmp`;
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
-  fs.renameSync(tmp, file);
+  writeJsonAtomic(file, config, 0o600);
 }
 
 /**
@@ -193,7 +191,7 @@ export function removeMcpServer(file: string, name: string, elsewhere: readonly 
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       config = {};
     } else {
-      throw new Error(`${file} is not valid JSON (${err instanceof Error ? err.message : err}); fix it by hand first`);
+      throw new Error(`${file} is not valid JSON (${errText(err)}); fix it by hand first`);
     }
   }
   const servers = config.mcpServers ?? {};
@@ -207,15 +205,9 @@ export function removeMcpServer(file: string, name: string, elsewhere: readonly 
   }
   const { [name]: _gone, ...rest } = servers;
   config.mcpServers = rest;
-  const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
-  fs.renameSync(tmp, file);
+  writeJsonAtomic(file, config, 0o600);
 }
 
 function configuredMcpNames(file: string): string[] {
-  try {
-    return Object.keys((JSON.parse(fs.readFileSync(file, "utf8")) as { mcpServers?: Record<string, unknown> }).mcpServers ?? {});
-  } catch {
-    return [];
-  }
+  return Object.keys(readJsonOr<{ mcpServers?: Record<string, unknown> }>(file, {}).mcpServers ?? {});
 }

@@ -5,8 +5,8 @@
 // restarting it just to update the prompt was rejected. See docs/design.md,
 // "parent/child communication".
 import * as fs from "node:fs";
-import * as path from "node:path";
 import { LINEAGE_FILE } from "./config.ts";
+import { readJsonOr, writeJsonAtomic } from "./util.ts";
 
 export interface SessionRef {
   id: string;
@@ -24,18 +24,11 @@ export interface LineageEntry {
 export type Lineage = Record<string, LineageEntry>;
 
 export function loadLineage(file = LINEAGE_FILE): Lineage {
-  try {
-    return JSON.parse(fs.readFileSync(file, "utf8")) as Lineage;
-  } catch {
-    return {};
-  }
+  return readJsonOr<Lineage>(file, {});
 }
 
 function saveLineage(data: Lineage, file: string): void {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp.${process.pid}`;
-  fs.writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, "utf8");
-  fs.renameSync(tmp, file);
+  writeJsonAtomic(file, data);
 }
 
 /**

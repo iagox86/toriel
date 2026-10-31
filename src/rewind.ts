@@ -7,6 +7,7 @@ import * as path from "node:path";
 import { messageText } from "./format.ts";
 import { parseLocalCommand } from "./local-command.ts";
 import { parseReceived } from "./received.ts";
+import { writeFileAtomic } from "./util.ts";
 
 export interface RewindTarget {
   /** Session entry id of the user message. */
@@ -100,9 +101,7 @@ export function rewindFile(file: string, entryId: string, trashDir: string, now:
     `${JSON.stringify({ originalPath: file, rewoundBeforeEntry: entryId, entries: tail.length, trashedAt: now.toISOString() }, null, 2)}\n`,
   );
   // Replace atomically so a crash never leaves a half-written session.
-  const tmp = `${file}.rewind-${process.pid}`;
-  fs.writeFileSync(tmp, lines.slice(0, at).map((l) => `${l.raw}\n`).join(""));
-  fs.renameSync(tmp, file);
+  writeFileAtomic(file, lines.slice(0, at).map((l) => `${l.raw}\n`).join(""));
   return { text: messageText(target.entry!.message as never), removed: tail.length, trashedTo };
 }
 
@@ -133,9 +132,7 @@ export function clearFile(file: string, trashDir: string, now: Date = new Date()
     out.push(JSON.stringify(entry));
     parent = l.entry!.id as string;
   }
-  const tmp = `${file}.clear-${process.pid}`;
-  fs.writeFileSync(tmp, out.map((l) => `${l}\n`).join(""));
-  fs.renameSync(tmp, file);
+  writeFileAtomic(file, out.map((l) => `${l}\n`).join(""));
   return { removed: lines.length - out.length, trashedTo };
 }
 
