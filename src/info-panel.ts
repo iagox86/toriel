@@ -10,6 +10,18 @@ export interface PanelAction {
   run: () => void;
 }
 
+/** A line's own indent and list marker ("  - ", "1. "), which wrapped lines hang under. */
+const LEADING = /^( *)((?:[-*] |\d+[.)] )?)/;
+
+/** One space of gutter, then `line` wrapped to `width` with continuation lines under the text, not under the marker. */
+export function wrapHanging(line: string, width: number): string[] {
+  const [lead = "", spaces = "", marker = ""] = LEADING.exec(line) ?? [];
+  const prefix = ` ${spaces}${marker}`;
+  const hang = " ".repeat(prefix.length);
+  const wrapped = wrapTextWithAnsi(line.slice(lead.length), Math.max(1, width - prefix.length));
+  return (wrapped.length > 0 ? wrapped : [""]).map((w, i) => (i === 0 ? prefix : hang) + w);
+}
+
 export class InfoPanel implements Component {
   private lines: string[] = [];
   private actions: PanelAction[] = [];
@@ -45,7 +57,7 @@ export class InfoPanel implements Component {
       return [];
     }
     const inner = panelInnerWidth(width);
-    const body = this.lines.flatMap((l) => wrapTextWithAnsi(` ${l}`, inner));
+    const body = this.lines.flatMap((l) => wrapHanging(l, inner));
     const keys = this.actions.map((a) => `${a.key} ${a.label}`).join(", ");
     return panel([...body, "", dim(` ${keys ? `${keys} - ` : ""}esc or enter closes`)], width);
   }

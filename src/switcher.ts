@@ -87,7 +87,24 @@ export class Switcher extends Container implements Focusable {
   counts = { running: 0, waiting: 0 };
   /** Aggregate token/cost rollup across all sessions (daemon-tracked). */
   budget = { cost: 0, tokens: 0 };
-  hint = "";
+  private hintText = "";
+  private hintIsAlert = false;
+
+  get hint(): string {
+    return this.hintText;
+  }
+
+  /** Any plain hint replaces an alert. */
+  set hint(text: string) {
+    this.hintText = text;
+    this.hintIsAlert = false;
+  }
+
+  /** Show `text` in the error colour: the command just typed cannot do what it says. */
+  alert(text: string): void {
+    this.hintText = text;
+    this.hintIsAlert = true;
+  }
   /** Group titles whose sessions are hidden (ignored while a filter is on, so matches show). */
   collapsed = new Set<string>();
   /** Shown in the title line while a filter is on; the filter also hides groups with no matching sessions. */
@@ -375,7 +392,8 @@ export class Switcher extends Container implements Focusable {
     }
 
     lines.push("");
-    lines.push(dim(truncateToWidth(this.hint, width)));
+    const hintLine = truncateToWidth(this.hintText, width);
+    lines.push(this.hintIsAlert ? attention(hintLine) : dim(hintLine));
 
     // Pad to a constant height and tint every line so the switcher's bounds
     // are visible against whatever is behind it.

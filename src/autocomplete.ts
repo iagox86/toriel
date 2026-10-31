@@ -14,6 +14,8 @@ import { type CommandSpec, SESSION_COMMANDS, SWITCHER_COMMANDS } from "./command
 export interface AutocompleteContext {
   /** Switcher box: only toriel's commands, no file completion. */
   switcher: boolean;
+  /** A group heading is highlighted in the switcher, so commands that need a session would only fail. */
+  headerSelected?: boolean;
   /** Commands pi reported for the viewed session. */
   piCommands: ReadonlyArray<{ name: string; description?: string }>;
   cwd: string;
@@ -26,7 +28,7 @@ export function commandsFor(ctx: AutocompleteContext): SlashCommand[] {
   const own: readonly CommandSpec[] = ctx.switcher ? SWITCHER_COMMANDS : SESSION_COMMANDS;
   const taken = new Set(own.map((c) => c.name));
   return [
-    ...own.map((c) => ({
+    ...own.filter((c) => !(ctx.headerSelected && c.needsSession)).map((c) => ({
       name: c.name,
       description: c.description,
       argumentHint: usageHint(c) || undefined,

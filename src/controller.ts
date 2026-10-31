@@ -208,6 +208,7 @@ class Controller {
     this.editor.setAutocompleteProvider(
       new CommandAutocomplete(() => ({
         switcher: this.switching.isOpen,
+        headerSelected: this.switching.isOpen && this.switcher.currentIsHeader(),
         piCommands: this.piCommands,
         cwd: (this.viewing && (this.metaForPath(this.viewing)?.cwd ?? this.local.get(this.viewing)?.cwd)) || process.cwd(),
         sources: {
@@ -512,12 +513,14 @@ class Controller {
     if (isKeyRelease(data)) {
       return true;
     }
-    if (this.choicePanel.isOpen) {
+    // a dialog owns the keys (and the screen): panels opened before it, e.g. a /btw answer, wait behind it
+    const dialogUp = this.dialogOpen();
+    if (this.choicePanel.isOpen && !dialogUp) {
       const handled = this.choicePanel.keys(data);
       this.tui.requestRender();
       return handled;
     }
-    if (this.infoPanel.isOpen) {
+    if (this.infoPanel.isOpen && !dialogUp) {
       if (this.infoPanel.act(data)) {
         this.tui.requestRender();
         return true;
@@ -530,7 +533,7 @@ class Controller {
       }
     }
     const view = this.viewing ? this.views.get(this.viewing) : undefined;
-    if (view?.dialog && !this.switching.isOpen && this.session.dialogKeys(view, data)) {
+    if (view?.dialog && dialogUp && this.session.dialogKeys(view, data)) {
       return true;
     }
     if (this.historySearch.isOpen) {
@@ -834,6 +837,9 @@ class Controller {
   private openDialog(key: string | null): DialogRequest | undefined {
     return key && !this.switching.isOpen ? this.views.get(key)?.dialog : undefined;
   }
+
+  /** Whether a dialog is waiting in the session on screen. */
+  dialogOpen = (): boolean => this.openDialog(this.viewing) !== undefined;
 
   renderChrome(): void {
     this.syncActivity();

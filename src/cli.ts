@@ -30,6 +30,8 @@ export interface CommandSpec {
   build?: (cmd: Command) => void;
   /** Longer explanation and examples, printed after the options by --help. Every command that is not obvious from its description should have one. */
   help?: string;
+  /** Switcher command that acts on the highlighted session, so it makes no sense while a group heading is highlighted. */
+  needsSession?: boolean;
   /**
    * Values to offer for the text typed after the command name (the whole rest
    * of the line). Only for arguments with a known set of choices; flags are
