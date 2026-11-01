@@ -22,6 +22,8 @@ import { explainLastThinking } from "./why.ts";
 import { newView } from "./transcript.ts";
 import { INIT_PROMPT } from "./init-prompt.ts";
 import type { SessionMeta } from "./shared.ts";
+import { runDoctorCommand } from "./doctor-commands.ts";
+import { runPermissions } from "./permission-commands.ts";
 import { addSchedule, operateSchedule, showSchedules } from "./schedule-commands.ts";
 import { errText } from "./util.ts";
 
@@ -100,6 +102,8 @@ export class SessionCommands {
       pause: (c) => operateSchedule(this.h, "pause", c, this.viewedMeta()?.id),
       resume: (c) => operateSchedule(this.h, "resume", c, this.viewedMeta()?.id),
       fire: (c) => operateSchedule(this.h, "fire", c, this.viewedMeta()?.id),
+      permissions: (c) => runPermissions(this.h, c, this.viewedMeta()?.id),
+      doctor: (c) => runDoctorCommand(this.h, c),
     };
   }
 

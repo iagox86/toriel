@@ -1,6 +1,7 @@
 // The daemon's record of one session, and the registry that owns them all.
 import type * as net from "node:net";
 import type { RpcClient } from "@earendil-works/pi-coding-agent";
+import type { Suggestion } from "./permissions.ts";
 import type { AgentProfile } from "./agents.ts";
 import type { PromptImage } from "./shared.ts";
 
@@ -37,6 +38,8 @@ export interface DaemonSession {
   starting?: Promise<void>;
   /** Last unanswered dialog request, re-sent to newly attached controllers. */
   lastDialog?: Record<string, unknown>;
+  /** The grant pi would record for the ask the toriel-grants link last reported (and found uncovered); the next matching dialog carries it. */
+  suggestion?: Suggestion;
   /** Set while a manual compaction runs (pi refuses prompts then): messages wait here, in order. */
   held?: HeldPrompt[];
   /** A `!command` the user is running in this session; abort() stops it. */

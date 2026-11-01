@@ -22,6 +22,7 @@ Use node v26 (`~/.nvm/versions/node/v26.12.0/bin`); the default node is too old.
 - `npm test` - all tests, no network or model
 - `npm run typecheck` - tsc (node strips types at runtime and never checks them)
 - `npm run lint` - biome, lint only (the formatter is disabled; formatting is not enforced)
+- `toriel doctor` - the setup report (`/doctor` inside toriel); run it after changing anything a user has to set up
 
 Run all three before calling work done. Restarting the real daemon is fine,
 but never kill other live pi sessions.
@@ -47,4 +48,5 @@ but never kill other live pi sessions.
 - Shared helpers live in `src/util.ts` (`errText`, atomic writes, `readJsonOr`, `rotateLog`); use them instead of copying `err instanceof Error ? ...` or the tmp-file-and-rename dance.
 - Prefer explicit error handling; report failures to the user (notice/panel) rather than swallowing them.
 - Never print or commit secrets: `~/.pi/agent/models.json` and `auth.json` hold API keys.
+- Setup requirements live in the doctor. Anything a user must install, configure or set for a feature to work (a package, a line in pi's or toriel's config, an env var, a binary on PATH) needs: an entry in `CATALOG` in `src/doctor.ts` with a level (required / recommended / feature / hardening), a finding for it (from `collectFindings` there or `auditFindings` in `src/resources.ts`, with a `fix` only when a safe automatic edit exists), a test, and a line in `docs/reference.md` "Doctor". Change or remove the check when the requirement changes or goes away; `test/doctor.test.ts` fails on a finding the catalog lacks and on a catalog entry nothing reports. Do not add a requirement that the doctor cannot see.
 - Update `README.md` (user-facing) and `docs/reference.md` (details) when behavior changes; park follow-ups in `docs/design.md`.

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { DIALOG_GUARD_MS, DialogPanel, dialogAnswer, dialogLines, dialogPrompt, grantGuarded, isTypingKey, withOrigin } from "../src/dialogs.ts";
+import { DEFAULT_GRANT_DURATIONS, DIALOG_GUARD_MS, DialogPanel, dialogAnswer, dialogLines, dialogPrompt, grantGuarded, grantRowFor, isTypingKey, optionTakesReason, withGrantRows, withOrigin } from "../src/dialogs.ts";
 
 const confirm = { id: "1", method: "confirm", title: "Run rm?", message: "rm -rf x" };
 const select = { id: "2", method: "select", title: "Pick", options: ["a", "b", "c"] };
@@ -136,5 +136,74 @@ describe("modal permission prompt", () => {
     assert.equal(isTypingKey("\x7f"), true);
     assert.equal(isTypingKey("\x1b[A"), false);
     assert.equal(isTypingKey("\x03"), false);
+  });
+});
+
+describe("toriel's grant rows on a permission prompt", () => {
+  const ask = {
+    id: "g1",
+    method: "select",
+    title: "Permission Required\ntool    : bash\ncommand : sudo -V",
+    options: ["Yes", 'Yes, allow bash "sudo -V" for this session', "No", "No, provide reason"],
+    toriel: { grants: [{ surface: "bash", pattern: "sudo -V" }] },
+  };
+
+  it("appends one marked row per duration after pi's options, leaving pi's options as they were", () => {
+    const d = withGrantRows(ask, ["1h", "session"]);
+    assert.deepEqual(d.options?.slice(0, 4), ask.options);
+    assert.deepEqual(d.options?.slice(4), ['Yes, and allow "sudo -V" for 1 hour [toriel]', 'Yes, and allow "sudo -V" for this session, kept across restarts [toriel]']);
+    assert.deepEqual(d.extraRows?.map((r) => r.for), ["1h", "session"]);
+  });
+
+  it("offers rows only for a select that carries a suggested grant and has a plain Yes", () => {
+    assert.equal(withGrantRows({ ...ask, toriel: undefined }, ["1h"]).extraRows, undefined);
+    assert.equal(withGrantRows({ ...ask, method: "confirm" }, ["1h"]).extraRows, undefined);
+    assert.equal(withGrantRows({ ...ask, options: ["Allow", "Deny"] }, ["1h"]).extraRows, undefined);
+    assert.equal(withGrantRows(ask, []).extraRows, undefined);
+    assert.equal(withGrantRows({ ...ask, toriel: { grants: [] } }, ["1h"]).extraRows, undefined);
+  });
+
+  it("never adds rows twice, and keeps the whole list within nine so digits still pick", () => {
+    const once = withGrantRows(ask, ["1h"]);
+    assert.equal(withGrantRows(once, ["8h"]), once);
+    assert.equal(withGrantRows(ask, ["1m", "2m", "3m", "4m", "5m", "6m", "7m"]).options?.length, 9);
+  });
+
+  it("answers a digit or enter on a toriel row with its label, which names the row", () => {
+    const d = withGrantRows(ask, ["1h", "session"]);
+    const fields = dialogAnswer(d, "5");
+    assert.deepEqual(fields, { value: d.options?.[4] });
+    assert.equal(grantRowFor(d, fields?.value)?.for, "1h");
+    assert.equal(grantRowFor(d, d.options?.[5])?.for, "session");
+    assert.equal(grantRowFor(d, "Yes"), undefined);
+    assert.equal(grantRowFor(ask, "anything"), undefined);
+    assert.deepEqual(dialogAnswer(d, "\r", 5), { value: d.options?.[5] });
+  });
+
+  it("still treats escape as pi's No, and a row's answer as a grant that the arrival guard holds back", () => {
+    const d = { ...withGrantRows(ask, ["1h"]), shownAt: 1000 };
+    assert.deepEqual(dialogAnswer(d, "\x1b"), { value: "No" });
+    assert.equal(grantGuarded(d, { value: d.options?.[4] }, 1100), true);
+    assert.equal(grantGuarded(d, { value: "No" }, 1100), false);
+  });
+
+  it("marks where toriel's rows start, and never offers a reason on one even if its pattern says reason", () => {
+    const d = withGrantRows({ ...ask, toriel: { grants: [{ surface: "bash", pattern: "explain the reason" }] } }, ["1h"]);
+    const lines = dialogLines(d, 4, 120).join("\n");
+    assert.match(lines, /-- toriel: also remember this --/);
+    const highlightedRow = dialogLines(d, 4, 120).find((l) => l.includes("explain the reason"));
+    assert.ok(highlightedRow);
+    assert.doesNotMatch(highlightedRow, /tab: type a reason/);
+    assert.match(dialogLines(d, 3, 120).find((l) => l.includes("provide reason")) ?? "", /tab: type a reason/);
+    assert.equal(optionTakesReason(d, d.options?.[4]), false);
+    assert.equal(optionTakesReason(d, "No, provide reason"), true);
+    const panel = new DialogPanel();
+    panel.sync(d);
+    panel.move(4);
+    assert.equal(panel.highlightedOption, d.options?.[4]);
+  });
+
+  it("offers an hour and a kept-across-restarts row unless the setting says otherwise", () => {
+    assert.deepEqual([...DEFAULT_GRANT_DURATIONS], ["1h", "session"]);
   });
 });

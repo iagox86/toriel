@@ -3,7 +3,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Key, matchesKey } from "@earendil-works/pi-tui";
-import { dialogAnswer, grantGuarded, isTextDialog, isTypingKey, takesReason } from "./dialogs.ts";
+import { type DialogRequest, dialogAnswer, grantGuarded, grantRowFor, isTextDialog, isTypingKey, optionTakesReason } from "./dialogs.ts";
 import { isPlainLeft } from "./editor.ts";
 import { fmtAge } from "./format.ts";
 import { TRASH_DIR } from "./config.ts";
@@ -276,14 +276,29 @@ export class SessionActions {
     if (grantGuarded(dialog, fields)) {
       return true;
     }
+    const row = grantRowFor(dialog, fields.value);
+    // toriel's "allow for ..." rows answer pi with its plain "Yes", then keep the grant
     this.h.send({
       type: "ui_response",
       session: meta.id,
-      response: { type: "extension_ui_response", id: dialog.id, ...fields },
+      response: { type: "extension_ui_response", id: dialog.id, ...(row ? { value: "Yes" } : fields) },
     });
+    if (row) {
+      this.rememberGrants(meta.id, dialog, row.for);
+    }
     view.dialog = undefined;
     this.h.renderChrome();
     return true;
+  }
+
+  /** Store the grant(s) the dialog suggested, lasting `life`; failures are said, not swallowed. */
+  private rememberGrants(session: number, dialog: DialogRequest, life: string): void {
+    for (const g of dialog.toriel?.grants ?? []) {
+      this.h
+        .request({ type: "permission_add", session, surface: g.surface, pattern: g.pattern, for: life, source: "dialog" })
+        .then((r) => this.h.notify((r as { echo: string }).echo))
+        .catch((err: unknown) => this.h.notify(`could not keep the permission grant: ${errText(err)}`));
+    }
   }
 
   /**
@@ -296,7 +311,7 @@ export class SessionActions {
     const dialog = view.dialog!;
     const text = panel.editing;
     if (text === null) {
-      if (matchesKey(data, Key.tab) && takesReason(panel.highlightedOption)) {
+      if (matchesKey(data, Key.tab) && optionTakesReason(dialog, panel.highlightedOption)) {
         panel.edit("");
         this.h.renderChrome();
         return true;

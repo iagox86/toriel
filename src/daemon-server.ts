@@ -9,6 +9,9 @@ import { log } from "./log.ts";
 import { type ClientCommand, LineSplitter } from "./shared.ts";
 import { errText } from "./util.ts";
 
+/** Commands that change permission grants: only a connection that has already announced itself as a controller may send them. */
+const GRANT_CHANGES: ReadonlySet<string> = new Set(["permission_add", "permission_revoke", "permission_restore"]);
+
 /** A new controller's initial sync: its own session view, then the transcript of every live child. */
 function syncController(ctx: DaemonContext, socket: net.Socket): void {
   ctx.hub.addController(socket);
@@ -53,13 +56,20 @@ export function createServer(ctx: DaemonContext): net.Server {
           log(`bad client line: ${err}`);
           continue;
         }
-        // one-shot callers (presence heartbeats, the agents extension) are not controllers: no sync, no attaches
-        if ((cmd.type === "external_register" || cmd.type === "message") && !ctx.hub.isController(socket)) {
+        const res = makeResponder(ctx.hub, socket, cmd.id);
+        // Grant changes come from a controller that has announced itself (the real one sends `list` first), so a connection whose
+        // first line is a grant change is refused, unsynced. That stops an accidental self-grant; it is a seatbelt, not a wall:
+        // a caller that sends `list` first gets through, as anything holding the socket can.
+        if (GRANT_CHANGES.has(cmd.type) && !ctx.hub.isController(socket)) {
+          res(false, "grant changes come from a toriel controller, and this connection has not announced itself (send list first)");
+          continue;
+        }
+        // one-shot callers (presence heartbeats, the agents and grants extensions) are not controllers: no sync, no attaches
+        if ((cmd.type === "external_register" || cmd.type === "message" || cmd.type === "permission_check") && !ctx.hub.isController(socket)) {
           ctx.hub.addPresenceOnly(socket);
         } else if (!ctx.hub.isKnown(socket)) {
           syncController(ctx, socket);
         }
-        const res = makeResponder(ctx.hub, socket, cmd.id);
         void dispatch(ctx, cmd, socket, res).catch((err: unknown) => {
           const msg = errText(err);
           log(`command ${cmd.type} failed: ${msg}`);

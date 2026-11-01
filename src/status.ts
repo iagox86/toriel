@@ -175,6 +175,12 @@ function sessionSegments(inp: StatusInputs): Segment[] {
   if (meta?.schedules && meta.nextFire !== undefined) {
     out.push({ text: accent(`sched ${meta.schedules}, next ${fmtNext(meta.nextFire, new Date())}`), drop: 2 });
   }
+  if (meta?.grants) {
+    out.push({ text: accent(`grants ${meta.grants}${meta.nextGrantExpiry === undefined ? "" : `, next ends ${fmtNext(meta.nextGrantExpiry, new Date())}`}`), drop: 2 });
+  }
+  if (meta?.grantsSaved) {
+    out.push({ text: attention(`${meta.grantsSaved} saved grant${meta.grantsSaved === 1 ? "" : "s"} off (/permissions restore)`), drop: 1 });
+  }
   if (meta?.thinkingLevel) {
     out.push({ text: `think ${gauge(EFFORT_BADNESS[meta.thinkingLevel] ?? 50, meta.thinkingLevel)}`, drop: 5 });
   }

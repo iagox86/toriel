@@ -3,6 +3,7 @@
 // input box (pi-permission-system uses one for the optional deny reason).
 import type { Component } from "@earendil-works/pi-tui";
 import { truncateToWidth } from "@earendil-works/pi-tui";
+import { durationWords } from "./permission-format.ts";
 import { attention, dim, panel, panelInnerWidth, selected } from "./theme.ts";
 
 export interface DialogRequest {
@@ -16,6 +17,47 @@ export interface DialogRequest {
   origin?: string;
   /** When the controller received it (ms); set by withOrigin. */
   shownAt?: number;
+  /** The grant pi would record for this ask, attached by the daemon when it can be granted (docs/permissions.md). */
+  toriel?: { grants: Array<{ surface: string; pattern: string }> };
+  /** toriel's own "allow for ..." rows, already appended to `options` (see withGrantRows). */
+  extraRows?: GrantRow[];
+}
+
+/** A row toriel adds below pi's options: answering it says "Yes" to pi and stores a grant lasting `for`. */
+export interface GrantRow {
+  label: string;
+  /** A duration ("1h") or "session". */
+  for: string;
+}
+
+/** Lifetimes of the extra rows when the setting does not say. */
+export const DEFAULT_GRANT_DURATIONS: readonly string[] = ["1h", "session"];
+
+/**
+ * The dialog with toriel's rows appended after pi's options, when the ask can be granted: a
+ * select whose plain "Yes" exists and that carries a suggested grant. pi's own options stay as
+ * they are (each is the literal answer value). At most nine rows in all, so digits still pick.
+ */
+export function withGrantRows(d: DialogRequest, durations: readonly string[]): DialogRequest {
+  const grants = d.toriel?.grants ?? [];
+  const options = d.options ?? [];
+  const room = Math.max(0, 9 - options.length);
+  if (d.method !== "select" || grants.length === 0 || room === 0 || !options.includes("Yes") || (d.extraRows?.length ?? 0) > 0) {
+    return d;
+  }
+  const what = grants.map((g) => JSON.stringify(g.pattern)).join(" + ");
+  const rows = durations.slice(0, room).map((life) => ({ label: `Yes, and allow ${what} for ${life === "session" ? "this session, kept across restarts" : durationWords(life)} [toriel]`, for: life }));
+  return rows.length === 0 ? d : { ...d, options: [...options, ...rows.map((r) => r.label)], extraRows: rows };
+}
+
+/** The extra row an answer value picked, if it was one. */
+export function grantRowFor(d: DialogRequest, value: unknown): GrantRow | undefined {
+  return d.extraRows?.find((r) => r.label === value);
+}
+
+/** Whether choosing `option` chains a free-text reason dialog; toriel's own rows never do, whatever their pattern says. */
+export function optionTakesReason(d: DialogRequest, option: string | undefined): boolean {
+  return grantRowFor(d, option) === undefined && takesReason(option);
 }
 
 /**
@@ -122,12 +164,16 @@ export function dialogLines(d: DialogRequest, index: number, width: number, reas
     out.push(dim(" enter send - empty enter or esc skips"));
     return out;
   }
+  const extraFrom = (d.options?.length ?? 0) - (d.extraRows?.length ?? 0);
   (d.options ?? []).forEach((o, i) => {
+    if (d.extraRows?.length && i === extraFrom) {
+      out.push(dim(" -- toriel: also remember this --"));
+    }
     if (i === index && reason !== null) {
       out.push(selected(truncateToWidth(` > ${i + 1}. ${o}: ${reason}\u2588`, width)));
       return;
     }
-    const hint = i === index && takesReason(o) ? "  (tab: type a reason)" : "";
+    const hint = i === index && optionTakesReason(d, o) ? "  (tab: type a reason)" : "";
     const text = truncateToWidth(` ${i + 1}. ${o}${hint}`, width - 2);
     out.push(i === index ? selected(` >${text}`) : dim(`  ${text}`));
   });

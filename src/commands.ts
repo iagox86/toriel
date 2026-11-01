@@ -12,6 +12,7 @@ import type { CommandSpec } from "./cli.ts";
 import { agentCompletions } from "./agents-completion.ts";
 import { matching } from "./completion.ts";
 import { mcpCompletions } from "./mcp.ts";
+import { permissionCompletions } from "./permission-commands.ts";
 
 export type { CommandSpec };
 
@@ -42,6 +43,32 @@ const SCHEDULE_NOTE = "\nA scheduled prompt waits until the session is idle (it 
 const refArgument = (verb: string) => (cmd: Command) => {
   cmd.argument("[schedule]", `id (3 or #3) or name of the schedule to ${verb} (leave out to pick from a list)`).option("-a, --all", `${verb} every schedule (in this session; in the switcher, all of them)`);
 };
+
+/** /permissions is the same command in a session and in the switcher; only its scope differs (this session, or all of them). */
+const permissionsSpec = (scope: "session" | "all") =>
+  ({
+    name: "permissions",
+    description: scope === "session" ? "list, add and revoke this session's permission grants" : "list and revoke every session's permission grants",
+    help: `Permission grants let something run without a prompt: the toriel daemon keeps them (they survive /reload and daemon restarts) and pi-permission-system consults them before it asks. They belong to one session and optionally expire. Pick "allow for 1 hour" in a permission prompt to make one, or add one here.\n\nActions:\n  list                      show the grants (the default)\n  add <surface> <pattern>   grant something; surfaces: bash, mcp, tool, skill. The pattern is what pi's prompt offers, e.g. bash "git status"\n  revoke [id|pattern]       take a grant away; with no argument, pick from a list\n  restore                   turn on grants saved before the daemon restarted (they stay off until you do)\n\nGrants cannot cover file-path requests (pi does not allow it) and are never made by an agent.\n\nExamples:\n  /permissions\n  /permissions add bash "git status" --for 1h\n  /permissions add mcp "exa:*" --session\n  /permissions revoke 3\n  /permissions revoke --all\n\nTo make agents' attempts to edit the grants file ask first, add a path rule for it (toriel's startup check prints the line).`,
+    build: (cmd: Command) => {
+      cmd.argument("[action]", "list (default), add, revoke or restore").argument("[words...]", "for add: the surface and pattern; for revoke: an id (3 or #3) or exact pattern");
+      cmd.option("-a, --all", scope === "session" ? "list every session's grants; with revoke, remove every grant in this session" : "revoke: remove every grant in every session");
+      if (scope === "session") {
+        cmd.option("--for <time>", "add: how long it lasts, e.g. 30m, 1h, 8h (default: until revoked)").option("--session", "add: until revoked or the session is deleted (the default)").option("--note <text>", "add: a reminder of why");
+      }
+    },
+    complete: (typed: string) => permissionCompletions(typed),
+  }) satisfies CommandSpec;
+
+/** /doctor is the same command in a session and in the switcher. */
+const doctorSpec = {
+  name: "doctor",
+  description: "check the setup and say how to fix what is wrong (--fix applies the safe fixes)",
+  help: "Lists what toriel needs, by how much it matters: required (toriel does not work without it), recommended (the permission package and its config), optional features (permission grants, the sleep lock) and hardening. Each problem says how to fix it by hand. --fix applies the ones that are safe to automate, which are edits to pi-permission-system's config.json: it shows the diff, asks, and keeps the original as config.json.bak-<time>. It never installs packages and never writes a policy of its own. The same report is `toriel doctor` in a shell (exit 1 when something required is wrong). Toriel also checks at start-up: required and recommended problems show in the notice line, with a count of the rest.\n\nExamples:\n  /doctor\n  /doctor --fix",
+  build: (cmd: Command) => {
+    cmd.option("--fix", "apply the safe fixes (shows a diff and asks first)");
+  },
+} satisfies CommandSpec;
 
 /** Switcher command box. SwitcherActions must handle every name listed here. */
 export const SWITCHER_COMMANDS = [
@@ -81,6 +108,8 @@ export const SWITCHER_COMMANDS = [
     help: "A paused schedule keeps its settings but does not run; /resume picks up from the next slot.\n\nExample: /pause 3", build: refArgument("pause") },
   { name: "resume", description: "resume a paused scheduled prompt",
     help: "Resumes a paused schedule at its next slot. Also clears one that paused itself after failing to deliver.\n\nExample: /resume 3", build: refArgument("resume") },
+  permissionsSpec("all"),
+  doctorSpec,
   { name: "stop", needsSession: true, description: "stop the highlighted session's process (file kept; respawns on next prompt)",
     help: "Stops the highlighted session's pi process but keeps its file; the next message (or /reload, /model, !command) starts it again. Use it to free memory or MCP servers." },
   {
@@ -295,6 +324,8 @@ export const SESSION_COMMANDS = [
       cmd.argument("<schedule>", "id (3 or #3) or name");
     },
   },
+  permissionsSpec("session"),
+  doctorSpec,
   { name: "abort", description: "interrupt the running agent",
     help: "Interrupts the agent's current turn, like esc. Messages still queued come back into the box." },
   { name: "detach", description: "cut this subagent loose from the agent that started it (no more banner or nesting)",

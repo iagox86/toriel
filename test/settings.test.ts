@@ -41,6 +41,13 @@ describe("loadSettings", () => {
     assert.deepEqual([s.settings.scheduleUsagePause, s.settings.scheduleDailyLimit, s.settings.preventSleep, s.problems], [0, 50, false, []]);
     assert.match(loadSettings(tmp('{"scheduleDailyLimit":0}')).problems[0] as string, /at least 1/);
     assert.match(loadSettings(tmp('{"preventSleep":"yes"}')).problems[0] as string, /true or false/);
+    const grants = loadSettings(tmp('{"permissionGrantLimit":20,"permissionGrantDurations":["30m","1h","session"]}'));
+    assert.deepEqual([grants.settings.permissionGrantLimit, grants.settings.permissionGrantDurations, grants.problems], [20, ["30m", "1h", "session"], []]);
+    assert.deepEqual(loadSettings(tmp('{"permissionGrantDurations":[]}')).settings.permissionGrantDurations, []);
+    assert.match(loadSettings(tmp('{"permissionGrantLimit":0}')).problems[0] as string, /at least 1/);
+    assert.match(loadSettings(tmp('{"permissionGrantDurations":["soon"]}')).problems[0] as string, /list of at most 5 durations/);
+    assert.match(loadSettings(tmp('{"permissionGrantDurations":"1h"}')).problems[0] as string, /list of at most 5 durations/);
+    assert.match(loadSettings(tmp('{"permissionGrantDurations":["1h","2h","3h","4h","5h","6h"]}')).problems[0] as string, /at most 5/);
   });
 
   it("reads the summary settings, and rejects bad numbers", () => {

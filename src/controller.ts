@@ -31,7 +31,7 @@ import { DaemonLink } from "./daemon-link.ts";
 import { buildLayouts } from "./layout.ts";
 
 /** Reconnect tries (backoff 0.5s doubling to 5s) before the controller gives up and exits. */
-import { type DialogRequest, DialogPanel, isTextDialog, withOrigin } from "./dialogs.ts";
+import { DEFAULT_GRANT_DURATIONS, type DialogRequest, DialogPanel, isTextDialog, withGrantRows, withOrigin } from "./dialogs.ts";
 
 // How long a reason typed on the select waits for the chained input dialog.
 const REASON_FRESH_MS = 10_000;
@@ -57,8 +57,8 @@ import {
 import type { ClientCommand, DaemonMessage, DistributiveOmit, SessionMeta } from "./shared.ts";
 import { drifted } from "./drift.ts";
 import { MOUSE_OFF, MOUSE_ON, mouseNotice, nextMouse, parseMouseArg } from "./mouse.ts";
-import { piAgentDir } from "./pi-dir.ts";
-import { describeResourceProblems } from "./resources.ts";
+import { collectFindings } from "./doctor.ts";
+import { summarizeFindings } from "./resources.ts";
 import { clearTransient, viewFromHistory } from "./resync.ts";
 import { buildStatusLine, fleetStats, bridgeNotice, settingsNotice } from "./status.ts";
 import { ActivityLine } from "./activity.ts";
@@ -438,7 +438,7 @@ class Controller {
         });
       } else {
         // Name the session that is blocked, so the dialog says who is asking.
-        view.dialog = withOrigin(request, sessionId, this.sessions.get(sessionId)?.sessionName);
+        view.dialog = withGrantRows(withOrigin(request, sessionId, this.sessions.get(sessionId)?.sessionName), loadSettings().settings.permissionGrantDurations ?? DEFAULT_GRANT_DURATIONS);
       }
     } else if (request && request.method === "notify") {
       this.notify(String(request.message ?? "notification"));
@@ -491,7 +491,7 @@ class Controller {
   }
 
   async loadLocal(): Promise<void> {
-    this.resourceNotice = describeResourceProblems(piAgentDir(), undefined, { permissionSystem: loadSettings().settings.warnNoPermissionSystem !== false }) ?? "";
+    this.resourceNotice = summarizeFindings(collectFindings({ permissionSystem: loadSettings().settings.warnNoPermissionSystem !== false, startup: [] })) ?? "";
     try {
       const infos = await SessionManager.listAll();
       this.local.clear();

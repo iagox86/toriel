@@ -1147,3 +1147,27 @@ costs one false-alarm replay; the check is a count, so a same-count content
 difference is not caught (a hash of roles + timestamps would be the next step);
 metadata and the strip are reconciled by their own checks, not by the digest;
 the data-driven item model (no TUI components in state) stays parked.
+
+## Permission grants (designed + built 2026-11-01; #81, #64, #47, #82)
+
+Full design, threat model, spike results and the list of where the build differs from the
+design: `docs/permissions.md`. Summary: pi-permission-system keeps "for this session" grants in
+memory only, so the daemon keeps its own per-session grant store (`permissions.ts`,
+`permissions.json`) and a `toriel-grants` extension answers pi's `ask`s through pi's
+authorizer chain. Saved grants come back dormant after a restart until `/permissions restore`.
+
+Parked from that work:
+
+- Let a model keep working while a permission ask is pending (Ron, 2026-11-01). The link
+  could return `deny` with a reason ("awaiting approval, continue other work") instead of
+  leaving the call blocked; toriel parks the request, shows it independent of the turn, and on
+  approval adds a timed grant and tells the session to retry. Reuses the grant store. Risks: the
+  model must retry on its own (weak models will not, or will loop), and a pending-approval
+  object needs UI that exists apart from a blocked child. Pairs with #79 (auto-deny) for
+  unattended runs.
+- `toriel_permission_check` (#85): an agent asks whether one action would run without a prompt.
+- Wide hand-written grant patterns (`git *`, glob-matched against the ask's value); per-project
+  scope as an explicit opt-in; `--permit` on schedules for unattended runs.
+- Sandboxing the agent (the container ticket) is the only thing that makes a grants file safe
+  against an agent that tries; the path rule is a speed bump (it misses `python -c` and
+  variable-built paths).

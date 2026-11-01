@@ -2,6 +2,7 @@
 import * as fs from "node:fs";
 import { RpcClient } from "@earendil-works/pi-coding-agent";
 import { DIALOG_METHODS, SOCK } from "./config.ts";
+import { withSuggestion } from "./permissions.ts";
 import { type BridgeTracker, INJECT_COMMAND, injectedId, mergedQueueTexts, parseBridgeReport } from "./daemon-bridge.ts";
 import type { ClientHub } from "./daemon-hub.ts";
 import type { DaemonSession } from "./daemon-session.ts";
@@ -402,15 +403,21 @@ export class ChildManager {
         tap(String(event.message ?? ""));
         return;
       }
+      // a select dialog may carry the grant the toriel-grants link saw for it
+      const request = DIALOG_METHODS.has(event.method as string) ? withSuggestion(event, s.suggestion, Date.now()) : event;
       if (DIALOG_METHODS.has(event.method as string)) {
+        // only the dialog that took the suggestion uses it up: an unrelated one arriving first must not lose it
+        if (request !== event) {
+          s.suggestion = undefined;
+        }
         s.pendingDialog = true;
-        s.lastDialog = event;
+        s.lastDialog = request;
         this.hub.broadcastSessions();
-        this.expireDialog(s, event);
+        this.expireDialog(s, request);
       }
       // Dialogs go to the attached controller; fire-and-forget records and
       // unattached dialogs broadcast so somebody can pick them up.
-      const message = { type: "ui_request" as const, session: s.id, request: event };
+      const message = { type: "ui_request" as const, session: s.id, request };
       if (s.attachedTo) {
         this.hub.send(s.attachedTo, message);
       } else {
