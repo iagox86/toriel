@@ -15,20 +15,21 @@ export interface Resource {
   path: string;
   /** What breaks without it. */
   why: string;
-  /** Tool the resource registers, if any. */
-  tool?: string;
+  /** Tools the resource registers, if any. */
+  tools?: readonly string[];
 }
 
 export const RESOURCES: readonly Resource[] = [
   { kind: "extension", path: "extensions/toriel-session-bridge.ts", why: "messages from other sessions fall back to pi's lossy steering queue" },
-  { kind: "extension", path: "extensions/toriel-agents.ts", why: "the toriel_message tool (messaging other sessions) is missing", tool: "toriel_message" },
-  { kind: "extension", path: "extensions/toriel-usage.ts", why: "the toriel_usage tool and usage reporting are missing", tool: "toriel_usage" },
+  { kind: "extension", path: "extensions/toriel-agents.ts", why: "the toriel_message and toriel_schedule_* tools (messaging other sessions, scheduling prompts) are missing", tools: ["toriel_message", "toriel_schedule_create", "toriel_schedule_list", "toriel_schedule_cancel"] },
+  { kind: "extension", path: "extensions/toriel-usage.ts", why: "the toriel_usage tool and usage reporting are missing", tools: ["toriel_usage"] },
   { kind: "extension", path: "extensions/toriel-cache-warn.ts", why: "no warning before a prompt hits an expired prompt cache" },
   { kind: "skill", path: "skills/messaging", why: "agents are not told how to use toriel_message" },
+  { kind: "skill", path: "skills/scheduling", why: "agents are not told how to use toriel_schedule_create" },
 ];
 
 /** `--tools` modifiers that add toriel's tools to whatever loadout a session has or restores. */
-export const TORIEL_TOOLS: readonly string[] = RESOURCES.flatMap((r) => (r.tool ? [`+${r.tool}`] : []));
+export const TORIEL_TOOLS: readonly string[] = RESOURCES.flatMap((r) => (r.tools ?? []).map((t) => `+${t}`));
 
 /**
  * The pi arguments that load toriel's resources. Explicit `-e` / `--skill`

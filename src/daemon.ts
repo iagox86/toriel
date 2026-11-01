@@ -16,18 +16,21 @@
 // this env, including pi settings/auth/extensions.)
 import "./migrate-on-start.ts";
 import * as fs from "node:fs";
-import { LOG, PID_FILE, SOCK } from "./config.ts";
+import { LOG, PID_FILE, SCHEDULES_FILE, SOCK } from "./config.ts";
 import { BridgeTracker } from "./daemon-bridge.ts";
 import { ChildManager } from "./daemon-children.ts";
 import type { DaemonContext } from "./daemon-context.ts";
 import { acquireDaemonLock, releaseDaemonLock } from "./daemon-lock.ts";
 import { ClientHub } from "./daemon-hub.ts";
 import { sessionMetas } from "./daemon-meta.ts";
+import { schedulerHost } from "./daemon-schedule.ts";
 import { createServer } from "./daemon-server.ts";
 import { SessionRegistry } from "./daemon-session.ts";
 import { piAgentDir } from "./pi-dir.ts";
 import { log } from "./log.ts";
 import { Presence } from "./presence.ts";
+import { DEFAULT_LIMITS, Scheduler } from "./scheduler.ts";
+import { needsAwake, SleepInhibitor } from "./sleep-inhibit.ts";
 import { describeResourceProblems } from "./resources.ts";
 import { loadSettings } from "./settings.ts";
 import type { UsageReport } from "./shared.ts";
@@ -38,10 +41,19 @@ function createContext(shutdown: () => void): DaemonContext {
   const registry = new SessionRegistry();
   const presence = new Presence();
   const usage = new Map<string, UsageReport>();
-  const hub = new ClientHub((socket) => sessionMetas(registry, presence, usage, socket));
+  const hub = new ClientHub((socket) => sessionMetas(registry, presence, usage, socket, ctx.scheduler));
   const bridges = new BridgeTracker();
   const children = new ChildManager(hub, usage, bridges);
-  return { registry, hub, children, presence, bridges, shutdown };
+  // the scheduler's host reads the context lazily, so it can be built inside it
+  const ctx: DaemonContext = { registry, hub, children, presence, bridges, scheduler: new Scheduler(schedulerHost(() => ctx, usage), SCHEDULES_FILE, { ...DEFAULT_LIMITS, dailyFires: loadSettings().settings.scheduleDailyLimit ?? DEFAULT_LIMITS.dailyFires }), shutdown };
+  // a session going idle is what a waiting schedule is looking for, and what starts a gap loop's countdown
+  children.onSettled = (s) => {
+    if (s.sessionId) {
+      ctx.scheduler.runFinished(s.sessionId);
+    }
+    ctx.scheduler.poke();
+  };
+  return ctx;
 }
 
 async function main(): Promise<void> {
@@ -56,6 +68,8 @@ async function main(): Promise<void> {
     shuttingDown = true;
     log("daemon shutting down");
     server.close();
+    ctx.scheduler.stop();
+    inhibitor.stop();
     for (const s of ctx.registry.all()) {
       if (s.child) {
         void s.child.stop().catch(() => {});
@@ -65,6 +79,9 @@ async function main(): Promise<void> {
     releaseDaemonLock(PID_FILE);
     process.exit(0);
   }
+
+  const inhibitor = new SleepInhibitor({ log });
+  const keepAwake = (): void => inhibitor.update(process.env.TORIEL_NO_INHIBIT !== "1" && loadSettings().settings.preventSleep !== false && needsAwake(ctx.registry.all(), ctx.scheduler.list(), Date.now()));
 
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
@@ -98,6 +115,9 @@ async function main(): Promise<void> {
   }
   fs.chmodSync(SOCK, 0o600);
   log(`listening on ${SOCK} (pid ${process.pid})`);
+  ctx.scheduler.start();
+  const awakeKeeper = setInterval(keepAwake, 5_000);
+  awakeKeeper.unref();
   const missing = describeResourceProblems(piAgentDir(), undefined, { permissionSystem: loadSettings().settings.warnNoPermissionSystem !== false });
   if (missing) {
     log(`WARNING: ${missing}`);

@@ -43,6 +43,8 @@ export class ChildManager {
   private readonly noticeTaps = new Map<number, (text: string) => void>();
   /** Injects handed to session bridges and not yet seen in a transcript, so strip re-syncs keep them visible. */
   private readonly bridges: BridgeTracker;
+  /** Called when a session's run settles or its compaction ends (the daemon uses it to wake waiting schedules). */
+  onSettled?: (s: DaemonSession) => void;
 
   constructor(hub: ClientHub, usage: Map<string, UsageReport>, bridges: BridgeTracker) {
     this.hub = hub;
@@ -445,6 +447,7 @@ export class ChildManager {
       this.hub.broadcastSessions();
     } else if (type === "agent_settled") {
       s.streaming = false;
+      this.onSettled?.(s);
       // no tool can still be asking once the turn is over
       this.clearDialog(s);
       void this.refreshMeta(s).then(() => this.hub.broadcastSessions());
@@ -456,6 +459,7 @@ export class ChildManager {
       // a manual compaction runs outside any agent run, so agent_settled would not clear it
       s.compacting = false;
       this.hub.broadcastSessions();
+      this.onSettled?.(s);
     }
   }
 

@@ -12,6 +12,8 @@ export interface LayoutParts {
   infoPanel: Component;
   choicePanel: Component;
   banner: Component;
+  /** The viewed session's schedules, a line each, above the input. */
+  scheduleStrip: Component;
   switcher: Component;
   /** True while a permission/extension dialog is on screen in the chat view. */
   dialogOpen: () => boolean;
@@ -47,6 +49,7 @@ export function buildLayouts(p: LayoutParts): { chat: VStack; switcher: VStack }
       fit(info),
       fit(choice),
       fit(p.banner),
+      fit(p.scheduleStrip),
       dockRow,
     ]),
     switcher: new VStack([{ component: p.switcher, basis: 0, grow: 1, shrink: 1, minSize: 1 }, fit(p.infoPanel), fit(p.choicePanel), dockRow]),

@@ -161,6 +161,14 @@ export async function handleDelete(
   if (s?.child) {
     await ctx.children.deactivate(s);
   }
+  // a deleted session takes its schedules with it (a stopped one keeps them and is woken when they fire)
+  const uuid = s?.sessionId ?? /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.exec(file)?.[0];
+  if (uuid) {
+    const gone = ctx.scheduler.removeSession(uuid);
+    if (gone.length > 0) {
+      log(`removed ${gone.length} schedule(s) of the deleted session ${uuid}`);
+    }
+  }
   if (s) {
     ctx.registry.delete(s.id);
   }

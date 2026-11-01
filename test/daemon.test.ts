@@ -760,11 +760,11 @@ describe("daemon: lifecycle", () => {
       return JSON.parse(fs.readFileSync(`${f}.argv.json`, "utf8")) as string[];
     };
     const tools = (): string | undefined => argv()[argv().indexOf("--tools") + 1];
-    assert.equal(tools(), "+toriel_message,+toriel_usage");
+    assert.equal(tools(), "+toriel_message,+toriel_schedule_create,+toriel_schedule_list,+toriel_schedule_cancel,+toriel_usage");
     await c.request({ type: "prompt", session: sessionId, message: "hi" });
     await c.waitFor(isSettled);
     await c.request({ type: "reload", session: sessionId });
-    assert.equal(tools(), "+toriel_message,+toriel_usage", "a /reload resume passes them again");
+    assert.equal(tools(), "+toriel_message,+toriel_schedule_create,+toriel_schedule_list,+toriel_schedule_cancel,+toriel_usage", "a /reload resume passes them again");
 
     const explore = await c.request({ type: "spawn", cwd: harness.dir, agent: "explore" });
     await c.waitFor((m) => m.type === "history" && m.session === explore.sessionId);
@@ -791,7 +791,7 @@ describe("daemon: lifecycle", () => {
       "toriel-usage.ts",
     ]);
     assert.ok(flagged(argv, "-e").every((f) => path.isAbsolute(f) && fs.existsSync(f)));
-    assert.deepEqual(flagged(argv, "--skill").map((f) => path.basename(f)), ["messaging"]);
+    assert.deepEqual(flagged(argv, "--skill").map((f) => path.basename(f)), ["messaging", "scheduling"]);
 
     // explore is a profile with extension discovery off and no skills (minimal)
     const explore = await c.request({ type: "spawn", cwd: harness.dir, agent: "explore" });

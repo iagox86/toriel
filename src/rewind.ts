@@ -7,6 +7,7 @@ import * as path from "node:path";
 import { messageText } from "./format.ts";
 import { parseLocalCommand } from "./local-command.ts";
 import { parseReceived } from "./received.ts";
+import { parseScheduled } from "./schedule-label.ts";
 import { writeFileAtomic } from "./util.ts";
 
 export interface RewindTarget {
@@ -52,7 +53,10 @@ function parseLines(file: string): ParsedLine[] {
 }
 
 /** A message another session sent: not something the user typed, so it is not offered as a rewind point. */
-const isReceived = (l: ParsedLine): boolean => parseReceived(messageText(l.entry?.message as never)) !== undefined;
+const isReceived = (l: ParsedLine): boolean => {
+  const text = messageText(l.entry?.message as never);
+  return parseReceived(text) !== undefined || parseScheduled(text) !== undefined;
+};
 
 const isUserMessage = (l: ParsedLine): boolean =>
   l.entry?.type === "message" && l.entry.message?.role === "user" && typeof l.entry.id === "string";

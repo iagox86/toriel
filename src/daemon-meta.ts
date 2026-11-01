@@ -2,9 +2,12 @@
 import type * as net from "node:net";
 import type { DaemonSession, SessionRegistry } from "./daemon-session.ts";
 import type { Presence } from "./presence.ts";
+import { scheduleStripLines } from "./schedule-format.ts";
+import type { Scheduler } from "./scheduler.ts";
 import type { SessionMeta, UsageReport } from "./shared.ts";
 
-function metaFor(s: DaemonSession, socket: net.Socket, presence: Presence, usage: ReadonlyMap<string, UsageReport>): SessionMeta {
+function metaFor(s: DaemonSession, socket: net.Socket, presence: Presence, usage: ReadonlyMap<string, UsageReport>, scheduler?: Scheduler): SessionMeta {
+  const active = s.sessionId && scheduler ? scheduler.list(s.sessionId).filter((x) => x.state === "active") : [];
   return {
     id: s.id,
     cwd: s.cwd,
@@ -33,6 +36,9 @@ function metaFor(s: DaemonSession, socket: net.Socket, presence: Presence, usage
     attachedToYou: s.attachedTo === socket,
     attachedElsewhere: s.attachedTo !== undefined && s.attachedTo !== socket,
     externallyLive: s.sessionFile !== undefined && presence.has(s.sessionFile),
+    schedules: active.length > 0 ? active.length : undefined,
+    scheduleLines: active.length > 0 && scheduler ? scheduleStripLines(active, new Date(), (id) => scheduler.heldReason(id)) : undefined,
+    nextFire: s.sessionId && scheduler ? scheduler.soonest(s.sessionId) : undefined,
   };
 }
 
@@ -42,8 +48,9 @@ export function sessionMetas(
   presence: Presence,
   usage: ReadonlyMap<string, UsageReport>,
   socket: net.Socket,
+  scheduler?: Scheduler,
 ): SessionMeta[] {
-  const metas = registry.all().map((s) => metaFor(s, socket, presence, usage));
+  const metas = registry.all().map((s) => metaFor(s, socket, presence, usage, scheduler));
   const tracked = new Set(metas.map((m) => m.sessionFile).filter((f): f is string => !!f));
   return [...metas, ...presence.pseudoMetas(tracked)];
 }

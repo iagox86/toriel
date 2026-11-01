@@ -26,6 +26,7 @@ describe("panels behind a dialog", () => {
       infoPanel: text("BTW ANSWER"),
       choicePanel: text("MODEL PICKER"),
       banner: text(""),
+      scheduleStrip: text(""),
       switcher: text("switcher"),
       dialogOpen: () => dialogOpen,
     };

@@ -91,6 +91,8 @@ export function buildSessionList(inp: ListInputs): SwitcherSession[] {
       sessionId,
       cwd,
       note,
+      schedules: meta?.schedules,
+      nextFire: meta?.nextFire,
       comment: sessionId ? inp.groups.comments?.[sessionId] : undefined,
       age: fmtAge(modified > 0 ? inp.now - modified : 0),
       // parked sessions take the oldest colour whatever their real age

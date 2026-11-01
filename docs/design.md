@@ -634,74 +634,117 @@ Near-term (post-budget-reset), rough order = dependency + value:
    an agent when a window passes a threshold, and budget-aware spawning of
    subagents (a coordinator pacing work across a multi-week job).
 
-10. Time-based commands (ADDED 2026-10-23, Ron's idea; deliberately NOT started):
+10. Time-based commands (DESIGNED 2026-10-31, tickets #5 and #9; implementation in slices, see the end):
    pi has no scheduling, so toriel adds a suite that fires prompts into
    sessions on a timer, e.g. "check a process hourly until it exists".
-   Sketch to refine when picked up:
-   - Commands (same registry/parser as the rest): `/in <when> <prompt>`
-     (once), `/at <time> <prompt>`, `/every <interval> [--until <cond>]
-     [--max N] <prompt>`, `/loop` (re-run on a fixed gap after each run
-     finishes, so runs never overlap), plus `/schedules` (list, with next
-     fire time) and `/cancel <id>`. Flags per the CLI-style parser; "when"
-     accepts durations (90m, 2h), clock times and cron expressions.
-   - The DAEMON owns the clock, not the controller, so schedules survive
-     controller restarts and fire with nobody watching. Persisted in a
-     toriel-owned `schedules.json` (keyed by session UUID, like lineage.json).
-     Firing = a `prompt` to the session, lazily respawning it if it is
-     inactive (the existing resume path).
-   - Cheap conditions: `--until` / `--while` take a SHELL command checked by
-     the daemon with no model involved ("pgrep foo", "test -f x"); the
-     prompt only goes to the model when the condition is met (or each tick
-     if none is given). This is what makes "poll hourly" affordable.
-   - Open design questions: a fire while the session is mid-run (skip,
-     queue as follow-up, or delay - leaning skip-and-log for /every, queue
-     for /in); missed fires while the daemon was down (run once on
-     startup vs skip; leaning once, flagged as late); unattended runs hit
-     permission dialogs and would block with the badge showing (maybe a
-     per-schedule policy: wait / deny); a cost guard (--max, a global
-     per-day cap, visible in the budget readout); timezone and DST for
-     clock times; time parsing - use a library (chrono-node for natural
-     language, cron-parser for cron) rather than hand-rolling.
-   - Visibility: the switcher row shows a next-fire marker/time, the
-     Summary or status line says "every 1h, next 14:00", fired prompts are
-     marked in the transcript as scheduled so they are not mistaken for
-     typed ones.
-   - Model-initiated scheduling ("check this again in an hour") needs a
-     tool the model can call: a pi extension tool talking to the daemon.
-     Same extension channel as parent/child messaging (item 9) - build
-     them together, or at least share the daemon-side mechanism.
-   - PRIOR ART: Claude Code (added 2026-10-25, Ron's pointer; from its tool
-     descriptions, not its source). Worth weighing when this is designed:
-     * Three model-callable tools, CronCreate / CronList / CronDelete: the
-       model schedules its own prompts. Standard 5-field cron in LOCAL time
-       (no timezone conversion), `recurring: false` for one-shots (a cron
-       expression pinned to one date), a job id for deleting. Our /in /at
-       /every could be sugar over the same one primitive (cron + once flag).
-     * Jobs fire only while the session is IDLE (never mid-query): a
-       settled answer to our "fire during a run" question - delay, do not
-       skip or interrupt.
-     * Persistence is session-only (memory, gone on exit) and recurring jobs
-       AUTO-EXPIRE after 7 days. Ours should be durable (daemon-owned, see
-       above), but the expiry is a good default guard against forgotten
-       schedules burning budget; make it a visible per-schedule field.
-     * Deliberate JITTER: recurring jobs run late by a fixed per-job offset
-       (up to half the period, capped at 30 min), and the tool tells the model
-       to avoid :00 / :30 so users do not all hit the API on the same
-       minute. Relevant to us only against shared gateways, but it shows the
-       real next-fire time must be what gets displayed, not the cron minute.
-     * `/loop` is a skill on top of it: `/loop 5m /foo`, or no interval to
-       let the model self-pace (a ScheduleWakeup call picks the next delay,
-       with guidance to prefer long delays when nothing is expected).
-     * Polling vs watching is split: cron re-runs a prompt on a clock, while
-       a separate Monitor tool streams a command's output and wakes the
-       session on events. Our "--until/--while shell condition, no model
-       involved" is the cheap middle: poll without spending tokens.
-     * Gap in theirs that ours can fill: schedules that survive restarts and
-       fire with nobody attached, and a cost guard tied to the usage readout
-       (toriel_usage, built 2026-10-24) so a schedule can pause itself when
-       the budget window is nearly spent.
-     TODO when picked up: also search pi packages for existing scheduling
-     extensions before building (not done yet).
+   Decisions (Ron, 2026-10-31): hand-rolled time parser plus the cron-parser
+   package for cron expressions only (no chrono-node); schedules respawn an
+   inactive session; recurring schedules expire after 7 days by default,
+   configurable per schedule, `--expires never` allowed; schedules are
+   session-scoped only (a session spawns subagents or forks if it needs more,
+   so no global schedules); no permission-dialog policy in v1 (a fire that hits
+   a dialog blocks with the badge, as today; auto-deny after a timeout is a
+   separate ticket); killing a session (ctrl-x ctrl-x, /delete) removes its
+   schedules.
+
+   One primitive. Every command normalises to a stored record:
+     Schedule { id, name?, session (uuid), prompt,
+       trigger: once{at} | cron{expr} | every{ms, anchor} | loop{gapMs?},
+       until?, while? (shell commands), max?, fired, expiresAt|null,
+       catchup: "once"|"skip", by: "user"|"agent", state: active|paused,
+       nextFire, lastFire? }
+   `loop` re-runs after the previous run FINISHES (never overlaps); `loop`
+   with no interval means the model self-paces (below). `once` is a stored
+   timestamp, not a cron pinned to a date, so DST cannot move it.
+
+   Commands (one registry in commands.ts, each with --help and examples):
+   - `/in 90m <prompt>`, `/at 14:30 <prompt>` (once); `/every 30m <prompt>`;
+     `/loop [5m] <prompt>`; `/cron "*/15 * * * *" <prompt>`.
+   - `/schedules` lists (id, when, next fire, fired/max, expiry); with no
+     arguments it opens a picker whose choices are pause / resume / fire now /
+     cancel. `/cancel <id|name|--all>`, `/pause`, `/resume`, `/fire <id>`.
+   - Both scopes: inside a session the commands act on THAT session's
+     schedules; in the switcher `/schedules` lists ALL schedules grouped by
+     session and /cancel takes any id. Creating schedules is session-only.
+   - Flags: `--until/--while "<shell>"`, `--max N`, `--expires 3d|never`,
+     `--name`, `--catchup skip`, `--dry-run` (print the next 3 fire times, create
+     nothing).
+
+   Friendly time parsing (src/when.ts, pure, injectable now and timezone):
+   durations (90m, 1h30m, "2 hours", "in 2h"), clock times (14:30, 9am,
+   "tomorrow 9am", "mon 09:00"), cadences ("every weekday 9am"), and raw
+   5-field cron detected by shape. The friendliness is in the feedback: the
+   command echoes its reading with the real time ("every 30m, first run 14:05
+   (in 12m), expires in 7d, max 20"); an ambiguous input fails with a concrete
+   suggestion ('"at 5" is ambiguous - try "at 17:00" or "at 5am"'); tab
+   completion offers examples; a past clock time rolls to the next occurrence
+   and says so, a past one-shot is an error.
+
+   Daemon (src/scheduler.ts + daemon-handlers-schedule.ts):
+   - The DAEMON owns the clock. One timer aimed at the nearest nextFire (no
+     polling tick), injectable clock for tests. Persisted in `schedules.json`
+     (writeJsonAtomic), keyed by session UUID like lineage.json.
+   - Firing = deliverToSession, the path the message tool uses, with the text
+     labelled `[scheduled "name" #3, run 4/20]` (received.ts style) so a fired
+     prompt is not mistaken for a typed one. An inactive session is respawned.
+   - A fire never interrupts: it waits while the session is streaming,
+     compacting (`held`) or showing a permission dialog. At most one fire per
+     schedule is pending, so a slow session coalesces instead of piling up.
+   - After daemon downtime the default is `catchup: once` (one fire, flagged
+     late); `skip` is opt-in; a once-schedule always fires late.
+   - `--until/--while` are shell commands the daemon runs (with a timeout, no
+     model): `until` succeeding completes the schedule with one final fire of
+     the prompt; `while` failing ends it quietly. This is what makes "poll
+     hourly" cost nothing.
+   - Guards: default 7 day expiry on recurring schedules (shown), 1 minute
+     minimum interval for model-run schedules, a per-session cap (20), tighter
+     caps for agent-created ones, a global per-day fire cap; later, pause when
+     the toriel_usage window is nearly spent. Deleting/trashing a session, or
+     killing it, removes its schedules.
+
+   Visibility: a clock marker and next-fire time on the switcher row (#9); a
+   status-line segment ("sched 2, next 14:05"); a strip above the editor like
+   the queued-message strip ("every 30m 'check build' - next 14:05"); a notice on every expiry, completion, cancel, hold and delivery failure, so a schedule
+   never disappears silently (fires are visible in the session itself and in the daemon log); the
+   picker above. One `schedules` broadcast feeds all of them.
+
+   Agents self-configure: a pi extension (toriel-schedule.ts, built like
+   toriel-agents.ts, reusing its `ask()`) registers three tools named after the
+   Claude Code ones the models know: `toriel_schedule_create({when, prompt,
+   until?, max?, name?})` (`when` is the same string the /in /at /every /cron
+   parser takes, so there is one grammar; it returns the interpreted time and
+   next fire so the model can check itself), `toriel_schedule_list`,
+   `toriel_schedule_cancel({id})`. Scope is the caller's own session. A skill
+   (pi/skills/scheduling) says when to use them: prefer `until` with a shell
+   test over re-prompting, prefer long delays, cancel when done, tell the user
+   what was scheduled. Self-paced `/loop`: the daemon appends a footer to each
+   fired loop prompt telling the model to call toriel_schedule_create for the
+   next run, or stop to end the loop.
+
+   Prior art (Claude Code, from its tool descriptions): CronCreate/List/Delete,
+   5-field local-time cron, `recurring: false` one-shots, fires only while idle
+   (our wait-for-idle rule), session-only memory and 7 day auto-expiry (ours is
+   durable but keeps the expiry), per-job jitter (not needed against our own
+   daemon, but display the real next fire), a Monitor tool for event wakeups
+   (our --until/--while is the token-free middle). Searching pi packages for an
+   existing scheduling extension is still to do before building slice 5.
+
+   Built so far (2026-10-31, branch scheduler): when.ts, scheduler.ts, the
+   daemon wiring and commands, switcher/status markers and end notices, the
+   agent tools (inside toriel-agents.ts rather than a separate extension) and
+   the scheduling skill, --until/--while, self-paced loop footer. Deliberate:
+   the agent tools take no --until/--while (a shell command would bypass the
+   permission dialogs). Also built: usage-budget guard (pause at 95% of a
+   provider window), per-day global fire cap (200), the strip above the editor,
+   sleep inhibition (#21: systemd-inhibit idle:sleep while a turn runs or a
+   run is due within 30 min; setting preventSleep). Left: a /schedules picker
+   with row actions.
+
+   Slices: 1 when.ts parser + tests. 2 scheduler core + persistence (fake
+   clock). 3 daemon handlers, protocol, /in /every /cron /loop /schedules
+   /cancel. 4 switcher marker, strip, status (#9). 5 agent extension + skill.
+   6 self-paced /loop, --until/--while, catchup, guards. 7 sleep inhibition
+   while jobs are pending (#21).
 
 ## Usage and quota in the status bar (built 2026-10-24)
 

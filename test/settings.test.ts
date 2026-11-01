@@ -36,6 +36,13 @@ describe("loadSettings", () => {
     assert.match(loadSettings(tmp('{"warnNoPermissionSystem":"no"}')).problems[0] as string, /true or false/);
   });
 
+  it("reads the scheduling and sleep settings, letting the usage pause be 0 (off)", () => {
+    const s = loadSettings(tmp('{"scheduleUsagePause":0,"scheduleDailyLimit":50,"preventSleep":false}'));
+    assert.deepEqual([s.settings.scheduleUsagePause, s.settings.scheduleDailyLimit, s.settings.preventSleep, s.problems], [0, 50, false, []]);
+    assert.match(loadSettings(tmp('{"scheduleDailyLimit":0}')).problems[0] as string, /at least 1/);
+    assert.match(loadSettings(tmp('{"preventSleep":"yes"}')).problems[0] as string, /true or false/);
+  });
+
   it("reads the summary settings, and rejects bad numbers", () => {
     const ok = loadSettings(tmp('{"summaryModel":"a/b","summaryIntervalMinutes":30,"summaryMinNewMessages":4}'));
     assert.deepEqual(ok.settings, { summaryModel: "a/b", summaryIntervalMinutes: 30, summaryMinNewMessages: 4 });
