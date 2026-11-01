@@ -133,7 +133,7 @@ function runCheck(cmd: string, cwd: string | undefined): Promise<boolean | undef
 }
 
 /** The UUID a command's `session` (daemon number) or `uuid` names; undefined when it names neither. */
-function scopeOf(ctx: DaemonContext, cmd: { session?: number; uuid?: string }): string | undefined {
+export function scopeOf(ctx: DaemonContext, cmd: { session?: number; uuid?: string }): string | undefined {
   if (cmd.uuid) {
     return cmd.uuid;
   }

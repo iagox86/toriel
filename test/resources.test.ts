@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
-import { describeResourceProblems, missingResources, PI_RESOURCES_DIR, RESOURCES, resourceArgs, staleInstalls, TORIEL_TOOLS } from "../src/resources.ts";
+import { PERMISSIONS_FILE } from "../src/config.ts";
+import { auditFindings, describeResourceProblems, type Finding, missingResources, pathAction, PI_RESOURCES_DIR, RESOURCES, resourceArgs, staleInstalls, summarizeFindings, TORIEL_TOOLS } from "../src/resources.ts";
 
 function tmp(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "toriel-res-"));
@@ -84,11 +85,14 @@ describe("staleInstalls", () => {
 });
 
 /** A pi agent dir the way a working setup has it: the permission package listed, with a config. */
-function agentDirWithPermissions(): string {
+/** The permission package's config as toriel wants it: the grants link in the chain, and the grants file asking. */
+const GOOD_CONFIG = { authorizerChain: ["toriel-grants"], permission: { "*": "allow", path: { "*": "allow", [PERMISSIONS_FILE]: "ask" } } };
+
+function agentDirWithPermissions(config: unknown = GOOD_CONFIG): string {
   const agent = tmp();
   fs.writeFileSync(path.join(agent, "settings.json"), JSON.stringify({ packages: ["npm:pi-web-access", "npm:@gotgenes/pi-permission-system"] }));
   fs.mkdirSync(path.join(agent, "extensions", "pi-permission-system"), { recursive: true });
-  fs.writeFileSync(path.join(agent, "extensions", "pi-permission-system", "config.json"), "{}");
+  fs.writeFileSync(path.join(agent, "extensions", "pi-permission-system", "config.json"), JSON.stringify(config));
   return agent;
 }
 
@@ -159,5 +163,92 @@ describe("pi-permission-system check", () => {
 
   it("stays quiet when the user turned the warning off", () => {
     assert.equal(describeResourceProblems(tmp(), repoTree(), { permissionSystem: false }), undefined);
+    assert.equal(describeResourceProblems(agentDirWithPermissions({}), repoTree(), { permissionSystem: false }), undefined);
+  });
+});
+
+describe("permission grants audit", () => {
+  const grantsFile = "/home/u/.local/share/toriel/permissions.json";
+  const audit = (config: unknown, home = "/home/u"): Finding[] => {
+    const saved = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      return auditFindings(agentDirWithPermissions(config), repoTree(), { grantsFile });
+    } finally {
+      process.env.HOME = saved;
+    }
+  };
+  const ids = (f: Finding[]) => f.map((x) => x.id);
+
+  it("says to name toriel-grants in the authorizer chain, as a feature-level problem, and keeps quiet once it is there", () => {
+    const rules = { permission: { path: { "*": "allow", [grantsFile]: "ask" } } };
+    const [missing] = audit(rules);
+    assert.equal(missing?.id, "grants-chain");
+    assert.equal(missing?.level, "feature");
+    assert.match(missing?.message ?? "", /grants are inactive: add "toriel-grants" to "authorizerChain" in .*config\.json/);
+    assert.deepEqual(ids(audit({ ...rules, authorizerChain: ["other"] })), ["grants-chain"]);
+    assert.deepEqual(audit({ ...rules, authorizerChain: ["other", "toriel-grants"] }), []);
+  });
+
+  it("says to put a path rule on the grants file, as a hardening problem naming it with ~ and where it goes", () => {
+    const [f] = audit({ authorizerChain: ["toriel-grants"], permission: { "*": "allow" } });
+    assert.equal(f?.id, "grants-path-rule");
+    assert.equal(f?.level, "hardening");
+    assert.match(f?.message ?? "", /nothing stops an agent editing the permission grants file: add "~\/\.local\/share\/toriel\/permissions\.json": "ask"/);
+    assert.match(f?.message ?? "", /after a "\*": "allow" entry/);
+  });
+
+  it("accepts ask or deny, as a literal path, a ~ path or a glob, and rejects a later allow", () => {
+    const chain = { authorizerChain: ["toriel-grants"] };
+    for (const [pattern, action] of [[grantsFile, "ask"], [grantsFile, "deny"], ["~/.local/share/toriel/permissions.json", "ask"], ["/home/u/.local/share/toriel/*", "ask"], ["*permissions.json", "deny"]] as const) {
+      assert.deepEqual(audit({ ...chain, permission: { path: { "*": "allow", [pattern]: action } } }), [], `${pattern} ${action}`);
+    }
+    assert.deepEqual(audit({ ...chain, permission: { path: { [grantsFile]: { action: "ask", reason: "grants" } } } }), []);
+    assert.deepEqual(ids(audit({ ...chain, permission: { path: { [grantsFile]: "ask", "*": "allow" } } })), ["grants-path-rule"]);
+    assert.deepEqual(ids(audit({ ...chain, permission: { path: { [grantsFile]: "allow" } } })), ["grants-path-rule"]);
+  });
+
+  it("reports both problems together, and says nothing about them when the config is unusable", () => {
+    assert.deepEqual(ids(audit({})), ["grants-chain", "grants-path-rule"]);
+    const agent = agentDirWithPermissions();
+    fs.writeFileSync(path.join(agent, "extensions", "pi-permission-system", "config.json"), "{ nope");
+    const found = auditFindings(agent, repoTree(), { grantsFile });
+    assert.deepEqual(ids(found), ["permission-package"]);
+    assert.equal(found[0]?.level, "recommended");
+  });
+
+  it("offers a fix only where the config has the usual shape", () => {
+    const [chain, rule] = audit({});
+    assert.ok(chain?.fix && rule?.fix);
+    const odd = audit({ authorizerChain: "toriel-grants", permission: { path: "nope" } });
+    assert.deepEqual(odd.map((f) => f.fix), [undefined, undefined]);
+  });
+});
+
+describe("start-up summary", () => {
+  const f = (id: string, level: Finding["level"], message: string): Finding => ({ id, level, message });
+
+  it("shows required and recommended problems in full and only counts the rest", () => {
+    assert.equal(summarizeFindings([]), undefined);
+    assert.equal(summarizeFindings([f("a", "required", "node is old"), f("b", "recommended", "no permission package"), f("c", "feature", "x"), f("d", "hardening", "y")]), "node is old; no permission package; 2 suggestions: /doctor lists them");
+    assert.equal(summarizeFindings([f("c", "feature", "x")]), "1 suggestion: /doctor lists them");
+  });
+
+  it("is what describeResourceProblems says: a config missing only the grants lines costs a count, not a paragraph", () => {
+    assert.equal(describeResourceProblems(agentDirWithPermissions({}), repoTree(), { grantsFile: "/home/u/p.json" }), "2 suggestions: /doctor lists them");
+  });
+});
+
+describe("pathAction", () => {
+  it("lets the last matching rule win, treats * as crossing directories, and expands ~", () => {
+    const home = process.env.HOME ?? "";
+    const config = { permission: { path: { "*": "allow", "~/.ssh/*": "deny", "*.env": "ask", "/data/*": "ask", "/data/ok/*": "allow" } } };
+    assert.equal(pathAction(config, `${home}/.ssh/id_rsa`), "deny");
+    assert.equal(pathAction(config, "/x/y/.env"), "ask");
+    assert.equal(pathAction(config, "/data/a/b"), "ask");
+    assert.equal(pathAction(config, "/data/ok/a"), "allow");
+    assert.equal(pathAction(config, "/elsewhere"), "allow");
+    assert.equal(pathAction({}, "/x"), undefined);
+    assert.equal(pathAction({ permission: { path: [] } }, "/x"), undefined);
   });
 });

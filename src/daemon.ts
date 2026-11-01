@@ -16,22 +16,23 @@
 // this env, including pi settings/auth/extensions.)
 import "./migrate-on-start.ts";
 import * as fs from "node:fs";
-import { LOG, PID_FILE, SCHEDULES_FILE, SOCK } from "./config.ts";
+import { LOG, PERMISSIONS_FILE, PID_FILE, SCHEDULES_FILE, SOCK } from "./config.ts";
 import { BridgeTracker } from "./daemon-bridge.ts";
 import { ChildManager } from "./daemon-children.ts";
 import type { DaemonContext } from "./daemon-context.ts";
 import { acquireDaemonLock, releaseDaemonLock } from "./daemon-lock.ts";
 import { ClientHub } from "./daemon-hub.ts";
+import { announceExpired } from "./daemon-permissions.ts";
 import { sessionMetas } from "./daemon-meta.ts";
 import { schedulerHost } from "./daemon-schedule.ts";
 import { createServer } from "./daemon-server.ts";
 import { SessionRegistry } from "./daemon-session.ts";
-import { piAgentDir } from "./pi-dir.ts";
 import { log } from "./log.ts";
+import { DEFAULT_GRANT_LIMITS, GrantStore } from "./permissions.ts";
 import { Presence } from "./presence.ts";
 import { DEFAULT_LIMITS, Scheduler } from "./scheduler.ts";
 import { needsAwake, SleepInhibitor } from "./sleep-inhibit.ts";
-import { describeResourceProblems } from "./resources.ts";
+import { collectFindings } from "./doctor.ts";
 import { loadSettings } from "./settings.ts";
 import type { UsageReport } from "./shared.ts";
 import { errText, rotateLog } from "./util.ts";
@@ -41,11 +42,12 @@ function createContext(shutdown: () => void): DaemonContext {
   const registry = new SessionRegistry();
   const presence = new Presence();
   const usage = new Map<string, UsageReport>();
-  const hub = new ClientHub((socket) => sessionMetas(registry, presence, usage, socket, ctx.scheduler));
+  const hub = new ClientHub((socket) => sessionMetas(registry, presence, usage, socket, ctx.scheduler, ctx.grants));
   const bridges = new BridgeTracker();
   const children = new ChildManager(hub, usage, bridges);
   // the scheduler's host reads the context lazily, so it can be built inside it
-  const ctx: DaemonContext = { registry, hub, children, presence, bridges, scheduler: new Scheduler(schedulerHost(() => ctx, usage), SCHEDULES_FILE, { ...DEFAULT_LIMITS, dailyFires: loadSettings().settings.scheduleDailyLimit ?? DEFAULT_LIMITS.dailyFires }), shutdown };
+  const grants = new GrantStore(PERMISSIONS_FILE, Date.now, { perSession: loadSettings().settings.permissionGrantLimit ?? DEFAULT_GRANT_LIMITS.perSession });
+  const ctx: DaemonContext = { registry, hub, children, presence, bridges, scheduler: new Scheduler(schedulerHost(() => ctx, usage), SCHEDULES_FILE, { ...DEFAULT_LIMITS, dailyFires: loadSettings().settings.scheduleDailyLimit ?? DEFAULT_LIMITS.dailyFires }), grants, shutdown };
   // a session going idle is what a waiting schedule is looking for, and what starts a gap loop's countdown
   children.onSettled = (s) => {
     if (s.sessionId) {
@@ -116,11 +118,15 @@ async function main(): Promise<void> {
   fs.chmodSync(SOCK, 0o600);
   log(`listening on ${SOCK} (pid ${process.pid})`);
   ctx.scheduler.start();
+  ctx.grants.load();
+  // timed grants lapse by themselves (the store never matches an expired one); this only says so
+  const grantKeeper = setInterval(() => announceExpired(ctx, ctx.grants.sweep()), 30_000);
+  grantKeeper.unref();
   const awakeKeeper = setInterval(keepAwake, 5_000);
   awakeKeeper.unref();
-  const missing = describeResourceProblems(piAgentDir(), undefined, { permissionSystem: loadSettings().settings.warnNoPermissionSystem !== false });
-  if (missing) {
-    log(`WARNING: ${missing}`);
+  // the start-up self-check: every finding is logged, the controller's notice line shows the ones that matter most
+  for (const f of collectFindings({ permissionSystem: loadSettings().settings.warnNoPermissionSystem !== false, startup: [] })) {
+    log(`WARNING [${f.level}]: ${f.message}`);
   }
 
   // Prune external presence registrations whose pi exited, whose session

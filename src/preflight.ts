@@ -31,6 +31,7 @@ export function startupProblems(env: NodeJS.ProcessEnv = process.env, nodeVersio
 }
 
 const USAGE = `usage: toriel              open the switcher (starts the daemon if needed)
+       toriel doctor       check the setup and say how to fix what is wrong (--fix applies the safe fixes)
        toriel kill-server  stop the daemon and every session it owns`;
 
 /** Exit with a message when the setup or the arguments are wrong. */
@@ -40,12 +41,12 @@ export function preflight(argv: readonly string[] = process.argv): void {
     process.stdout.write(`${USAGE}\n`);
     process.exit(0);
   }
-  if (arg !== undefined && arg !== "kill-server") {
+  if (arg !== undefined && arg !== "kill-server" && arg !== "doctor") {
     process.stderr.write(`toriel: unknown argument "${arg}"\n${USAGE}\n`);
     process.exit(2);
   }
-  if (arg === "kill-server") {
-    return;
+  if (arg === "kill-server" || arg === "doctor") {
+    return; // doctor runs its own checks, so it can say what is wrong instead of stopping at the first thing
   }
   const problems = startupProblems();
   if (problems.length > 0) {

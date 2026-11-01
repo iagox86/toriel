@@ -5,6 +5,7 @@ import type { BridgeTracker } from "./daemon-bridge.ts";
 import type { ChildManager } from "./daemon-children.ts";
 import type { ClientHub } from "./daemon-hub.ts";
 import type { SessionRegistry } from "./daemon-session.ts";
+import type { GrantStore } from "./permissions.ts";
 import type { Presence } from "./presence.ts";
 import type { Scheduler } from "./scheduler.ts";
 import type { ClientCommand } from "./shared.ts";
@@ -19,6 +20,8 @@ export interface DaemonContext {
   bridges: BridgeTracker;
   /** Timed prompts (docs/design.md item 10). */
   scheduler: Scheduler;
+  /** Permission grants (docs/permissions.md). */
+  grants: GrantStore;
   shutdown(): void;
 }
 

@@ -108,6 +108,14 @@ answering these.
   into `options`, esc -> `cancelled`; input/editor: null), `dialogPrompt`
   (one-line status rendering).
 
+## toriel's extra rows (2026-11-01)
+
+Since the grant work (`docs/permissions.md`) a `select` dialog can arrive with a `toriel`
+field, `{grants: [{surface, pattern}]}`, attached by the daemon from the link's report. The
+controller then appends marked "allow for ..." rows (`withGrantRows` in `src/dialogs.ts`)
+after pi's options; picking one answers pi with the plain "Yes" and stores a grant. pi's
+options are never reworded, reordered or removed, and no rows appear on file-path asks.
+
 ## Required changes
 
 1. **Render `select` properly** (`src/dialogs.ts` `dialogPrompt`, and

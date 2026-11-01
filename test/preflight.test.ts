@@ -60,6 +60,42 @@ describe("toriel entry point", () => {
     const r = run("--help");
     assert.equal(r.status, 0);
     assert.match(r.stdout, /toriel kill-server/);
+    assert.match(r.stdout, /toriel doctor/);
+  });
+
+  it("runs doctor, whose --help needs no daemon and no pi setup", () => {
+    const r = run("doctor", "--help");
+    assert.equal(r.status, 0);
+    assert.match(r.stdout, /usage: toriel doctor \[--fix\] \[--yes\]/);
+  });
+
+  it("exits 1 from doctor with a readable report when pi is not set up, without touching anything", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-doc-home-"));
+    try {
+      const r = spawnSync(process.execPath, [ENTRY, "doctor"], { encoding: "utf8", env: { ...process.env, HOME: home, PI_CODING_AGENT_DIR: path.join(home, "no-pi"), XDG_RUNTIME_DIR: "/run/user/1", XDG_CONFIG_HOME: path.join(home, "cfg") } });
+      assert.equal(r.status, 1);
+      assert.match(r.stdout, /PROBLEM {2}pi is set up[\s\S]*pi has no config at .*no-pi: run pi once and log in/);
+      assert.deepEqual(fs.readdirSync(home), [], "doctor wrote nothing");
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("still explains itself when the dependencies are missing: the checks that need them are skipped, not crashed", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-doc-bare-"));
+    try {
+      fs.mkdirSync(path.join(root, "src"));
+      for (const f of ["toriel.ts", "src/preflight.ts", "src/doctor-cli.ts"]) {
+        fs.copyFileSync(path.join(import.meta.dirname, "..", f), path.join(root, f));
+      }
+      fs.writeFileSync(path.join(root, ".nvmrc"), "20\n");
+      const r = spawnSync(process.execPath, [path.join(root, "toriel.ts"), "doctor"], { encoding: "utf8", env: { ...process.env, XDG_RUNTIME_DIR: "/run/user/1" } });
+      assert.equal(r.status, 1);
+      assert.match(r.stdout, /PROBLEM {2}dependencies are not installed \(.*commander.*\): run npm install/);
+      assert.match(r.stdout, /Fix these first/);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("rejects an unknown argument", () => {

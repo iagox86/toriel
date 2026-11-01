@@ -32,6 +32,7 @@ import {
   handleUiResponse,
 } from "./daemon-handlers-ops.ts";
 import { handleMessage } from "./daemon-handlers-messages.ts";
+import { handlePermissionAdd, handlePermissionCheck, handlePermissionList, handlePermissionRestore, handlePermissionRevoke } from "./daemon-permissions.ts";
 import { handleResolve } from "./daemon-resolve.ts";
 import { handleScheduleAdd, handleScheduleList, handleScheduleOp } from "./daemon-schedule.ts";
 import type { ClientCommand } from "./shared.ts";
@@ -78,6 +79,16 @@ export async function dispatch(ctx: DaemonContext, cmd: ClientCommand, socket: n
       return handleScheduleList(ctx, cmd, res);
     case "schedule_op":
       return handleScheduleOp(ctx, cmd, res);
+    case "permission_check":
+      return handlePermissionCheck(ctx, cmd, res);
+    case "permission_list":
+      return handlePermissionList(ctx, cmd, res);
+    case "permission_add":
+      return handlePermissionAdd(ctx, cmd, res);
+    case "permission_revoke":
+      return handlePermissionRevoke(ctx, cmd, res);
+    case "permission_restore":
+      return handlePermissionRestore(ctx, cmd, res);
     case "resolve":
       return handleResolve(ctx, cmd, res);
     case "mcp_status":

@@ -303,6 +303,18 @@ async function handle(cmd) {
         ok(cmd.id, "prompt", { disposition: "started" });
         return out({ type: "extension_ui_request", id: "ask-1", method: "confirm", title: "Allow?", message: "run rm", ...(process.env.FAKE_PI_ASK_MS === "0" ? {} : { timeout: Number(process.env.FAKE_PI_ASK_MS ?? 300) }) });
       }
+      if (cmd.message.trim() === "/ask-select") {
+        // pi-permission-system's ask: a select dialog whose title names the command (long ones wrap across lines)
+        ok(cmd.id, "prompt", { disposition: "started" });
+        const command = process.env.FAKE_PI_ASK_COMMAND ?? "sudo -V";
+        return out({
+          type: "extension_ui_request",
+          id: "ask-select-1",
+          method: "select",
+          title: `Permission Required\ntool    : bash\nrule    : sudo *\ncommand : ${command.replace(/(.{20})/g, "$1\n")}`,
+          options: ["Yes", `Yes, allow bash "${command}" for this session`, "No", "No, provide reason"],
+        });
+      }
       if (cmd.message.trim() === "/mcp") {
         // like pi's extension command: answered as a notice, never entering the conversation
         ok(cmd.id, "prompt", { disposition: "started" });

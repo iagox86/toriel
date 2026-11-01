@@ -80,6 +80,10 @@ export interface SessionMeta {
   nextFire?: number;
   /** The strip above the editor: a line per active schedule (see scheduleStripLines). */
   scheduleLines?: string[];
+  /** Active permission grants in this session, the soonest expiry among the timed ones (epoch ms), and saved grants waiting for /permissions restore. */
+  grants?: number;
+  nextGrantExpiry?: number;
+  grantsSaved?: number;
   /** Whether the current model takes images; undefined when pi did not say. */
   acceptsImages?: boolean;
   /** True iff THIS receiving controller holds the exclusive input attach. */
@@ -152,6 +156,16 @@ type ClientCommandBody =
   | { type: "schedule_list"; id?: string; session?: number; uuid?: string }
   /** Act on schedules: `ref` is "#3", "3" or a name (within the session when one is given); `all` takes every schedule in scope. */
   | { type: "schedule_op"; id?: string; op: "pause" | "resume" | "fire" | "cancel"; ref?: string; all?: boolean; session?: number; uuid?: string }
+  /** From a child's toriel-grants link (docs/permissions.md): is this ask covered by a grant? `grants` is pi's suggested session grant for it, `value` the command or target asked about. The response is {allow, grants?}; when not covered the daemon remembers the suggestion for the dialog that follows. */
+  | { type: "permission_check"; id?: string; uuid: string; grants: PermissionGrantSpec[]; value?: string }
+  /** Permission grants of one session, or of all when neither `session` nor `uuid` is given. The response is {grants: GrantView[]}. */
+  | { type: "permission_list"; id?: string; session?: number; uuid?: string }
+  /** Grant a surface/pattern in a session. `for` is a duration ("1h"), or "session"/"never" for no expiry (the default). */
+  | { type: "permission_add"; id?: string; session?: number; uuid?: string; surface: string; pattern: string; for?: string; note?: string; source?: "dialog" | "command" }
+  /** Revoke grants: `ref` is "#3", "3" or an exact pattern (within the session when one is given); `all` takes every grant in scope. */
+  | { type: "permission_revoke"; id?: string; session?: number; uuid?: string; ref?: string; all?: boolean }
+  /** Activate the grants a session had saved before the daemon restarted. */
+  | { type: "permission_restore"; id?: string; session?: number; uuid?: string }
   /** Find a session from a UUID, UUID prefix, `#number` or name; the response is {uuid, name, file, id?} (id = daemon number when the daemon holds it). */
   | { type: "resolve"; id?: string; query: string }
   /** pi's slash commands (extensions, skills, prompt templates). Without a
@@ -199,6 +213,29 @@ type ClientCommandBody =
   | { type: "list" }
   /** Send this controller the session's current history again (drift cure). */
   | { type: "resync"; id?: string; session: number };
+
+/** A surface and pattern pair, in the shape of pi-permission-system's `sessionApproval.grants`. */
+export interface PermissionGrantSpec {
+  surface: string;
+  pattern: string;
+}
+
+/** A permission grant as controllers see it. */
+export interface GrantView {
+  id: number;
+  /** UUID of the session it belongs to. */
+  session: string;
+  sessionName?: string;
+  surface: string;
+  pattern: string;
+  createdAt: number;
+  /** Epoch ms; null = until revoked. */
+  expiresAt: number | null;
+  source: "dialog" | "command";
+  note?: string;
+  /** Saved before a daemon restart and not active until /permissions restore. */
+  dormant: boolean;
+}
 
 /** A schedule as controllers and the agent tool see it. */
 export interface ScheduleView {

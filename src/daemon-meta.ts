@@ -1,12 +1,15 @@
 // The session list as one controller should see it.
 import type * as net from "node:net";
 import type { DaemonSession, SessionRegistry } from "./daemon-session.ts";
+import type { GrantStore } from "./permissions.ts";
 import type { Presence } from "./presence.ts";
 import { scheduleStripLines } from "./schedule-format.ts";
 import type { Scheduler } from "./scheduler.ts";
 import type { SessionMeta, UsageReport } from "./shared.ts";
 
-function metaFor(s: DaemonSession, socket: net.Socket, presence: Presence, usage: ReadonlyMap<string, UsageReport>, scheduler?: Scheduler): SessionMeta {
+function metaFor(s: DaemonSession, socket: net.Socket, presence: Presence, usage: ReadonlyMap<string, UsageReport>, scheduler?: Scheduler, grants?: GrantStore): SessionMeta {
+  const granted = s.sessionId && grants ? grants.active(s.sessionId).length : 0;
+  const saved = s.sessionId && grants ? grants.dormantCount(s.sessionId) : 0;
   const active = s.sessionId && scheduler ? scheduler.list(s.sessionId).filter((x) => x.state === "active") : [];
   return {
     id: s.id,
@@ -39,6 +42,9 @@ function metaFor(s: DaemonSession, socket: net.Socket, presence: Presence, usage
     schedules: active.length > 0 ? active.length : undefined,
     scheduleLines: active.length > 0 && scheduler ? scheduleStripLines(active, new Date(), (id) => scheduler.heldReason(id)) : undefined,
     nextFire: s.sessionId && scheduler ? scheduler.soonest(s.sessionId) : undefined,
+    grants: granted > 0 ? granted : undefined,
+    nextGrantExpiry: s.sessionId && grants ? grants.soonestExpiry(s.sessionId) : undefined,
+    grantsSaved: saved > 0 ? saved : undefined,
   };
 }
 
@@ -49,8 +55,9 @@ export function sessionMetas(
   usage: ReadonlyMap<string, UsageReport>,
   socket: net.Socket,
   scheduler?: Scheduler,
+  grants?: GrantStore,
 ): SessionMeta[] {
-  const metas = registry.all().map((s) => metaFor(s, socket, presence, usage, scheduler));
+  const metas = registry.all().map((s) => metaFor(s, socket, presence, usage, scheduler, grants));
   const tracked = new Set(metas.map((m) => m.sessionFile).filter((f): f is string => !!f));
   return [...metas, ...presence.pseudoMetas(tracked)];
 }

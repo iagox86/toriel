@@ -5,9 +5,32 @@
 // `--tools` list.
 import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync } from "node:fs";
 import { join } from "node:path";
+import { PERMISSIONS_FILE } from "./config.ts";
 import { errText } from "./util.ts";
 
 export const PI_RESOURCES_DIR = join(import.meta.dirname, "..", "pi");
+
+/**
+ * How much a problem matters. required: toriel will not work. recommended: it works but sessions run
+ * unguarded or ask about everything. feature: only matters if you use that feature. hardening: makes
+ * tampering harder; no feature needs it. The start-up notice shows the first two; `toriel doctor` shows all.
+ */
+export type Level = "required" | "recommended" | "feature" | "hardening";
+
+/** An edit `doctor --fix` can make to a JSON config file. Pure, so it can be previewed before it is written. */
+export interface Fix {
+  file: string;
+  summary: string;
+  edit(config: Record<string, unknown>): Record<string, unknown>;
+}
+
+/** One thing wrong with the setup. `id` names a check in the doctor catalog (src/doctor.ts); `message` says how to fix it. */
+export interface Finding {
+  id: string;
+  level: Level;
+  message: string;
+  fix?: Fix;
+}
 
 export interface Resource {
   kind: "extension" | "skill";
@@ -19,9 +42,11 @@ export interface Resource {
   tools?: readonly string[];
 }
 
+// A resource that needs setup beyond shipping (a config line, a package) also needs a doctor check: see src/doctor.ts.
 export const RESOURCES: readonly Resource[] = [
   { kind: "extension", path: "extensions/toriel-session-bridge.ts", why: "messages from other sessions fall back to pi's lossy steering queue" },
   { kind: "extension", path: "extensions/toriel-agents.ts", why: "the toriel_message and toriel_schedule_* tools (messaging other sessions, scheduling prompts) are missing", tools: ["toriel_message", "toriel_schedule_create", "toriel_schedule_list", "toriel_schedule_cancel"] },
+  { kind: "extension", path: "extensions/toriel-grants.ts", why: "permission grants (/permissions) have no effect: every ask opens its dialog" },
   { kind: "extension", path: "extensions/toriel-usage.ts", why: "the toriel_usage tool and usage reporting are missing", tools: ["toriel_usage"] },
   { kind: "extension", path: "extensions/toriel-cache-warn.ts", why: "no warning before a prompt hits an expired prompt cache" },
   { kind: "skill", path: "skills/messaging", why: "agents are not told how to use toriel_message" },
@@ -138,29 +163,144 @@ function permissionSystemProblem(agentDir: string): string | undefined {
   return why ? `${PERMISSION_PACKAGE} has no usable config at ${config} (${why}): every tool will ask for permission` : undefined;
 }
 
-export interface AuditOptions {
-  /** Check for pi-permission-system (default true; the `warnNoPermissionSystem` setting turns it off). */
-  permissionSystem?: boolean;
+/** The `path` rules of the permission package's config, in file order, with `~` expanded. */
+function pathRules(config: unknown): Array<[string, string]> {
+  const path = (config as { permission?: { path?: unknown } } | null)?.permission?.path;
+  if (typeof path !== "object" || path === null || Array.isArray(path)) {
+    return [];
+  }
+  return Object.entries(path as Record<string, unknown>).flatMap(([pattern, rule]) => {
+    const action = typeof rule === "string" ? rule : (rule as { action?: unknown } | null)?.action;
+    return typeof action === "string" ? [[pattern.replace(/^~(?=\/|$)/, process.env.HOME ?? "~"), action] as [string, string]] : [];
+  });
 }
 
-/** Everything wrong with the setup, in one line for the log and the switcher notice; undefined when nothing is. */
-export function describeResourceProblems(agentDir: string, root = PI_RESOURCES_DIR, opts: AuditOptions = {}): string | undefined {
-  const problems: string[] = [];
+/** What the package's `path` rules (last match wins, `*` crosses directories) say about `file`; undefined when none matches. */
+export function pathAction(config: unknown, file: string): string | undefined {
+  let action: string | undefined;
+  for (const [pattern, a] of pathRules(config)) {
+    const re = new RegExp(`^${pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`);
+    if (re.test(file)) {
+      action = a;
+    }
+  }
+  return action;
+}
+
+const GRANTS_LINK = "toriel-grants";
+
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+
+/** The grants file as a config rule names it: `~/...` under the home directory (pathAction expands it), else absolute. */
+export function shownPath(file: string): string {
+  const home = process.env.HOME;
+  return home && file.startsWith(`${home}/`) ? `~${file.slice(home.length)}` : file;
+}
+
+/**
+ * toriel's permission grants (docs/permissions.md) need two lines in the permission package's
+ * config: the chain names the toriel-grants link (without it every ask still opens its dialog),
+ * and a `path` rule makes writes to the grants file ask, since the file is a stored "yes". Each
+ * finding carries a fix `toriel doctor --fix` can apply when the config has the usual shape.
+ */
+function grantsFindings(agentDir: string, grantsFile: string): Finding[] {
+  const file = join(agentDir, "extensions", PERMISSION_PACKAGE, "config.json");
+  let json: unknown;
+  try {
+    json = JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    return []; // missing or broken: permissionSystemProblem says so
+  }
+  if (!isObject(json)) {
+    return [];
+  }
+  const findings: Finding[] = [];
+  const chain = json.authorizerChain;
+  if (!(Array.isArray(chain) && chain.includes(GRANTS_LINK))) {
+    findings.push({
+      id: "grants-chain",
+      level: "feature",
+      message: `permission grants are inactive: add "${GRANTS_LINK}" to "authorizerChain" in ${file} (for example "authorizerChain": ["${GRANTS_LINK}"])`,
+      fix:
+        chain === undefined || Array.isArray(chain)
+          ? { file, summary: `add "${GRANTS_LINK}" to "authorizerChain"`, edit: (c) => ({ ...c, authorizerChain: [...(Array.isArray(c.authorizerChain) ? c.authorizerChain : []), GRANTS_LINK] }) }
+          : undefined,
+    });
+  }
+  const action = pathAction(json, grantsFile);
+  if (action !== "ask" && action !== "deny") {
+    const shown = shownPath(grantsFile);
+    const permission = json.permission;
+    const fixable = (permission === undefined || isObject(permission)) && (!isObject(permission) || permission.path === undefined || isObject(permission.path));
+    findings.push({
+      id: "grants-path-rule",
+      level: "hardening",
+      message: `nothing stops an agent editing the permission grants file: add "${shown}": "ask" to the "permission" > "path" rules in ${file}, after a "*": "allow" entry (it matches later rules last)`,
+      fix: fixable
+        ? {
+            file,
+            summary: `make writes to ${shown} ask first`,
+            edit: (c) => {
+              const perm = isObject(c.permission) ? c.permission : {};
+              const path = isObject(perm.path) ? perm.path : { "*": "allow" };
+              const others = Object.entries(path).filter(([key]) => key !== shown && key !== grantsFile);
+              return { ...c, permission: { ...perm, path: { ...Object.fromEntries(others), [shown]: "ask" } } };
+            },
+          }
+        : undefined,
+    });
+  }
+  return findings;
+}
+
+export interface AuditOptions {
+  /** Check for pi-permission-system (default true; the `warnNoPermissionSystem` setting turns it off at start-up). */
+  permissionSystem?: boolean;
+  /** Where toriel keeps permission grants (default PERMISSIONS_FILE). */
+  grantsFile?: string;
+}
+
+/** Everything wrong with the setup that the resource audit can see, graded. `toriel doctor` adds what needs the settings and the environment. */
+export function auditFindings(agentDir: string, root = PI_RESOURCES_DIR, opts: AuditOptions = {}): Finding[] {
+  const out: Finding[] = [];
   const setup = piSetupProblem(agentDir);
   if (setup) {
-    problems.push(setup);
+    out.push({ id: "pi-setup", level: "required", message: setup });
   }
   const missing = missingResources(root);
   if (missing.length > 0) {
-    problems.push(`toriel files missing from ${root}: ${missing.map((r) => r.path).join(", ")} - the checkout is incomplete`);
+    out.push({ id: "toriel-files", level: "required", message: `toriel files missing from ${root}: ${missing.map((r) => r.path).join(", ")} - the checkout is incomplete` });
   }
   const stale = staleInstalls(agentDir, root);
   if (stale.length > 0) {
-    problems.push(`old toriel links in the pi agent dir load twice: remove them with rm ${stale.map((f) => f.replace(/ /g, "\\ ")).join(" ")}`);
+    out.push({ id: "stale-links", level: "required", message: `old toriel links in the pi agent dir load twice: remove them with rm ${stale.map((f) => f.replace(/ /g, "\\ ")).join(" ")}` });
   }
-  const permission = opts.permissionSystem === false ? undefined : permissionSystemProblem(agentDir);
-  if (permission) {
-    problems.push(permission);
+  if (opts.permissionSystem !== false) {
+    const permission = permissionSystemProblem(agentDir);
+    if (permission) {
+      out.push({ id: "permission-package", level: "recommended", message: permission });
+    } else {
+      out.push(...grantsFindings(agentDir, opts.grantsFile ?? PERMISSIONS_FILE));
+    }
   }
-  return problems.length > 0 ? problems.join("; ") : undefined;
+  return out;
+}
+
+/**
+ * One line for the start-up notice: the required and recommended problems in full, then how many
+ * lesser ones `/doctor` lists. Undefined when there is nothing to say.
+ */
+export function summarizeFindings(findings: readonly Finding[]): string | undefined {
+  const shown = findings.filter((f) => f.level === "required" || f.level === "recommended");
+  const more = findings.length - shown.length;
+  const parts = shown.map((f) => f.message);
+  if (more > 0) {
+    parts.push(`${more} suggestion${more === 1 ? "" : "s"}: /doctor lists them`);
+  }
+  return parts.length > 0 ? parts.join("; ") : undefined;
+}
+
+/** The audit as a start-up notice line (see summarizeFindings). */
+export function describeResourceProblems(agentDir: string, root = PI_RESOURCES_DIR, opts: AuditOptions = {}): string | undefined {
+  return summarizeFindings(auditFindings(agentDir, root, opts));
 }

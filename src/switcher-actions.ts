@@ -29,6 +29,8 @@ import { SwitcherSummaries } from "./switcher-summaries.ts";
 import { restoreFromTrash } from "./switcher-trash.ts";
 import { isLiveState, type SwitcherSession } from "./switcher.ts";
 import { itemsFromFile, newView } from "./transcript.ts";
+import { runDoctorCommand } from "./doctor-commands.ts";
+import { runPermissions } from "./permission-commands.ts";
 import { operateSchedule, showSchedules } from "./schedule-commands.ts";
 import { errText } from "./util.ts";
 
@@ -527,7 +529,7 @@ export class SwitcherActions {
   }
 
   /** The rest: help, listings, feedback, leaving, stopping the daemon. */
-  private miscCommands(): Pick<Record<SwitcherCommandName, CommandHandler>, "agents" | "feedback" | "mouse" | "help" | "exit" | "quit" | "kill-daemon" | "schedules" | "cancel" | "pause" | "resume"> {
+  private miscCommands(): Pick<Record<SwitcherCommandName, CommandHandler>, "agents" | "feedback" | "mouse" | "help" | "exit" | "quit" | "kill-daemon" | "schedules" | "cancel" | "pause" | "resume" | "permissions" | "doctor"> {
     const leave = async () => {
       this.h.dispose();
     };
@@ -541,6 +543,8 @@ export class SwitcherActions {
       cancel: async (call) => operateSchedule(this.h, "cancel", call, undefined),
       pause: async (call) => operateSchedule(this.h, "pause", call, undefined),
       resume: async (call) => operateSchedule(this.h, "resume", call, undefined),
+      permissions: async (call) => runPermissions(this.h, call, undefined),
+      doctor: async (call) => runDoctorCommand(this.h, call),
       mouse: async (call) => this.h.setMouse(call.args[0] ?? ""),
       help: async () => {
         this.h.infoPanel.show(listing(SWITCHER_COMMANDS));

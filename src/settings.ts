@@ -7,6 +7,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { DEFAULT_PI_CLI } from "./config.ts";
 import { errText } from "./util.ts";
+import { parseDurationText } from "./when.ts";
 
 export type SteeringMode = "all" | "one-at-a-time";
 
@@ -31,6 +32,10 @@ export interface TorielSettings {
   scheduleDailyLimit?: number;
   /** Keep the machine from sleeping while a session is working or a scheduled run is near (default true; needs systemd-inhibit). */
   preventSleep?: boolean;
+  /** Most permission grants one session may hold (default 100; read when the daemon starts). */
+  permissionGrantLimit?: number;
+  /** Lifetimes the permission dialog offers as "allow for ..." rows: durations, or "session" for until revoked (default ["1h", "session"]; [] = none). */
+  permissionGrantDurations?: string[];
   /** Warn when pi-permission-system is not installed or has no usable config (default true). */
   warnNoPermissionSystem?: boolean;
 }
@@ -58,7 +63,7 @@ export function settingsMtime(file: string = settingsFile()): number | null {
   }
 }
 
-const NUMBER_KEYS = ["summaryIntervalMinutes", "summaryMinNewMessages", "scheduleUsagePause", "scheduleDailyLimit"] as const;
+const NUMBER_KEYS = ["summaryIntervalMinutes", "summaryMinNewMessages", "scheduleUsagePause", "scheduleDailyLimit", "permissionGrantLimit"] as const;
 const BOOLEAN_KEYS = ["warnNoPermissionSystem", "preventSleep"] as const;
 /** Number settings where 0 is a meaningful "off". */
 const ZERO_OK: readonly string[] = ["summaryIntervalMinutes", "scheduleUsagePause"];
@@ -89,6 +94,12 @@ export function loadSettings(file: string = settingsFile()): LoadedSettings {
         settings.steeringMode = value;
       } else {
         problems.push(`steeringMode must be "all" or "one-at-a-time"`);
+      }
+    } else if (key === "permissionGrantDurations") {
+      if (Array.isArray(value) && value.length <= 5 && value.every((d) => typeof d === "string" && (d === "session" || parseDurationText(d).ok))) {
+        settings.permissionGrantDurations = value as string[];
+      } else {
+        problems.push(`permissionGrantDurations must be a list of at most 5 durations such as ["1h", "8h", "session"]`);
       }
     } else if ((BOOLEAN_KEYS as readonly string[]).includes(key)) {
       if (typeof value === "boolean") {
