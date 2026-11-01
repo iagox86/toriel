@@ -15,6 +15,7 @@ import { type ToolCall, ToolRun } from "./tool-run.ts";
 import type { DialogRequest } from "./dialogs.ts";
 import { parseLocalCommand } from "./local-command.ts";
 import { displayText } from "./received.ts";
+import { displayScheduled } from "./schedule-label.ts";
 import { messageText, oneLineFlat } from "./format.ts";
 import { mdTheme } from "./pi-theme.ts";
 import { attention, dim } from "./theme.ts";
@@ -388,7 +389,7 @@ function userItem(text: string, tui: TuiAltScreen): UserItem | BashItem {
   if (local) {
     return bashItem(local, tui);
   }
-  return { kind: "user", component: new UserMessage(displayText(text), mdTheme, 1) };
+  return { kind: "user", component: new UserMessage(displayScheduled(displayText(text)), mdTheme, 1) };
 }
 
 /** A finished `!command` replayed from the session. */

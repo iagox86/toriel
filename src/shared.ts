@@ -75,6 +75,11 @@ export interface SessionMeta {
   cost?: number;
   /** Agent profile the session was started as, when it was. */
   agent?: string;
+  /** Active schedules in this session, and the soonest next fire (epoch ms); undefined when it has none. */
+  schedules?: number;
+  nextFire?: number;
+  /** The strip above the editor: a line per active schedule (see scheduleStripLines). */
+  scheduleLines?: string[];
   /** Whether the current model takes images; undefined when pi did not say. */
   acceptsImages?: boolean;
   /** True iff THIS receiving controller holds the exclusive input attach. */
@@ -123,6 +128,30 @@ type ClientCommandBody =
   | { type: "mcp_status"; session: number }
   /** Deliver a message to another session (UUID, UUID prefix, #number or name). `from` is the sender's UUID, for the label. */
   | { type: "message"; id?: string; to: string; text: string; from?: string }
+  /** Create a schedule (docs/design.md item 10) in a session, named by daemon number or UUID. `when` is the time spec words (parsed per `mode`); the prompt is `prompt`, or else whatever follows the spec. `dryRun` answers with the next fire times and creates nothing. */
+  | {
+      type: "schedule_add";
+      id?: string;
+      session?: number;
+      uuid?: string;
+      mode: "auto" | "in" | "at" | "every" | "cron" | "loop";
+      when: string[];
+      prompt?: string;
+      name?: string;
+      max?: number;
+      /** A duration ("3d"), or "never". */
+      expires?: string;
+      catchup?: "once" | "skip";
+      by?: "user" | "agent";
+      dryRun?: boolean;
+      /** Shell checks run by the daemon before each fire (repeating schedules only). */
+      until?: string;
+      while?: string;
+    }
+  /** Schedules of one session, or of all when neither `session` nor `uuid` is given. The response is {schedules: ScheduleView[]}. */
+  | { type: "schedule_list"; id?: string; session?: number; uuid?: string }
+  /** Act on schedules: `ref` is "#3", "3" or a name (within the session when one is given); `all` takes every schedule in scope. */
+  | { type: "schedule_op"; id?: string; op: "pause" | "resume" | "fire" | "cancel"; ref?: string; all?: boolean; session?: number; uuid?: string }
   /** Find a session from a UUID, UUID prefix, `#number` or name; the response is {uuid, name, file, id?} (id = daemon number when the daemon holds it). */
   | { type: "resolve"; id?: string; query: string }
   /** pi's slash commands (extensions, skills, prompt templates). Without a
@@ -171,6 +200,33 @@ type ClientCommandBody =
   /** Send this controller the session's current history again (drift cure). */
   | { type: "resync"; id?: string; session: number };
 
+/** A schedule as controllers and the agent tool see it. */
+export interface ScheduleView {
+  id: number;
+  /** UUID of the session it fires into. */
+  session: string;
+  sessionName?: string;
+  name?: string;
+  prompt: string;
+  /** "every 30m", "cron 0 9 * * 1-5", "once, tomorrow 09:00". */
+  when: string;
+  state: "active" | "paused";
+  /** Epoch ms; undefined while a loop's run is in progress or once paused for good. */
+  next?: number;
+  fired: number;
+  max?: number;
+  /** Epoch ms; null = never. */
+  expiresAt: number | null;
+  by: "user" | "agent";
+  catchup: "once" | "skip";
+  lastFire?: number;
+  lastError?: string;
+  until?: string;
+  while?: string;
+  /** Why it is being held back right now (daily limit, usage budget). */
+  held?: string;
+}
+
 // daemon -> controller
 export type DaemonMessage =
   | { type: "sessions"; sessions: SessionMeta[] }
@@ -178,6 +234,8 @@ export type DaemonMessage =
   | { type: "history"; session: number; messages: unknown[] }
   | { type: "ui_request"; session: number; request: Record<string, unknown> }
   | { type: "exited"; session: number; reason?: string }
+  /** Something worth saying about a session that is not an event in its transcript (a schedule ended or failed). */
+  | { type: "notice"; session: number; text: string }
   /** How many messages pi holds, sent when a run settles; a controller whose count differs asks to resync. */
   | { type: "digest"; session: number; messages: number; streaming: boolean }
   | { type: "response"; id: string; ok: boolean; error?: string; data?: unknown };

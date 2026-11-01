@@ -23,6 +23,7 @@ export const DATA_DIR = process.env.XDG_DATA_HOME ?? path.join(process.env.HOME 
 export const PID_FILE = path.join(DATA_DIR, "toriel", "daemon.pid");
 export const TRASH_DIR = process.env.TORIEL_TRASH ?? path.join(DATA_DIR, "toriel", "trash");
 export const HISTORY_FILE = process.env.TORIEL_HISTORY ?? path.join(DATA_DIR, "toriel", "history.jsonl");
+export const SCHEDULES_FILE = process.env.TORIEL_SCHEDULES ?? path.join(DATA_DIR, "toriel", "schedules.json");
 export const LINEAGE_FILE = process.env.TORIEL_LINEAGE ?? path.join(DATA_DIR, "toriel", "lineage.json");
 export const SESSION_AGENTS_FILE = process.env.TORIEL_SESSION_AGENTS ?? path.join(DATA_DIR, "toriel", "session-agents.json");
 export const HANDLED_FILE = process.env.TORIEL_HANDLED ?? path.join(DATA_DIR, "toriel", "handled-files.json");

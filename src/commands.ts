@@ -19,6 +19,30 @@ const nameArgument = (verb: string) => (cmd: Command) => {
   cmd.argument("[name...]", `new name (leave out to ${verb})`);
 };
 
+/** The flags every schedule-creating command shares. `max` is left off for one-shots. */
+const scheduleFlags = (opts: { max: boolean }) => (cmd: Command) => {
+  cmd.option("-n, --name <name>", "a name to cancel it by (unique in the session)");
+  if (opts.max) {
+    cmd.option("--max <n>", "stop after this many runs");
+  }
+  if (opts.max) {
+    cmd
+      .option("--until <command>", "before each run, run this shell command (no model); it succeeding (exit 0) sends the prompt one last time and ends the schedule")
+      .option("--while <command>", "before each run, run this shell command (no model); it failing ends the schedule quietly");
+  }
+  cmd
+    .option("--expires <after>", 'end after this long, e.g. 3d or 12h, or "never" (default for repeating schedules: 7d)')
+    .option("--catchup <mode>", '"once" (default) runs one late fire after the daemon was down, "skip" just carries on')
+    .option("--dry-run", "show when it would run, create nothing");
+};
+
+const SCHEDULE_NOTE = "\nA scheduled prompt waits until the session is idle (it never interrupts a turn or a permission prompt), wakes a stopped session, and shows in the transcript as scheduled. Recurring schedules end after 7 days unless --expires says otherwise. Options go anywhere; put -- before text that itself starts with a dash. /schedules lists them, /cancel removes one.";
+
+/** The /schedules and /cancel family act on a schedule named like this. */
+const refArgument = (verb: string) => (cmd: Command) => {
+  cmd.argument("[schedule]", `id (3 or #3) or name of the schedule to ${verb} (leave out to pick from a list)`).option("-a, --all", `${verb} every schedule (in this session; in the switcher, all of them)`);
+};
+
 /** Switcher command box. SwitcherActions must handle every name listed here. */
 export const SWITCHER_COMMANDS = [
   {
@@ -46,6 +70,17 @@ export const SWITCHER_COMMANDS = [
   },
   { name: "agents", description: "list the agent profiles (/new --agent <name> starts one) and any problems loading them",
     help: "Agent profiles are markdown files (agents/ in the toriel repo, ~/.config/toriel/agents/, <project>/.toriel/agents/). A broken file is listed under Problems and the rest still load. Format: agents/README.md." },
+  {
+    name: "schedules",
+    description: "list every scheduled prompt in every session, with its next run",
+    help: "Shows all schedules (id, session, what it does, next real run, runs so far, expiry, prompt). Paused ones and delivery failures are marked. Inside a session the same command lists just that session's, and /in /at /every /loop /cron create them there.\nManage with /cancel, /pause and /resume (any id; a name works when it is unique).",
+  },
+  { name: "cancel", description: "remove a scheduled prompt by id or name, or all of them (--all)",
+    help: "Removes a schedule by id (see /schedules). A name works when only one schedule has it. --all removes every schedule in every session.\n\nExamples:\n  /cancel 3\n  /cancel --all", build: refArgument("cancel") },
+  { name: "pause", description: "pause a scheduled prompt without removing it",
+    help: "A paused schedule keeps its settings but does not run; /resume picks up from the next slot.\n\nExample: /pause 3", build: refArgument("pause") },
+  { name: "resume", description: "resume a paused scheduled prompt",
+    help: "Resumes a paused schedule at its next slot. Also clears one that paused itself after failing to deliver.\n\nExample: /resume 3", build: refArgument("resume") },
   { name: "stop", needsSession: true, description: "stop the highlighted session's process (file kept; respawns on next prompt)",
     help: "Stops the highlighted session's pi process but keeps its file; the next message (or /reload, /model, !command) starts it again. Use it to free memory or MCP servers." },
   {
@@ -192,6 +227,73 @@ export const SESSION_COMMANDS = [
     name: "help",
     description: "list toriel's commands for a session",
     help: "<command> --help describes one. Anything else typed with a leading / goes to pi (skills, prompt templates, extension commands).",
+  },
+  {
+    name: "in",
+    description: "send a prompt to this session once, after a delay (/in 90m check the build)",
+    help: `Runs the prompt once, after the delay: 90m, 2h, 1h30m, "45 minutes".\n\nExamples:\n  /in 90m check whether the migration finished\n  /in 10m --name nudge remind me to push${SCHEDULE_NOTE}`,
+    build: (cmd) => {
+      scheduleFlags({ max: false })(cmd);
+      cmd.argument("<delay>", "how long to wait, e.g. 90m").argument("<prompt...>", "what to send");
+    },
+  },
+  {
+    name: "at",
+    description: "send a prompt to this session once, at a clock time (/at 14:30 ..., /at tomorrow 9am ...)",
+    help: `Runs the prompt once at a local clock time: 14:30, 9am, noon, midnight, optionally with a day (today, tomorrow, mon..sun, or 2026-12-25). A time that already passed today means tomorrow, and it says so. A bare "5" is refused as ambiguous: write 5pm or 17:00.\n\nExamples:\n  /at 17:00 summarize what changed today\n  /at tomorrow 9am look at the failing CI run\n  /at fri 16:30 --name wrapup write the weekly notes${SCHEDULE_NOTE}`,
+    build: (cmd) => {
+      scheduleFlags({ max: false })(cmd);
+      cmd.argument("<time>", "clock time, optionally after a day: 14:30, tomorrow 9am").argument("<prompt...>", "what to send");
+    },
+  },
+  {
+    name: "every",
+    description: "send a prompt to this session repeatedly (/every 30m ..., /every weekday 9am ...)",
+    help: `Repeats the prompt on a fixed cadence counted from now: every 30m, 2h, hour. Or at a time of day: day, weekday, weekend or a weekday name, then a time. The first run is one period away (use /fire to run it now). A run that cannot start because the session is busy is skipped, never stacked. For cron syntax use /cron.\n\nExamples:\n  /every 30m check whether the build is green\n  /every weekday 9am summarize overnight changes\n  /every 2h --max 6 --name poll see if the deploy finished\n  /every 5m --until "test -f dist/app.js" the build exists, run the smoke tests (checks cost no tokens)${SCHEDULE_NOTE}`,
+    build: (cmd) => {
+      scheduleFlags({ max: true })(cmd);
+      cmd.argument("<interval>", "30m, 2h, hour, or a day and time: weekday 9am").argument("<prompt...>", "what to send");
+    },
+  },
+  {
+    name: "loop",
+    description: "run a prompt now and again after each run finishes (/loop 5m ...)",
+    help: `Runs the prompt right away, then again once the gap has passed after each run finishes, so runs never overlap. With no gap the agent paces itself: after each run it decides when to look again (it is told how to schedule the next one with toriel_schedule_create, and the loop ends when it does not). --until/--while need a gap.\n\nExamples:\n  /loop 5m check the deploy and report when it is done\n  /loop keep fixing the failing tests; tell me when they pass${SCHEDULE_NOTE}`,
+    build: (cmd) => {
+      scheduleFlags({ max: true })(cmd);
+      cmd.argument("[gap-and-prompt...]", "an optional pause between runs (5m), then what to run; with no gap the agent chooses");
+    },
+  },
+  {
+    name: "cron",
+    description: "send a prompt on a cron schedule (/cron \"0 9 * * 1-5\" ...)",
+    help: `Five fields (minute hour day-of-month month day-of-week) in local time, quoted or not. The next run time it prints is the real one.\n\nExamples:\n  /cron "*/15 * * * *" check the queue\n  /cron 0 9 * * 1-5 morning summary${SCHEDULE_NOTE}`,
+    build: (cmd) => {
+      scheduleFlags({ max: true })(cmd);
+      cmd.argument("<expression>", 'five cron fields, quoted: "0 9 * * 1-5"').argument("<prompt...>", "what to send");
+    },
+  },
+  {
+    name: "schedules",
+    description: "list this session's scheduled prompts with their next run",
+    help: "Shows each schedule: id, what it does, the next real run time, how many runs so far, when it expires, and the prompt. Paused ones and failures are marked. In the switcher it lists every session's schedules.\n\nExamples:\n  /schedules\n  /schedules --all       (every session's)\nManage them with /cancel, /pause, /resume and /fire.",
+    build: (cmd) => {
+      cmd.option("-a, --all", "every session's schedules, not just this one's");
+    },
+  },
+  { name: "cancel", description: "remove a scheduled prompt (/cancel 3, /cancel nightly, /cancel --all)",
+    help: "Removes a schedule by id or name. --all removes every schedule of this session. Deleting a session removes its schedules too.\n\nExamples:\n  /cancel 3\n  /cancel poll\n  /cancel --all", build: refArgument("cancel") },
+  { name: "pause", description: "pause a scheduled prompt without removing it",
+    help: "A paused schedule keeps its settings but does not run; /resume picks up from the next slot.\n\nExample: /pause 3", build: refArgument("pause") },
+  { name: "resume", description: "resume a paused scheduled prompt",
+    help: "Resumes a paused schedule at its next slot (a one-shot whose time passed while paused runs now). Also clears a schedule that paused itself after failing to deliver.\n\nExample: /resume 3", build: refArgument("resume") },
+  {
+    name: "fire",
+    description: "run a scheduled prompt now, without changing its schedule",
+    help: "Sends the schedule's prompt immediately and counts it as a run; the next scheduled run is unchanged. Refused while the session is busy.\n\nExample: /fire 3",
+    build: (cmd) => {
+      cmd.argument("<schedule>", "id (3 or #3) or name");
+    },
   },
   { name: "abort", description: "interrupt the running agent",
     help: "Interrupts the agent's current turn, like esc. Messages still queued come back into the box." },

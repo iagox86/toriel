@@ -72,3 +72,65 @@ describe("toriel_message tool", () => {
     assert.match(out?.content[0]?.text ?? "", /Not delivered: cannot reach the toriel daemon/);
   });
 });
+
+describe("toriel_schedule_* tools", () => {
+  const tool = (name: string) => {
+    const t = registered().find((x) => x.name === name);
+    assert.ok(t, name);
+    return t;
+  };
+  const run = (name: string, params: Record<string, unknown>) => tool(name).execute("t1", params, undefined, undefined, {});
+
+  it("registers create, list and cancel next to the message tool", () => {
+    assert.deepEqual(registered().map((t) => t.name), ["toriel_message", "toriel_schedule_create", "toriel_schedule_list", "toriel_schedule_cancel"]);
+    assert.match(tool("toriel_schedule_create").description, /Prefer long delays/);
+  });
+
+  it("creates a schedule in its own session from one when string, marked as the agent's, and reads back the echo", async () => {
+    const d = await fakeDaemon(() => ({ ok: true, data: { echo: "#2: every 2h, next 16:00 (in 2h), expires Nov 7 14:00", notes: [] } }));
+    try {
+      const out = await run("toriel_schedule_create", { when: "every 2h", prompt: "check the deploy", name: "deploy", max: 4 });
+      assert.match(out.content[0]?.text ?? "", /Scheduled #2: every 2h, next 16:00/);
+      assert.deepEqual(
+        { ...d.seen[0], id: undefined },
+        { type: "schedule_add", uuid: process.env.TORIEL_SESSION_ID, mode: "auto", when: ["every", "2h"], prompt: "check the deploy", name: "deploy", max: 4, by: "agent", id: undefined },
+      );
+    } finally {
+      d.close();
+    }
+  });
+
+  it("passes the daemon's explanation of a bad time back to the model", async () => {
+    const d = await fakeDaemon(() => ({ ok: false, error: '"5" is ambiguous - try "5:00" for 24-hour time, or "5am" / "5pm"' }));
+    try {
+      const out = await run("toriel_schedule_create", { when: "at 5", prompt: "x" });
+      assert.match(out.content[0]?.text ?? "", /Not scheduled: "5" is ambiguous/);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("lists only its own session's schedules", async () => {
+    const d = await fakeDaemon(() => ({ ok: true, data: { schedules: [{ id: 1, name: "poll", when: "every 30m", state: "active", next: 1_800_000_000_000, fired: 2, max: 5, prompt: "look" }] } }));
+    try {
+      const out = await run("toriel_schedule_list", {});
+      assert.match(out.content[0]?.text ?? "", /^#1 poll: every 30m; next .*; 2 run\(s\) of 5; prompt: look$/);
+      assert.equal(d.seen[0]?.uuid, process.env.TORIEL_SESSION_ID);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("cancels by id or name, or everything with all, always within its own session", async () => {
+    const d = await fakeDaemon(() => ({ ok: true, data: { schedules: [{ id: 3, name: "x" }], count: 1 } }));
+    try {
+      const out = await run("toriel_schedule_cancel", { id: "#3" });
+      assert.match(out.content[0]?.text ?? "", /Cancelled #3 x\./);
+      await run("toriel_schedule_cancel", { id: "all" });
+      assert.deepEqual([d.seen[0]?.ref, d.seen[0]?.all, d.seen[0]?.uuid], ["#3", undefined, process.env.TORIEL_SESSION_ID]);
+      assert.deepEqual([d.seen[1]?.ref, d.seen[1]?.all], [undefined, true]);
+    } finally {
+      d.close();
+    }
+  });
+});

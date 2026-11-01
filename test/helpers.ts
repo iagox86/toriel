@@ -43,6 +43,9 @@ export async function startDaemon(extraEnv: Record<string, string> = {}): Promis
     TORIEL_SOCK: sock,
     TORIEL_LOG: path.join(dir, "daemon.log"),
     TORIEL_TRASH: path.join(dir, "trash"),
+    TORIEL_SCHEDULES: path.join(dir, "schedules.json"),
+    // a test daemon must not take real logind sleep locks
+    TORIEL_NO_INHIBIT: "1",
     TORIEL_PI_CLI: FAKE_PI,
     XDG_DATA_HOME: path.join(dir, "data"),
     FAKE_PI_DIR: sessionsDir,

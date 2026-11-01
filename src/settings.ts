@@ -25,6 +25,12 @@ export interface TorielSettings {
   summaryIntervalMinutes?: number;
   /** A summary is refreshed once its session has this many new messages (default 6). */
   summaryMinNewMessages?: number;
+  /** Scheduled runs pause while a usage window of the session's provider is at or above this percent (default 95; 0 = never pause). */
+  scheduleUsagePause?: number;
+  /** Most scheduled runs per 24 hours across all sessions (default 200; read when the daemon starts). */
+  scheduleDailyLimit?: number;
+  /** Keep the machine from sleeping while a session is working or a scheduled run is near (default true; needs systemd-inhibit). */
+  preventSleep?: boolean;
   /** Warn when pi-permission-system is not installed or has no usable config (default true). */
   warnNoPermissionSystem?: boolean;
 }
@@ -52,7 +58,10 @@ export function settingsMtime(file: string = settingsFile()): number | null {
   }
 }
 
-const NUMBER_KEYS = ["summaryIntervalMinutes", "summaryMinNewMessages"] as const;
+const NUMBER_KEYS = ["summaryIntervalMinutes", "summaryMinNewMessages", "scheduleUsagePause", "scheduleDailyLimit"] as const;
+const BOOLEAN_KEYS = ["warnNoPermissionSystem", "preventSleep"] as const;
+/** Number settings where 0 is a meaningful "off". */
+const ZERO_OK: readonly string[] = ["summaryIntervalMinutes", "scheduleUsagePause"];
 const STRING_KEYS = ["provider", "model", "thinking", "piCli", "summaryModel"] as const;
 
 export function loadSettings(file: string = settingsFile()): LoadedSettings {
@@ -81,11 +90,11 @@ export function loadSettings(file: string = settingsFile()): LoadedSettings {
       } else {
         problems.push(`steeringMode must be "all" or "one-at-a-time"`);
       }
-    } else if (key === "warnNoPermissionSystem") {
+    } else if ((BOOLEAN_KEYS as readonly string[]).includes(key)) {
       if (typeof value === "boolean") {
-        settings.warnNoPermissionSystem = value;
+        settings[key as (typeof BOOLEAN_KEYS)[number]] = value;
       } else {
-        problems.push("warnNoPermissionSystem must be true or false");
+        problems.push(`${key} must be true or false`);
       }
     } else if ((STRING_KEYS as readonly string[]).includes(key)) {
       if (typeof value === "string" && value.length > 0) {
@@ -94,8 +103,8 @@ export function loadSettings(file: string = settingsFile()): LoadedSettings {
         problems.push(`${key} must be a non-empty string`);
       }
     } else if ((NUMBER_KEYS as readonly string[]).includes(key)) {
-      // the interval may be 0 (off); the other counts must be positive
-      const min = key === "summaryIntervalMinutes" ? 0 : 1;
+      // some may be 0 (off); the other counts must be positive
+      const min = ZERO_OK.includes(key) ? 0 : 1;
       if (typeof value === "number" && Number.isFinite(value) && value >= min) {
         settings[key as (typeof NUMBER_KEYS)[number]] = value;
       } else {

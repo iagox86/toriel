@@ -8,6 +8,7 @@ import { spinnerFrame } from "./activity.ts";
 import { appendFileSync } from "node:fs";
 import { Container, truncateToWidth, type Focusable } from "@earendil-works/pi-tui";
 import { fmtTokens, oneLine } from "./format.ts";
+import { fmtClockShort } from "./when.ts";
 import { groupTldr } from "./session-list.ts";
 import { childNote, visibleRows } from "./session-tree.ts";
 import {
@@ -20,6 +21,14 @@ import {
   selected,
   streaming as streamingStyle,
 } from "./theme.ts";
+
+/** " @14:05" (the soonest scheduled run), plus " x3" when a session has several; empty when it has none. ASCII on purpose: a clock glyph has an unpredictable width. */
+export function scheduleBadge(s: Pick<SwitcherSession, "schedules" | "nextFire">, now: Date): string {
+  if (s.nextFire === undefined) {
+    return "";
+  }
+  return ` @${fmtClockShort(s.nextFire, now)}${(s.schedules ?? 0) > 1 ? ` x${s.schedules}` : ""}`;
+}
 
 export type SessionState = "streaming" | "idle" | "inactive" | "dead" | "compacting";
 
@@ -40,6 +49,9 @@ export interface SwitcherSession {
   sessionId?: string;
   cwd?: string;
   note?: string;
+  /** Active schedules and the soonest next fire (epoch ms), for the row's clock marker. */
+  schedules?: number;
+  nextFire?: number;
   /** The /comment text: not drawn, only searched by the filter. */
   comment?: string;
   /** Preformatted age of the last request/response, e.g. "30s", "2h". */
@@ -309,7 +321,7 @@ export class Switcher extends Container implements Focusable {
     // summary first, then model. Age always stays.
     let maxName = 0;
     for (const s of this.sessions) {
-      maxName = Math.max(maxName, visibleLen(`${MARKERS[s.state]} ${this.treePrefix(s)}${s.name}`) + 3);
+      maxName = Math.max(maxName, visibleLen(`${MARKERS[s.state]} ${this.treePrefix(s)}${s.name}${scheduleBadge(s, new Date())}`) + 3);
     }
     const nameWidth = Math.max(18, maxName + 1);
     const hasModel = this.sessions.some((s) => s.model);
@@ -371,9 +383,10 @@ export class Switcher extends Container implements Focusable {
       const marker = s.note === "waiting on permission" ? attention("!") : s.state === "streaming" ? streamingStyle(spinnerFrame(Date.now())) : MARKERS[s.state];
       const markerText = isSel ? marker : dim(marker);
       const displayName = this.treePrefix(s) + (s.muted ? `[pi] ${oneLine(s.name)}` : oneLine(s.name));
-      const bodyCell = truncateToWidth(displayName, nameWidth - 3).padEnd(nameWidth - 3);
+      const badge = scheduleBadge(s, new Date());
+      const bodyCell = truncateToWidth(displayName, nameWidth - 3 - badge.length).padEnd(nameWidth - 3 - badge.length);
       // recency colours; the selected row keeps its accent, external ones stay dim
-      const body = isSel ? bodyCell : s.muted ? dim(bodyCell) : byAge(s.ageMs, bodyCell);
+      const body = (isSel ? bodyCell : s.muted ? dim(bodyCell) : byAge(s.ageMs, bodyCell)) + (isSel ? badge : dim(badge));
       const ageText = truncateToWidth(s.age ?? "-", ageW).padEnd(ageW);
       const ageCell = isSel ? dim(ageText) : byAge(s.muted ? undefined : s.ageMs, ageText);
       let line = `${markerText}  ${body}`;

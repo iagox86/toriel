@@ -29,6 +29,7 @@ import { SwitcherSummaries } from "./switcher-summaries.ts";
 import { restoreFromTrash } from "./switcher-trash.ts";
 import { isLiveState, type SwitcherSession } from "./switcher.ts";
 import { itemsFromFile, newView } from "./transcript.ts";
+import { operateSchedule, showSchedules } from "./schedule-commands.ts";
 import { errText } from "./util.ts";
 
 const LOCK_BITS = 64 | 128; // kitty caps_lock / num_lock, reported in the modifier field
@@ -526,7 +527,7 @@ export class SwitcherActions {
   }
 
   /** The rest: help, listings, feedback, leaving, stopping the daemon. */
-  private miscCommands(): Pick<Record<SwitcherCommandName, CommandHandler>, "agents" | "feedback" | "mouse" | "help" | "exit" | "quit" | "kill-daemon"> {
+  private miscCommands(): Pick<Record<SwitcherCommandName, CommandHandler>, "agents" | "feedback" | "mouse" | "help" | "exit" | "quit" | "kill-daemon" | "schedules" | "cancel" | "pause" | "resume"> {
     const leave = async () => {
       this.h.dispose();
     };
@@ -536,6 +537,10 @@ export class SwitcherActions {
         this.h.infoPanel.show(agentListing(agents, problems));
       },
       feedback: async (call, target) => runFeedback(this.h, call, target?.key),
+      schedules: async () => showSchedules(this.h, undefined),
+      cancel: async (call) => operateSchedule(this.h, "cancel", call, undefined),
+      pause: async (call) => operateSchedule(this.h, "pause", call, undefined),
+      resume: async (call) => operateSchedule(this.h, "resume", call, undefined),
       mouse: async (call) => this.h.setMouse(call.args[0] ?? ""),
       help: async () => {
         this.h.infoPanel.show(listing(SWITCHER_COMMANDS));

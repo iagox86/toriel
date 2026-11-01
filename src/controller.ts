@@ -110,6 +110,7 @@ class Controller {
   statusLine = new Text("", 0, 0);
   /** "FORK of X" above the chat box while viewing a child session; empty otherwise. */
   banner = new Text("", 0, 0);
+  scheduleStrip = new Text("", 0, 0);
   /** Viewing an agent-started session: its chat box gets the accent border. */
   private childBorder = false;
   private lineageCache: { at: number; data: Lineage } = { at: 0, data: {} };
@@ -334,6 +335,13 @@ class Controller {
       case "ui_request":
         this.onUiRequest(msg.session, msg.request as unknown as DialogRequest);
         return;
+      case "notice": {
+        const meta = this.sessions.get(msg.session);
+        if (meta && this.keyFor(meta) === this.viewing) {
+          this.notify(msg.text);
+        }
+        return;
+      }
       case "exited": {
         const meta = this.sessions.get(msg.session);
         if (meta && this.keyFor(meta) === this.viewing) {
@@ -856,6 +864,7 @@ class Controller {
     const rel = relationOf(lineage, uuid);
     const parentName = rel ? this.nameOfSession(rel.parentId) ?? rel.parentName : undefined;
     this.banner.setText(rel && parentName && !this.switching.isOpen ? accent(truncateToWidth(` ${bannerText(rel, parentName)}`, width)) : "");
+    this.scheduleStrip.setText(meta?.scheduleLines?.length && !this.switching.isOpen ? meta.scheduleLines.map((l) => dim(truncateToWidth(` ${l}`, width))).join("\n") : "");
     this.childBorder = !!rel && !this.switching.isOpen;
     const costOf = (id: string): number => [...this.sessions.values()].find((m) => m.sessionId === id)?.cost ?? 0;
     const status = buildStatusLine({

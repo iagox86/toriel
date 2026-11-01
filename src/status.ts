@@ -5,6 +5,7 @@ import { fmtTokens } from "./format.ts";
 import { displayName, type LocalSession } from "./session-list.ts";
 import type { SessionMeta, UsageReport } from "./shared.ts";
 import { accent, attention, dim, gauge } from "./theme.ts";
+import { fmtNext } from "./when.ts";
 
 export interface FleetStats {
   running: number;
@@ -170,6 +171,9 @@ function sessionSegments(inp: StatusInputs): Segment[] {
       const pct = Math.round((used / meta.ctxMax) * 100);
       out.push({ text: `ctx ${gauge(pct, `${fmtTokens(used)}/${fmtTokens(meta.ctxMax)} ${pct}%`)}`, drop: 2 });
     }
+  }
+  if (meta?.schedules && meta.nextFire !== undefined) {
+    out.push({ text: accent(`sched ${meta.schedules}, next ${fmtNext(meta.nextFire, new Date())}`), drop: 2 });
   }
   if (meta?.thinkingLevel) {
     out.push({ text: `think ${gauge(EFFORT_BADNESS[meta.thinkingLevel] ?? 50, meta.thinkingLevel)}`, drop: 5 });

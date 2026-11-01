@@ -6,6 +6,7 @@ import type { ChildManager } from "./daemon-children.ts";
 import type { ClientHub } from "./daemon-hub.ts";
 import type { SessionRegistry } from "./daemon-session.ts";
 import type { Presence } from "./presence.ts";
+import type { Scheduler } from "./scheduler.ts";
 import type { ClientCommand } from "./shared.ts";
 
 export interface DaemonContext {
@@ -16,6 +17,8 @@ export interface DaemonContext {
   presence: Presence;
   /** Injects handed to session bridges and not yet seen in a transcript. */
   bridges: BridgeTracker;
+  /** Timed prompts (docs/design.md item 10). */
+  scheduler: Scheduler;
   shutdown(): void;
 }
 

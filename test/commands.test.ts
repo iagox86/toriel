@@ -116,3 +116,47 @@ describe("bare /mcp", () => {
     assert.deepEqual(r.kind === "run" ? r.call.args : null, []);
   });
 });
+
+describe("schedule commands", () => {
+  const call = (line: string) => {
+    const r = parseCommandLine(SESSION_COMMANDS, line);
+    return r.kind === "run" ? r.call : undefined;
+  };
+
+  it("passes the whole time spec and prompt through in order, with flags taken out", () => {
+    const c = call("/every 30m check the build --max 5 --name poll");
+    assert.deepEqual(c?.args, ["30m", "check", "the", "build"]);
+    assert.equal(c?.opts.max, "5");
+    assert.equal(c?.opts.name, "poll");
+  });
+
+  it("keeps a multi-word clock time together with the prompt for the daemon to split", () => {
+    assert.deepEqual(call("/at tomorrow 9am look at CI")?.args, ["tomorrow", "9am", "look", "at", "CI"]);
+  });
+
+  it("reads a quoted cron expression as one word and /loop with no gap as just the prompt", () => {
+    assert.deepEqual(call('/cron "*/15 * * * *" ping')?.args, ["*/15 * * * *", "ping"]);
+    assert.deepEqual(call("/loop keep going")?.args, ["keep", "going"]);
+  });
+
+  it("protects prompt text that starts with a dash behind --", () => {
+    assert.deepEqual(call("/in 5m -- -v is a flag")?.args, ["5m", "-v", "is", "a", "flag"]);
+  });
+
+  it("asks for a prompt, and for what to cancel, in plain words", () => {
+    assert.equal(parseCommandLine(SESSION_COMMANDS, "/in 5m").kind, "error");
+    assert.equal(call("/cancel 3")?.args[0], "3");
+    assert.equal(call("/cancel --all")?.opts.all, true);
+  });
+
+  it("is offered in both the session and the switcher where it makes sense", () => {
+    const names = (specs: readonly { name: string }[]) => specs.map((s) => s.name);
+    for (const n of ["in", "at", "every", "loop", "cron", "schedules", "cancel", "pause", "resume", "fire"]) {
+      assert.ok(names(SESSION_COMMANDS).includes(n), `session /${n}`);
+    }
+    for (const n of ["schedules", "cancel", "pause", "resume"]) {
+      assert.ok(names(SWITCHER_COMMANDS).includes(n), `switcher /${n}`);
+    }
+    assert.ok(!names(SWITCHER_COMMANDS).includes("every"), "schedules are created inside a session only");
+  });
+});
