@@ -343,6 +343,7 @@ describe("isInjectType", () => {
   it("accepts the current type and the one sessions recorded before the rename", () => {
     assert.equal(isInjectType("toriel-inject"), true);
     assert.equal(isInjectType("ronpi-inject"), true);
+    assert.equal(isInjectType("toriel-job"), true, "a background job's exit notice is shown too");
     assert.equal(isInjectType("something-else"), false);
     assert.equal(isInjectType(undefined), false);
   });

@@ -53,7 +53,7 @@ describe("resourceArgs", () => {
 
 describe("TORIEL_TOOLS", () => {
   it("is the + modifier of every tool a shipped extension registers", () => {
-    assert.deepEqual([...TORIEL_TOOLS], ["+toriel_message", "+toriel_schedule_create", "+toriel_schedule_list", "+toriel_schedule_cancel", "+toriel_usage"]);
+    assert.deepEqual([...TORIEL_TOOLS], ["+toriel_message", "+toriel_schedule_create", "+toriel_schedule_list", "+toriel_schedule_cancel", "+toriel_usage", "+toriel_job"]);
   });
 });
 

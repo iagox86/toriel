@@ -760,11 +760,11 @@ describe("daemon: lifecycle", () => {
       return JSON.parse(fs.readFileSync(`${f}.argv.json`, "utf8")) as string[];
     };
     const tools = (): string | undefined => argv()[argv().indexOf("--tools") + 1];
-    assert.equal(tools(), "+toriel_message,+toriel_schedule_create,+toriel_schedule_list,+toriel_schedule_cancel,+toriel_usage");
+    assert.equal(tools(), "+toriel_message,+toriel_schedule_create,+toriel_schedule_list,+toriel_schedule_cancel,+toriel_usage,+toriel_job");
     await c.request({ type: "prompt", session: sessionId, message: "hi" });
     await c.waitFor(isSettled);
     await c.request({ type: "reload", session: sessionId });
-    assert.equal(tools(), "+toriel_message,+toriel_schedule_create,+toriel_schedule_list,+toriel_schedule_cancel,+toriel_usage", "a /reload resume passes them again");
+    assert.equal(tools(), "+toriel_message,+toriel_schedule_create,+toriel_schedule_list,+toriel_schedule_cancel,+toriel_usage,+toriel_job", "a /reload resume passes them again");
 
     const explore = await c.request({ type: "spawn", cwd: harness.dir, agent: "explore" });
     await c.waitFor((m) => m.type === "history" && m.session === explore.sessionId);
@@ -788,6 +788,7 @@ describe("daemon: lifecycle", () => {
       "toriel-agents.ts",
       "toriel-cache-warn.ts",
       "toriel-grants.ts",
+      "toriel-jobs.ts",
       "toriel-session-bridge.ts",
       "toriel-usage.ts",
     ]);
@@ -799,7 +800,7 @@ describe("daemon: lifecycle", () => {
     await c.waitFor((m) => m.type === "history" && m.session === explore.sessionId);
     const eargv = argvOf(explore.sessionId as number);
     assert.ok(eargv.includes("--no-extensions"));
-    assert.equal(flagged(eargv, "-e").length, 5, "explicit -e still loads under --no-extensions");
+    assert.equal(flagged(eargv, "-e").length, 6, "explicit -e still loads under --no-extensions");
     assert.deepEqual(flagged(eargv, "--skill"), []);
   });
 
