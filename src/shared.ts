@@ -134,6 +134,21 @@ type ClientCommandBody =
   | { type: "mcp_status"; session: number }
   /** Deliver a message to another session (UUID, UUID prefix, #number or name). `from` is the sender's UUID, for the label. */
   | { type: "message"; id?: string; to: string; text: string; from?: string }
+  /** Start a subagent for the session `from` (its UUID). Answers when the subagent settles, or at once with a handle when `background`. */
+  | {
+      type: "agent_spawn";
+      id?: string;
+      from: string;
+      agent: string;
+      task: string;
+      description: string;
+      model?: string;
+      background?: boolean;
+      context?: "fresh" | "fork";
+      system?: string;
+    }
+  /** List, inspect, wait for, stop or fetch the result of the subagents the session `from` started. `ref` is a handle number (#2 or 2). */
+  | { type: "agents_op"; id?: string; from: string; action: "list" | "status" | "wait" | "stop" | "result"; ref?: string; timeoutMs?: number }
   /** Create a schedule (docs/design.md item 10) in a session, named by daemon number or UUID. `when` is the time spec words (parsed per `mode`); the prompt is `prompt`, or else whatever follows the spec. `dryRun` answers with the next fire times and creates nothing. */
   | {
       type: "schedule_add";

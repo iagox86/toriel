@@ -134,3 +134,66 @@ describe("toriel_schedule_* tools", () => {
     }
   });
 });
+
+describe("toriel_agent tools", () => {
+  const registeredWith = (env: Record<string, string>) => {
+    const keep = { can: process.env.TORIEL_CAN_SPAWN, types: process.env.TORIEL_AGENT_TYPES };
+    Object.assign(process.env, env);
+    try {
+      return registered();
+    } finally {
+      for (const [k, v] of [["TORIEL_CAN_SPAWN", keep.can], ["TORIEL_AGENT_TYPES", keep.types]] as const) {
+        if (v === undefined) {
+          delete process.env[k];
+        } else {
+          process.env[k] = v;
+        }
+      }
+    }
+  };
+
+  it("registers only where the daemon allows spawning, listing the live agent types in the description", () => {
+    assert.deepEqual(registered().map((t) => t.name).filter((n) => n.startsWith("toriel_agent")), []);
+    const tools = registeredWith({ TORIEL_CAN_SPAWN: "1", TORIEL_AGENT_TYPES: "- explore: look around" });
+    const spawn = tools.find((t) => t.name === "toriel_agent");
+    assert.ok(tools.some((t) => t.name === "toriel_agents"));
+    assert.match(spawn?.description ?? "", /Agent types:\n- explore: look around/);
+  });
+
+  it("sends the brief with its own session id and returns the subagent's text", async () => {
+    const d = await fakeDaemon(() => ({ ok: true, data: { text: "the answer", state: "done" } }));
+    try {
+      const spawn = registeredWith({ TORIEL_CAN_SPAWN: "1" }).find((t) => t.name === "toriel_agent");
+      const out = await spawn?.execute("t1", { agent: "explore", task: "find x", description: "find x" }, undefined, undefined, {});
+      assert.equal(out?.content[0]?.text, "the answer");
+      assert.deepEqual([d.seen[0]?.type, d.seen[0]?.from, d.seen[0]?.agent, d.seen[0]?.task], ["agent_spawn", process.env.TORIEL_SESSION_ID, "explore", "find x"]);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("drops the connection when the call is cancelled, which is how the daemon stops the subagent", async () => {
+    const d = await fakeDaemon(() => undefined);
+    try {
+      const spawn = registeredWith({ TORIEL_CAN_SPAWN: "1" }).find((t) => t.name === "toriel_agent");
+      const ctl = new AbortController();
+      const pending = spawn?.execute("t1", { agent: "explore", task: "x", description: "x" }, ctl.signal, undefined, {});
+      await new Promise((r) => setTimeout(r, 100));
+      ctl.abort();
+      assert.match((await pending)?.content[0]?.text ?? "", /Subagent not started: cancelled/);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("returns the daemon's refusal as text", async () => {
+    const d = await fakeDaemon(() => ({ ok: false, error: "3 subagents are already running (limit 3)." }));
+    try {
+      const agents = registeredWith({ TORIEL_CAN_SPAWN: "1" }).find((t) => t.name === "toriel_agents");
+      const out = await agents?.execute("t1", { action: "list" }, undefined, undefined, {});
+      assert.match(out?.content[0]?.text ?? "", /Not done: 3 subagents are already running/);
+    } finally {
+      d.close();
+    }
+  });
+});

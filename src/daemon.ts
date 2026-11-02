@@ -31,6 +31,8 @@ import { log } from "./log.ts";
 import { DEFAULT_GRANT_LIMITS, GrantStore } from "./permissions.ts";
 import { Presence } from "./presence.ts";
 import { DEFAULT_LIMITS, Scheduler } from "./scheduler.ts";
+import { SubagentManager } from "./daemon-subagents.ts";
+import { DEFAULT_SUBAGENT_LIMITS } from "./subagents.ts";
 import { needsAwake, SleepInhibitor } from "./sleep-inhibit.ts";
 import { collectFindings } from "./doctor.ts";
 import { loadSettings } from "./settings.ts";
@@ -47,14 +49,17 @@ function createContext(shutdown: () => void): DaemonContext {
   const children = new ChildManager(hub, usage, bridges);
   // the scheduler's host reads the context lazily, so it can be built inside it
   const grants = new GrantStore(PERMISSIONS_FILE, Date.now, { perSession: loadSettings().settings.permissionGrantLimit ?? DEFAULT_GRANT_LIMITS.perSession });
-  const ctx: DaemonContext = { registry, hub, children, presence, bridges, scheduler: new Scheduler(schedulerHost(() => ctx, usage), SCHEDULES_FILE, { ...DEFAULT_LIMITS, dailyFires: loadSettings().settings.scheduleDailyLimit ?? DEFAULT_LIMITS.dailyFires }), grants, shutdown };
+  const ctx: DaemonContext = { registry, hub, children, presence, bridges, scheduler: new Scheduler(schedulerHost(() => ctx, usage), SCHEDULES_FILE, { ...DEFAULT_LIMITS, dailyFires: loadSettings().settings.scheduleDailyLimit ?? DEFAULT_LIMITS.dailyFires }), grants, subagents: new SubagentManager(() => ctx, DEFAULT_SUBAGENT_LIMITS), shutdown };
   // a session going idle is what a waiting schedule is looking for, and what starts a gap loop's countdown
   children.onSettled = (s) => {
+    ctx.subagents.onSettled(s);
     if (s.sessionId) {
       ctx.scheduler.runFinished(s.sessionId);
     }
     ctx.scheduler.poke();
   };
+  children.onAssistantMessage = (s, message) => ctx.subagents.onMessage(s, message);
+  children.onStopped = (s) => ctx.subagents.onStopped(s);
   return ctx;
 }
 

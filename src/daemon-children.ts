@@ -8,11 +8,12 @@ import { type BridgeTracker, INJECT_COMMAND, injectedId, mergedQueueTexts, parse
 import type { ClientHub } from "./daemon-hub.ts";
 import type { DaemonSession } from "./daemon-session.ts";
 import { randomUUID } from "node:crypto";
-import { type AgentProfile, profileArgs } from "./agents.ts";
+import { type AgentProfile, loadAgents, profileArgs } from "./agents.ts";
 import { recordHandled } from "./handled-files.ts";
 import { historyOf } from "./daemon-history.ts";
-import { resourceArgs, TORIEL_TOOLS } from "./resources.ts";
-import { lineageArgs, sessionIdOfFile } from "./lineage.ts";
+import { resourceArgs, SPAWN_TOOLS, TORIEL_TOOLS } from "./resources.ts";
+import { lineageArgs, loadLineage, parentMap, sessionIdOfFile, subagentDepth } from "./lineage.ts";
+import { DEFAULT_SUBAGENT_LIMITS, HARD_MAX_DEPTH } from "./subagents.ts";
 import { profileOfSession, saveSessionAgent } from "./session-agents.ts";
 import { log } from "./log.ts";
 import type { UsageReport } from "./shared.ts";
@@ -47,6 +48,10 @@ export class ChildManager {
   private readonly bridges: BridgeTracker;
   /** Called when a session's run settles or its compaction ends (the daemon uses it to wake waiting schedules). */
   onSettled?: (s: DaemonSession) => void;
+  /** Called with each finished assistant message (the subagent manager counts turns and tokens with it). */
+  onAssistantMessage?: (s: DaemonSession, message: { role?: string; stopReason?: string } | undefined) => void;
+  /** Called when a session's process is stopped or found dead (subagents end with their session; foreground ones with their parent). */
+  onStopped?: (s: DaemonSession) => void;
 
   constructor(hub: ClientHub, usage: Map<string, UsageReport>, bridges: BridgeTracker) {
     this.hub = hub;
@@ -70,6 +75,21 @@ export class ChildManager {
     return resolveChildConfig(settings);
   }
 
+  /** Whether `s` gets the toriel_agent tools: its profile allows spawning and it is not already too deep. */
+  mayDelegate(s: DaemonSession): boolean {
+    const depth = subagentDepth(s.sessionId, parentMap(loadLineage()));
+    return (!s.agent || s.agent.canSpawn) && depth < Math.min(DEFAULT_SUBAGENT_LIMITS.maxDepth, HARD_MAX_DEPTH);
+  }
+
+  /** The environment the toriel_agent tool reads: whether to register, and the agent types its description lists. */
+  private delegationEnv(s: DaemonSession): Record<string, string> {
+    if (!this.mayDelegate(s)) {
+      return {};
+    }
+    const types = loadAgents(s.cwd).agents.map((a) => `- ${a.name}: ${a.description}`).join("\n");
+    return { TORIEL_CAN_SPAWN: "1", TORIEL_AGENT_TYPES: types };
+  }
+
   /**
    * Start a pi process for `s` with `args` and wire its events in, applying
    * toriel's queue preference: messages sent while a run is in flight are all
@@ -85,7 +105,7 @@ export class ChildManager {
       cliPath: cfg.piCli,
       cwd: s.cwd,
       args,
-      env: childEnv(s, SOCK),
+      env: { ...childEnv(s, SOCK), ...this.delegationEnv(s) },
     });
     client.onEvent((event) => this.onEvent(s, event as Record<string, unknown>));
     await client.start();
@@ -137,7 +157,7 @@ export class ChildManager {
     // installed since never reach the model. +name entries join them to that loadout. A
     // profile that lists tools owns the loadout (pi forbids mixing the two forms).
     if (!agent?.tools) {
-      args.push("--tools", TORIEL_TOOLS.join(","));
+      args.push("--tools", TORIEL_TOOLS.filter((t) => this.mayDelegate(s) || !SPAWN_TOOLS.includes(t.slice(1))).join(","));
     }
     if (isNew && cfg.thinking && !agent?.thinking) {
       args.push("--thinking", cfg.thinking);
@@ -198,6 +218,7 @@ export class ChildManager {
     } catch {
       // best effort; the process is going away regardless
     }
+    this.onStopped?.(s);
     log(`session ${s.id} deactivated`);
   }
 
@@ -254,6 +275,7 @@ export class ChildManager {
       s.streaming = false;
       s.compacting = false;
       this.dropBridge(s, "the session's process stopped answering");
+      this.onStopped?.(s);
       log(`session ${s.id} refreshMeta failed: ${err}`);
     }
   }
@@ -439,6 +461,7 @@ export class ChildManager {
         s.totalTokens += usage.totalTokens ?? 0;
         s.totalCost += usage.cost?.total ?? 0;
       }
+      this.onAssistantMessage?.(s, event.message as { role?: string; stopReason?: string } | undefined);
     }
     if (type === "message_start" || type === "message_end" || type === "agent_start" || type === "agent_settled") {
       log(
