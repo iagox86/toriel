@@ -1171,3 +1171,40 @@ Parked from that work:
 - Sandboxing the agent (the container ticket) is the only thing that makes a grants file safe
   against an agent that tries; the path rule is a speed bump (it misses `python -c` and
   variable-built paths).
+
+## Background commands (built 2026-11-02, slices 1-2; #97, #8)
+
+Built: `pi/extensions/toriel-jobs.ts` replaces pi's `bash` with a same-named tool that adds
+`run_in_background`, plus `toriel_job` (list / output / stop). User-facing behavior and limits:
+docs/reference.md "Background commands".
+
+Decisions and why:
+- **Same name, not a new tool.** pi-permission-system gates by tool name and command, so a tool
+  called `bash` keeps every `bash` rule and grant with no setup. A differently named tool would
+  need a `shellTools` entry in the user's permission config (a setup requirement, so a doctor
+  check) or it would bypass the `git *` / `sudo *` rules. Verified with real pi: a background
+  `sudo -n true` was stopped by the `sudo *` rule.
+- **Foreground stays pi's own code.** `createBashToolDefinition(...).execute` is called as is.
+  Only the background path spawns anything. A background job gets pi's PATH (its vendored bin
+  directory; `getShellEnv` is not exported, so `shellEnv` repeats it) and the PI_* session
+  variables.
+- **The session owns its jobs.** Detached process group, SIGKILL on `session_shutdown`. Simple,
+  and matches Claude Code. Cost: a pi that is SIGKILLed or crashes leaves its jobs running, and
+  they lose the 2-hour cap and the exit notice along with the pi process that enforced them.
+- **The exit notice is sent from inside the extension** with `pi.sendMessage(..., {triggerTurn:
+  true, deliverAs: "followUp"})`, not through the daemon bridge; the transcript shows it
+  because `isInjectType` accepts `toriel-job`.
+
+Not done (slices 3+):
+- `/jobs` (list, tail, stop) and a status segment (`STATUS_KEY` is set; nothing reads it yet).
+- #8, the user key that sends a running foreground command to the background. The foreground
+  call is pi's, which owns the child, so this needs the override to own the foreground spawn
+  too (own streaming, truncation, rendering), or a handover that pi does not offer. Plan the
+  key as controller -> daemon -> bridge command -> extension.
+- A daemon-owned registry, if jobs must survive `/stop` or pi crashes (needs a `job_*`
+  protocol, an orphan sweep on daemon start, and a decision about who gets the notice).
+- `commandPrefix` / `shellPath` from pi's settings are ignored for background jobs (plain
+  `bash`).
+- Jobs in subagent sessions and whether they count against the spawn limits (ticket 5).
+- A profile that names `bash` in `tools:` without `toriel_job` can start jobs it cannot list or
+  stop (see agents/README.md).

@@ -259,9 +259,12 @@ function appendCall(view: SessionView, env: EventEnv, call: ToolCall): void {
 /** The custom message type sessions recorded before the rename; they still render as injections. */
 const LEGACY_INJECT_TYPE = "ronpi-inject";
 
-/** True for the custom message type of a session-bridge injection, current or pre-rename. */
+/** The custom message the jobs extension sends when a background job ends (pi/extensions/toriel-jobs.ts). */
+const JOB_TYPE = "toriel-job";
+
+/** True for the custom message type of a session-bridge injection (current or pre-rename) or a background job's exit notice: all show like a received message. */
 export function isInjectType(customType: string | undefined): boolean {
-  return customType === INJECT_TYPE || customType === LEGACY_INJECT_TYPE;
+  return customType === INJECT_TYPE || customType === LEGACY_INJECT_TYPE || customType === JOB_TYPE;
 }
 
 /** A session-bridge injection: a custom message the daemon delivered, shown like a received user message. */

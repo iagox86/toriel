@@ -48,6 +48,7 @@ export const RESOURCES: readonly Resource[] = [
   { kind: "extension", path: "extensions/toriel-agents.ts", why: "the toriel_message and toriel_schedule_* tools (messaging other sessions, scheduling prompts) are missing", tools: ["toriel_message", "toriel_schedule_create", "toriel_schedule_list", "toriel_schedule_cancel"] },
   { kind: "extension", path: "extensions/toriel-grants.ts", why: "permission grants (/permissions) have no effect: every ask opens its dialog" },
   { kind: "extension", path: "extensions/toriel-usage.ts", why: "the toriel_usage tool and usage reporting are missing", tools: ["toriel_usage"] },
+  { kind: "extension", path: "extensions/toriel-jobs.ts", why: "agents cannot start background commands (bash run_in_background and the toriel_job tool are missing)", tools: ["toriel_job"] },
   { kind: "extension", path: "extensions/toriel-cache-warn.ts", why: "no warning before a prompt hits an expired prompt cache" },
   { kind: "skill", path: "skills/messaging", why: "agents are not told how to use toriel_message" },
   { kind: "skill", path: "skills/scheduling", why: "agents are not told how to use toriel_schedule_create" },
