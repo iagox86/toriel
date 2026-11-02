@@ -7,6 +7,7 @@ import { BashExecutionComponent, ToolExecutionComponent } from "@earendil-works/
 import { AssistantMessage, CompactionRow, UserMessage } from "./components.ts";
 import { type ActivityState, reduceActivity } from "./activity.ts";
 import { messagesAdded } from "./drift.ts";
+import { repairFences } from "./fence-repair.ts";
 import { INJECT_TYPE } from "./daemon-bridge.ts";
 import { binaryReadDisplay } from "./binary-view.ts";
 import { prettyError } from "./error-format.ts";
@@ -131,7 +132,7 @@ export function newView(): SessionView {
 
 /** Show a just-sent prompt at once; pi's own user message later adopts it instead of adding a second. */
 export function echoUser(view: SessionView, text: string, env: Pick<EventEnv, "addItem">): void {
-  const item: UserItem = { kind: "user", component: new UserMessage(text, mdTheme, 1) };
+  const item: UserItem = { kind: "user", component: new UserMessage(repairFences(text), mdTheme, 1) };
   view.echoes.push({ text: text.trim(), item });
   env.addItem(item);
   if (!view.activity) {
@@ -218,10 +219,35 @@ export interface EventEffects {
   messageEnded?: boolean;
 }
 
+/** An assistant message with nothing to show (a tool call alone, or blank text). */
+function rendersNothing(item: AssistantItem): boolean {
+  return !item.partial.content.some((b) => {
+    const block = b as { type?: string; text?: string; thinking?: string };
+    return (block.type === "text" && Boolean(block.text?.trim())) || (block.type === "thinking" && Boolean(block.thinking?.trim()));
+  });
+}
+
+/**
+ * The tool run a new call joins: the last item, looking back past assistant
+ * messages that show nothing (each call of an agent loop sits in its own).
+ */
+function lastToolRun(items: readonly Item[]): ToolItem | undefined {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i] as Item;
+    if (item.kind === "tools") {
+      return item;
+    }
+    if (item.kind !== "assistant" || !rendersNothing(item)) {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
 /** Add a call to the trailing tool run, or start a new run. */
 function appendCall(view: SessionView, env: EventEnv, call: ToolCall): void {
-  const last = view.items[view.items.length - 1];
-  if (last?.kind === "tools") {
+  const last = lastToolRun(view.items);
+  if (last) {
     last.component.calls.push(call);
     return;
   }
@@ -389,7 +415,7 @@ function userItem(text: string, tui: TuiAltScreen): UserItem | BashItem {
   if (local) {
     return bashItem(local, tui);
   }
-  return { kind: "user", component: new UserMessage(displayScheduled(displayText(text)), mdTheme, 1) };
+  return { kind: "user", component: new UserMessage(repairFences(displayScheduled(displayText(text))), mdTheme, 1) };
 }
 
 /** A finished `!command` replayed from the session. */
@@ -456,8 +482,8 @@ export function itemsFromMessages(messages: unknown[], tui: TuiAltScreen, cwd: s
         const result = { content: (m.content ?? []) as never, details: m.details, isError: failed };
         component.updateResult((binaryReadDisplay(m.toolName, call?.args, result, cwd) ?? result) as never, false);
         const toolCall: ToolCall = { name: m.toolName, args: call?.args, component, failed, done: true };
-        const last = items[items.length - 1];
-        if (last?.kind === "tools") {
+        const last = lastToolRun(items);
+        if (last) {
           last.component.calls.push(toolCall);
         } else {
           const run = new ToolRun();

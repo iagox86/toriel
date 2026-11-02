@@ -56,6 +56,37 @@ describe("command autocomplete", () => {
   });
 });
 
+describe("tab on an empty box", () => {
+  const force = async (ctx: AutocompleteContext, lines: string[]) => {
+    const p = new CommandAutocomplete(() => ctx);
+    return { p, r: await p.getSuggestions(lines, 0, 0, { signal: new AbortController().signal, force: true }) };
+  };
+
+  it("offers the slash commands, with descriptions, instead of files", async () => {
+    const { r } = await force({ ...base, cwd: process.cwd() }, [""]);
+    assert.deepEqual(r?.items.map((i) => i.value), SESSION_COMMANDS.map((c) => c.name));
+    assert.ok(r?.items.every((i) => i.description));
+  });
+
+  it("inserts the chosen command with its slash", async () => {
+    const { p, r } = await force(base, [""]);
+    const item = r!.items.find((i) => i.value === "help")!;
+    const done = p.applyCompletion([""], 0, 0, item, r!.prefix);
+    assert.deepEqual(done.lines, ["/help "]);
+    assert.equal(done.cursorCol, 6);
+  });
+
+  it("does the same in the switcher", async () => {
+    const { r } = await force({ ...base, switcher: true }, [""]);
+    assert.deepEqual(r?.items.map((i) => i.value), SWITCHER_COMMANDS.map((c) => c.name));
+  });
+
+  it("still completes files once there is text", async () => {
+    const { r } = await force({ ...base, cwd: process.cwd() }, ["pack"]);
+    assert.ok(!r || r.items.every((i) => !i.value.startsWith("/")));
+  });
+});
+
 describe("argument completion", () => {
   const sources = {
     models: async () => ["zai/glm-5.3-flash", "zai/glm-5.3", "anthropic/claude-opus"],

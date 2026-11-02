@@ -93,6 +93,48 @@ describe("applyEvent", () => {
     assert.equal(view.activity, undefined);
   });
 
+  describe("consecutive tool calls", () => {
+    // each call lives in its own assistant message, as in an agent loop
+    const call = (id: string) => ({ role: "assistant", content: [{ type: "toolCall", id, name: "bash", arguments: { command: "ls" } }] });
+    const live = (view: ReturnType<typeof newView>, id: string, between?: unknown) => {
+      const e = { tui: { requestRender() {} } as never, cwd: "/w", addItem: (i: Item) => void view.items.push(i) };
+      applyEvent(view, { type: "message_start", message: call(id) }, e);
+      applyEvent(view, { type: "message_end", message: call(id) }, e);
+      if (between) {
+        applyEvent(view, { type: "message_start", message: between }, e);
+        applyEvent(view, { type: "message_end", message: between }, e);
+      }
+      applyEvent(view, { type: "tool_execution_start", toolName: "bash", toolCallId: id, args: { command: "ls" } }, e);
+      applyEvent(view, { type: "tool_execution_end", toolName: "bash", toolCallId: id, result: { content: [] } }, e);
+    };
+    const runs = (items: Item[]) => items.filter((i) => i.kind === "tools").map((i) => (i as { component: { calls: unknown[] } }).component.calls.length);
+
+    it("fold into one run even though each sits in its own assistant message", () => {
+      const view = newView();
+      live(view, "1");
+      live(view, "2");
+      live(view, "3");
+      assert.deepEqual(runs(view.items), [3]);
+    });
+
+    it("are split by assistant text between them, and calls after it fold again", () => {
+      const view = newView();
+      live(view, "1");
+      live(view, "2", { role: "assistant", content: [{ type: "text", text: "now the next step" }] });
+      live(view, "3");
+      assert.deepEqual(runs(view.items), [1, 2]);
+    });
+
+    it("fold the same way when a session is replayed", () => {
+      const result = (id: string) => ({ role: "toolResult", toolName: "bash", toolCallId: id, content: [{ type: "text", text: "ok" }], isError: false });
+      const tui = { requestRender() {} } as never;
+      const items = itemsFromMessages([call("1"), result("1"), call("2"), result("2"), call("3"), result("3")], tui, "/w");
+      assert.deepEqual(runs(items), [3]);
+      const split = itemsFromMessages([call("1"), result("1"), { role: "assistant", content: [{ type: "text", text: "next" }] }, call("2"), result("2")], tui, "/w");
+      assert.deepEqual(runs(split), [1, 1]);
+    });
+  });
+
   it("adds an assistant item that was never streamed when its message ends (attached mid-run)", () => {
     const items: Item[] = [];
     const view = newView();

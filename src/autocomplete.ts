@@ -41,6 +41,8 @@ export function commandsFor(ctx: AutocompleteContext): SlashCommand[] {
   ];
 }
 
+const isEmpty = (lines: string[]): boolean => lines.every((l) => l.trim() === "");
+
 export class CommandAutocomplete implements AutocompleteProvider {
   private readonly source: () => AutocompleteContext;
 
@@ -60,6 +62,10 @@ export class CommandAutocomplete implements AutocompleteProvider {
     options: { signal: AbortSignal; force?: boolean },
   ): Promise<AutocompleteSuggestions | null> {
     const { ctx, provider } = this.delegate();
+    if (isEmpty(lines)) {
+      // tab on an empty box would list files; the command list is the useful default
+      return provider.getSuggestions(["/"], 0, 1, { ...options, force: false });
+    }
     if (ctx.switcher && !(cursorLine === 0 && (lines[0] ?? "").startsWith("/"))) {
       return null;
     }
@@ -67,11 +73,15 @@ export class CommandAutocomplete implements AutocompleteProvider {
   }
 
   applyCompletion(lines: string[], cursorLine: number, cursorCol: number, item: AutocompleteItem, prefix: string) {
+    if (isEmpty(lines) && prefix === "/") {
+      // the suggestions were computed for "/", which the box does not hold yet
+      return this.delegate().provider.applyCompletion(["/"], 0, 1, item, prefix);
+    }
     return this.delegate().provider.applyCompletion(lines, cursorLine, cursorCol, item, prefix);
   }
 
   shouldTriggerFileCompletion(lines: string[], cursorLine: number, cursorCol: number): boolean {
     const { ctx, provider } = this.delegate();
-    return !ctx.switcher && provider.shouldTriggerFileCompletion(lines, cursorLine, cursorCol);
+    return (ctx.switcher ? isEmpty(lines) : true) && provider.shouldTriggerFileCompletion(lines, cursorLine, cursorCol);
   }
 }

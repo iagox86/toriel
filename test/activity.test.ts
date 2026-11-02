@@ -63,5 +63,35 @@ describe("activity", () => {
   it("formats elapsed time", () => {
     assert.equal(formatElapsed(9_400), "9s");
     assert.equal(formatElapsed(125_000), "2m05s");
+    assert.equal(formatElapsed(1126 * 60_000 + 4_000), "18h46m04s");
+    assert.equal(formatElapsed(3_600_000), "1h00m00s");
+    assert.equal(formatElapsed((26 * 3600 + 5 * 60 + 9) * 1000), "1d02h05m09s");
+  });
+});
+
+describe("activity timer while a dialog is open", () => {
+  const strip = (s: ActivityState, now: number) => activityLines(s, 80, now).join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+
+  it("freezes and says it is waiting on the user, then resumes without the wait", () => {
+    const s = fresh();
+    reduceActivity(s, { type: "agent_start" }, 0);
+    assert.match(strip(s, 10_000), /working 10s/);
+    s.dialog = { id: "d" };
+    assert.match(strip(s, 12_000), /waiting on you 12s/);
+    assert.match(strip(s, 600_000), /waiting on you 12s/, "no ticking while blocked");
+    s.dialog = undefined;
+    assert.match(strip(s, 605_000), /working 12s/, "the wait is not counted");
+    assert.match(strip(s, 610_000), /working 17s/);
+  });
+
+  it("keeps the paused time across phase changes", () => {
+    const s = fresh();
+    reduceActivity(s, { type: "agent_start" }, 0);
+    s.dialog = {};
+    strip(s, 5_000);
+    s.dialog = undefined;
+    strip(s, 65_000);
+    reduceActivity(s, { type: "tool_execution_start", toolName: "bash" }, 66_000);
+    assert.match(strip(s, 70_000), /running bash 10s/);
   });
 });

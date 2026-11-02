@@ -61,3 +61,12 @@ describe("age colouring", () => {
     assert.ok(byAge(H, "x").endsWith("x\x1b[22m\x1b[39m"));
   });
 });
+
+describe("syntax highlighting languages", () => {
+  it("highlights languages pi only loads lazily, such as html", async () => {
+    const { highlightLanguagesLoaded, mdTheme } = await import("../src/pi-theme.ts");
+    await highlightLanguagesLoaded;
+    const colors = new Set(mdTheme.highlightCode?.('<div class="a"><p id="x">hi</p></div>', "html").join("\n").match(/\x1b\[[0-9;]*m/g)).size;
+    assert.ok(colors > 2, `expected several colors, saw ${colors}`);
+  });
+});

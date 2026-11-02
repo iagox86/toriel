@@ -10,18 +10,24 @@ export interface Activity {
   label: string;
   /** When the current run started (ms), for the elapsed timer. */
   since: number;
+  /** Time spent blocked on a dialog (ms), left out of the elapsed timer. */
+  pausedMs?: number;
+  /** When the current dialog block began; set and cleared while rendering. */
+  pausedAt?: number;
 }
 
 export interface ActivityState {
   activity?: Activity;
   /** Messages sent while a run was in flight, in delivery order. */
   queue: string[];
+  /** A pending dialog: the agent is waiting on the user, not working. */
+  dialog?: unknown;
 }
 
 /** Update `state` from one live pi event; `now` is injected for tests. */
 export function reduceActivity(state: ActivityState, ev: Record<string, unknown>, now: number): void {
   const set = (label: string) => {
-    state.activity = { label, since: state.activity?.since ?? now };
+    state.activity = { since: now, ...state.activity, label };
   };
   switch (ev.type as string) {
     case "agent_start":
@@ -76,7 +82,29 @@ export function spinnerFrame(now: number): string {
 
 export function formatElapsed(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000));
-  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, "0")}s`;
+  const two = (n: number) => String(n).padStart(2, "0");
+  if (s < 60) {
+    return `${s}s`;
+  }
+  if (s < 3600) {
+    return `${Math.floor(s / 60)}m${two(s % 60)}s`;
+  }
+  const hours = Math.floor(s / 3600);
+  const rest = `${two(Math.floor((s % 3600) / 60))}m${two(s % 60)}s`;
+  return hours < 24 ? `${hours}h${rest}` : `${Math.floor(hours / 24)}d${two(hours % 24)}h${rest}`;
+}
+
+/** Elapsed run time with dialog waits taken out; frozen while a dialog is up. */
+function runElapsed(state: ActivityState, a: Activity, now: number): { ms: number; waiting: boolean } {
+  const waiting = state.dialog !== undefined;
+  if (waiting && a.pausedAt === undefined) {
+    a.pausedAt = now;
+  } else if (!waiting && a.pausedAt !== undefined) {
+    a.pausedMs = (a.pausedMs ?? 0) + (now - a.pausedAt);
+    a.pausedAt = undefined;
+  }
+  const paused = (a.pausedMs ?? 0) + (a.pausedAt === undefined ? 0 : now - a.pausedAt);
+  return { ms: now - a.since - paused, waiting };
 }
 
 const MAX_QUEUED_LINES = 3;
@@ -92,8 +120,9 @@ export function activityLines(state: ActivityState, width: number, now: number):
     lines.push(queued(`  queued: +${state.queue.length - shown.length} more`));
   }
   if (state.activity) {
-    const { label, since } = state.activity;
-    lines.push(truncateToWidth(` ${spinner(spinnerFrame(now))} ${label} ${dim(formatElapsed(now - since))}`, width));
+    const { ms, waiting } = runElapsed(state, state.activity, now);
+    const label = waiting ? "waiting on you" : state.activity.label;
+    lines.push(truncateToWidth(` ${spinner(spinnerFrame(now))} ${label} ${dim(formatElapsed(ms))}`, width));
   }
   return lines;
 }
