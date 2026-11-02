@@ -76,7 +76,7 @@ Session view (chat):
   kept in the trash)
 - `!command` - (the chat box border turns yellow while the text starts with `!`) run a shell command in the session's directory. The daemon runs it itself (`local-command.ts`, bash in its own process group, output merged and cleaned of colour codes, start and end kept past ~24k characters, 10 minute limit) and hands the agent the result at once as an ordinary prompt: a `<local-command-caveat>` saying the user ran it, then `<local-command>cmd</local-command><local-command-output exit="N">...</local-command-output>`. That starts a turn, or queues behind the running one. pi's own `bash` RPC is not used because it only shows the model the output with the user's next message. The transcript recognises the tags (live and on replay) and draws the usual command block; the switcher summary shows `$ cmd`. The first-message display fallback renders a bang-first session as `$ cmd` too, not as the wrapper text. `esc` stops it (`abort_bash`); one command at a time per session; refused while compacting. `!!` is not offered. Code: `SessionActions.bang`, daemon `handleBash`/`handleAbortBash`, `userItem` in `transcript.ts`.
 - Viewing a subagent: an accent-coloured editor border, a banner line above it ("SUBAGENT of X - /parent jumps to the parent") and `SUBAGENT of X` in the status line; the status line also shows `+$ children` for what the sessions below it have spent. `/parent` opens the parent; `/detach` (here or on the highlighted row in the switcher) removes the link both ways. The session is top-level again, and on its next start it is no longer told who its parent was.
-- `ctrl-o` - expand/collapse tool runs (collapsed: one summary line per run, "5 tool calls: bash x2, read, grep, +2 more" - the first three tool names, then a count)
+- `ctrl-o` - expand/collapse tool runs (collapsed: one summary line per run, "5 tool calls: bash x2, read, grep, +2 more" - the first three tool names, then a count). Consecutive calls join one run even though an agent loop puts each in its own assistant message: a new call merges into the last run past assistant messages that show nothing (`lastToolRun` in `transcript.ts`, live and on replay); visible text, thinking, a user message or a `!command` in between starts a new run
 - `ctrl-t` - show/hide thinking (starts from pi's `hideThinkingBlock`)
 - mouse wheel scrolls (speed from pi's `fullscreenWheelScrollLines`); the
   view stays where you scrolled while output arrives
@@ -118,7 +118,15 @@ summary column says `compacting`:
 - typing plain text (not starting with `/`) and pressing enter starts a new
   session with that as its first message
 - `/` completes commands (popup, tab); the list comes from `commands.ts`, so
-  new commands appear automatically
+  new commands appear automatically. Tab on an empty box lists the commands too (not
+  files); file completion starts once there is text. While a permission dialog is
+  open tab does nothing (the dialog is modal)
+- the activity strip's timer reads `45s`, `12m05s`, `18h46m04s`, `1d02h05m09s`, and
+  stops while the session waits on a dialog (the strip says `waiting on you`)
+- a code fence you type or paste with a remark after it (```` ```note about `x` ````) is repaired
+  for display (backticks dropped from the remark, `fence-repair.ts`) because CommonMark
+  would otherwise draw the line literally; code blocks highlight every language pi's
+  highlight.js knows (`pi-theme.ts` loads the lazy ones pi's own UI would)
 - the bottom chat box doubles as the switcher command line: `/new [-n name] [-C dir] [-a agent]` (start as an agent profile) `/init [-n name] [-C dir]` (a new session with the init prompt already sent, for a project that has none yet; inside a session `/init` sends the prompt to that session) `/agents` `/stop` `/delete [-y]` `/park [-u]` (session name and age are coloured by recency - bold white under a day, light grey under 3 days, grey under a week, then dark grey; `/park` forces the muted colour until the session is used again, `-u` clears it; inside a session `/park` also stops it (if idle) and goes back to the list) `/ungroup` `/comment [-c] [text]` (the commands that act on a session - stop, delete, rename, group, ungroup, park, comment, detach, adopt - are flagged `needsSession` in `commands.ts`: with a group heading highlighted they are left out of the completion list, and typed in full they answer in red `select a session, not a heading`) (a hidden note per session, stored by UUID in `session-groups.json` `comments`, searched by the filter, never pruned) `/filter [-r] [words]` (show only matching sessions - name, summary, group, model, directory or comment, all words must match; `-r` takes one regex; no text clears)
   `/rename <name>` `/group <name>` `/adopt` `/kill-daemon` `/quit` `/exit`
   `/help` `/summarize` `/restore [words]` (pick a deleted session from the trash to bring back,

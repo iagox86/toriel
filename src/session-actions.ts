@@ -239,7 +239,7 @@ export class SessionActions {
     if (isTextDialog(dialog)) {
       const skip = matchesKey(data, Key.escape);
       if (!skip && !matchesKey(data, Key.enter)) {
-        return false; // typing goes to the input box
+        return matchesKey(data, Key.tab); // typing goes to the input box, completion does not
       }
       const text = skip ? "" : this.h.editor.getText().trim();
       this.h.editor.setText("");
@@ -270,8 +270,8 @@ export class SessionActions {
     }
     const fields = dialogAnswer(dialog, raw, panel.highlighted);
     if (!fields) {
-      // modal: typing must not land in the message box while a permission is pending
-      return isTypingKey(data) || matchesKey(data, Key.enter);
+      // modal: typing and completion must not reach the message box while a permission is pending
+      return isTypingKey(data) || matchesKey(data, Key.enter) || matchesKey(data, Key.tab);
     }
     if (grantGuarded(dialog, fields)) {
       return true;

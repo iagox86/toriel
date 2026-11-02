@@ -107,4 +107,11 @@ describe("permission prompt: toriel's grant rows", () => {
     assert.equal(answered(t.sent[0]), "Yes");
     assert.match(t.notices[0] ?? "", /could not keep the permission grant: the daemon is gone/);
   });
+
+  it("swallows tab so the input box completion never opens over a pending prompt", () => {
+    const t = setup();
+    assert.equal(t.sa.dialogKeys(t.view, "\t"), true);
+    assert.deepEqual(t.sent, []);
+    assert.ok(t.view.dialog, "the prompt stays open");
+  });
 });
