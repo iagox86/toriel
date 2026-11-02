@@ -23,11 +23,13 @@ export function agentListing(agents: readonly AgentProfile[], problems: readonly
   if (agents.length === 0 && problems.length === 0) {
     return "No agent profiles found.\n\nPut *.md files in agents/ (toriel repo), ~/.config/toriel/agents/ or <project>/.toriel/agents/.";
   }
-  const width = Math.max(0, ...agents.map((a) => a.name.length));
+  // One block per agent (name, description, details) with a blank line between:
+  // the panel wraps long lines without a hanging indent, so a column layout
+  // turns into a wall of text.
   const rows = agents.map((a) => {
     const bits = [a.model ?? "default model", a.tools ? `tools: ${a.tools.join(",")}` : "default tools", a.source];
-    return `${a.name.padEnd(width)}  ${a.description}\n${" ".repeat(width)}  ${bits.join(" | ")}`;
+    return `${a.name}\n  ${a.description}\n  ${bits.join(" | ")}`;
   });
   const issues = problems.length > 0 ? `\n\nProblems:\n${problems.map((p) => `  ${p}`).join("\n")}` : "";
-  return `Agent profiles (/new --agent <name>)\n\n${rows.join("\n")}${issues}`;
+  return `Agent profiles (/new --agent <name>)\n\n${rows.join("\n\n")}${issues}`;
 }
