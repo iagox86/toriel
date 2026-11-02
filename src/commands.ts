@@ -328,6 +328,8 @@ export const SESSION_COMMANDS = [
   doctorSpec,
   { name: "abort", description: "interrupt the running agent",
     help: "Interrupts the agent's current turn, like esc. Messages still queued come back into the box." },
+  { name: "background", description: "move the command the agent is waiting for to the background",
+    help: "Moves the bash command(s) the agent is running right now to the background, like ctrl-b while the agent works. The agent gets the output so far, carries on, and is told when the job exits; ask the agent to list, read or stop it (its toriel_job tool). Says so when nothing is running. A ! command of yours cannot be moved (esc stops it)." },
   { name: "detach", description: "cut this subagent loose from the agent that started it (no more banner or nesting)",
     help: "Removes the parent link of this session when an agent started it, so it stops being nested and the banner goes. Does nothing for copies made with /fork or /adopt, which are never nested." },
   { name: "parent", description: "jump to the agent that started this subagent",

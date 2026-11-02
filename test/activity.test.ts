@@ -94,4 +94,16 @@ describe("activity timer while a dialog is open", () => {
     reduceActivity(s, { type: "tool_execution_start", toolName: "bash" }, 66_000);
     assert.match(strip(s, 70_000), /running bash 10s/);
   });
+
+  it("says how to move a running shell command to the background, only for bash and not while waiting on a dialog", () => {
+    const s = fresh();
+    reduceActivity(s, { type: "agent_start" }, 0);
+    reduceActivity(s, { type: "tool_execution_start", toolName: "bash" }, 1000);
+    assert.match(strip(s, 5000), /running bash 5s\s+ctrl-b: run in background/);
+    s.dialog = {};
+    assert.doesNotMatch(strip(s, 6000), /ctrl-b/);
+    s.dialog = undefined;
+    reduceActivity(s, { type: "tool_execution_start", toolName: "read" }, 7000);
+    assert.doesNotMatch(strip(s, 8000), /ctrl-b/);
+  });
 });

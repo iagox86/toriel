@@ -1195,12 +1195,38 @@ Decisions and why:
   true, deliverAs: "followUp"})`, not through the daemon bridge; the transcript shows it
   because `isInjectType` accepts `toriel-job`.
 
-Not done (slices 3+):
+Slice 3, the user key (#8, built 2026-11-02, with #100):
+- **Custom `operations`, not `spawnHook`.** `spawnHook` only rewrites the command, cwd and
+  env of pi's own spawn; it never gives up the child, so it cannot hand a running process to
+  the registry. pi's bash tool accepts `operations.exec(command, cwd, {onData, signal,
+  timeout, env})`, and everything above `exec` stays pi's code (output accumulator, truncation,
+  full-output temp file, streaming updates, renderers). So the extension supplies an `exec`
+  backed by `JobRegistry.runForeground`.
+- **Foreground = registered process.** Invisible until moved (id `fgN`, no listing, no log
+  kept after it ends, no notice) and not counted against the 5-job limit: a refused foreground
+  command would break pi's contract that bash runs. The limit applies at the moment of the
+  move; a command past it stays in the foreground and the notice says so.
+- **The move resolves `exec` with exit code 0** after writing a note into the output stream
+  ("moved to the background as job jN ..."), so pi returns a normal, successful tool result;
+  the process keeps its stdout/stderr pipes and writes the log from then on.
+- **Reaching the extension.** The daemon sends the extension command `/toriel-background`
+  with `child.prompt` (the same channel as `/toriel-inject`, handled at once mid-turn). It
+  first checks `getCommands` for the command, because pi would otherwise treat the text as a
+  prompt for the model (a session started before this extension version has no such command:
+  the user gets "restart the session"). The result comes back as the extension's `notify`.
+- **Key.** `ctrl-b`, taken only while the agent is working, so it stays cursor-left when
+  idle; `/background` is the same action. No tmux concern (the author does not use it).
+- **`!command` environment (#100).** `bangEnv` gives the daemon-run command the child's
+  toriel variables, `PI_SESSION_ID`/`PI_SESSION_FILE` and pi's bin directory on PATH; the
+  model variables are omitted on purpose.
+- Not done: pi's `shellPath` (plain `bash` is used for foreground too now, a change from
+  slice 2; `getShellConfig` is not exported). `commandPrefix` was never applied: the override
+  builds pi's tool without options.
+
+Not done (slices 4+):
 - `/jobs` (list, tail, stop) and a status segment (`STATUS_KEY` is set; nothing reads it yet).
-- #8, the user key that sends a running foreground command to the background. The foreground
-  call is pi's, which owns the child, so this needs the override to own the foreground spawn
-  too (own streaming, truncation, rendering), or a handover that pi does not offer. Plan the
-  key as controller -> daemon -> bridge command -> extension.
+- Moving a `!command` to the background (the daemon runs those, not pi; they would need to
+  become jobs of the session's pi, or the daemon would need its own registry).
 - A daemon-owned registry, if jobs must survive `/stop` or pi crashes (needs a `job_*`
   protocol, an orphan sweep on daemon start, and a decision about who gets the notice).
 - `commandPrefix` / `shellPath` from pi's settings are ignored for background jobs (plain

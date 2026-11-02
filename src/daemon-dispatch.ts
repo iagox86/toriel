@@ -18,6 +18,7 @@ import {
 import {
   handleAbort,
   handleAbortBash,
+  handleBackground,
   handleBash,
   handleClear,
   handleClearQueue,
@@ -67,6 +68,8 @@ export async function dispatch(ctx: DaemonContext, cmd: ClientCommand, socket: n
       return handleBash(ctx, cmd, res);
     case "abort_bash":
       return handleAbortBash(ctx, cmd, res);
+    case "background":
+      return handleBackground(ctx, cmd, res);
     case "clear_queue":
       return handleClearQueue(ctx, cmd, res);
     case "commands":
@@ -117,5 +120,13 @@ export async function dispatch(ctx: DaemonContext, cmd: ClientCommand, socket: n
       res(true);
       ctx.shutdown();
       return;
+    default:
+      return refuseUnknown(cmd, res);
   }
+}
+
+/** The switch above is exhaustive, so this only runs for a controller newer than the daemon: answer instead of leaving it to time out. */
+function refuseUnknown(cmd: never, res: Responder): void {
+  const type = (cmd as { type?: unknown }).type;
+  res(false, `the daemon does not know the request "${String(type)}" (it is older than this controller: restart it)`);
 }

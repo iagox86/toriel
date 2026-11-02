@@ -36,11 +36,11 @@ export function truncateOutput(text: string): { text: string; truncated: boolean
 }
 
 /** Run `command` with bash in `cwd`; `signal` aborts it (the whole process group). Never rejects. */
-export function runLocal(command: string, cwd: string, signal?: AbortSignal, timeoutMs = TIMEOUT_MS): Promise<LocalResult> {
+export function runLocal(command: string, cwd: string, signal?: AbortSignal, timeoutMs = TIMEOUT_MS, env: NodeJS.ProcessEnv = process.env): Promise<LocalResult> {
   return new Promise((resolve) => {
     let raw = "";
     let cancelled = false;
-    const child = spawn("bash", ["-c", command], { cwd, detached: true, stdio: ["ignore", "pipe", "pipe"], env: process.env });
+    const child = spawn("bash", ["-c", command], { cwd, detached: true, stdio: ["ignore", "pipe", "pipe"], env });
     const stop = () => {
       cancelled = true;
       try {

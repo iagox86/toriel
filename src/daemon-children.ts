@@ -1,6 +1,7 @@
 // Starting, stopping and listening to the pi child processes behind sessions.
 import * as fs from "node:fs";
 import { RpcClient } from "@earendil-works/pi-coding-agent";
+import { childEnv } from "./child-env.ts";
 import { DIALOG_METHODS, SOCK } from "./config.ts";
 import { withSuggestion } from "./permissions.ts";
 import { type BridgeTracker, INJECT_COMMAND, injectedId, mergedQueueTexts, parseBridgeReport } from "./daemon-bridge.ts";
@@ -84,7 +85,7 @@ export class ChildManager {
       cliPath: cfg.piCli,
       cwd: s.cwd,
       args,
-      env: { ...process.env, TORIEL_CHILD: "1", TORIEL_SOCK: SOCK, ...(s.sessionId ? { TORIEL_SESSION_ID: s.sessionId } : {}) },
+      env: childEnv(s, SOCK),
     });
     client.onEvent((event) => this.onEvent(s, event as Record<string, unknown>));
     await client.start();

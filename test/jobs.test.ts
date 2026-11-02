@@ -117,6 +117,122 @@ describe("background jobs", () => {
   });
 });
 
+describe("foreground commands", () => {
+  let dir: string;
+  let ended: Job[];
+  const make = (opts: { maxRunning?: number } = {}) => new JobRegistry({ dir, ...opts, onEnd: (j) => ended.push({ ...j }) });
+  const collect = () => {
+    const chunks: string[] = [];
+    return { chunks, onData: (c: Buffer) => chunks.push(c.toString()), text: () => chunks.join("") };
+  };
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "toriel-fg-test-"));
+    ended = [];
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("run to the end like pi's own: output streamed, exit code returned, no job record and no notice", async () => {
+    const jobs = make();
+    const out = collect();
+    assert.deepEqual(await jobs.runForeground("echo hi; exit 4", dir, process.env, { onData: out.onData }), { exitCode: 4 });
+    assert.match(out.text(), /hi/);
+    assert.deepEqual(jobs.list(), []);
+    assert.deepEqual(ended, []);
+    assert.equal(jobs.runningCount(), 0);
+  });
+
+  it("are killed with their process group when the call is aborted, and report 'aborted'", async () => {
+    const jobs = make();
+    const ac = new AbortController();
+    const pending = jobs.runForeground("sleep 30 & sleep 30 & wait", dir, process.env, { onData: () => {}, signal: ac.signal });
+    setTimeout(() => ac.abort(), 100);
+    await assert.rejects(pending, /^Error: aborted$/);
+    assert.deepEqual(ended, []);
+  });
+
+  it("are killed at their timeout, which is reported the way pi's tool expects", async () => {
+    const jobs = make();
+    await assert.rejects(jobs.runForeground("sleep 30", dir, process.env, { onData: () => {}, timeout: 0.2 }), /^Error: timeout:0\.2$/);
+  });
+
+  it("refuse an already-aborted call and a missing directory without starting anything", async () => {
+    const jobs = make();
+    const ac = new AbortController();
+    ac.abort();
+    await assert.rejects(jobs.runForeground("true", dir, process.env, { onData: () => {}, signal: ac.signal }), /aborted/);
+    await assert.rejects(jobs.runForeground("true", join(dir, "nope"), process.env, { onData: () => {} }), /Working directory does not exist/);
+  });
+
+  it("do not count against the background limit", async () => {
+    const jobs = make({ maxRunning: 1 });
+    const bg = jobs.start("sleep 30", dir);
+    assert.deepEqual(await jobs.runForeground("echo still-runs", dir, process.env, { onData: () => {} }), { exitCode: 0 });
+    jobs.stop(bg.id);
+    await until(() => jobs.runningCount() === 0);
+  });
+
+  it("become a job when moved to the background: the call returns, the command keeps running, and its exit is reported", async () => {
+    const jobs = make();
+    const out = collect();
+    const pending = jobs.runForeground("echo before; sleep 0.4; echo after", dir, process.env, { onData: out.onData });
+    await until(() => /before/.test(out.text()));
+    const { promoted, refused } = jobs.backgroundAll();
+    assert.equal(refused, 0);
+    assert.equal(promoted.length, 1);
+    assert.equal(promoted[0]?.id, "j1");
+    assert.deepEqual(await pending, { exitCode: 0 });
+    assert.match(out.text(), /moved this command to the background as job j1/);
+    assert.equal(jobs.runningCount(), 1);
+    assert.equal(jobs.get("j1")?.state, "running");
+    await until(() => ended.length === 1);
+    assert.equal(ended[0]?.id, "j1");
+    assert.equal(ended[0]?.exitCode, 0);
+    const log = jobs.output("j1")?.text ?? "";
+    assert.match(log, /before/);
+    assert.match(log, /after/);
+    assert.doesNotMatch(out.text(), /after/, "output after the move goes to the log, not the finished call");
+  });
+
+  it("keep their place in the foreground when the background limit is full, and say how many", async () => {
+    const jobs = make({ maxRunning: 1 });
+    const bg = jobs.start("sleep 30", dir);
+    const out = collect();
+    const pending = jobs.runForeground("sleep 0.3; echo done", dir, process.env, { onData: out.onData });
+    const { promoted, refused } = jobs.backgroundAll();
+    assert.equal(promoted.length, 0);
+    assert.equal(refused, 1);
+    assert.deepEqual(await pending, { exitCode: 0 });
+    assert.match(out.text(), /done/);
+    jobs.stop(bg.id);
+    await until(() => jobs.runningCount() === 0);
+  });
+
+  it("stay out of the job list and cannot be read or stopped as jobs while the call waits", async () => {
+    const jobs = make();
+    const pending = jobs.runForeground("sleep 0.3", dir, process.env, { onData: () => {} });
+    assert.deepEqual(jobs.list(), []);
+    assert.equal(jobs.get("fg1"), undefined);
+    assert.equal(jobs.stop("fg1"), undefined);
+    assert.deepEqual(await pending, { exitCode: 0 });
+  });
+
+  it("move nothing when nothing is running in the foreground", () => {
+    const jobs = make();
+    assert.deepEqual(jobs.backgroundAll(), { promoted: [], refused: 0 });
+  });
+
+  it("are killed at shutdown like any job, and a moved one honours the lifetime cap", async () => {
+    const jobs = new JobRegistry({ dir, maxLifetimeMs: 200, onEnd: (j) => ended.push({ ...j }) });
+    const pending = jobs.runForeground("sleep 30", dir, process.env, { onData: () => {} });
+    jobs.backgroundAll();
+    await pending;
+    await until(() => ended.length === 1);
+    assert.equal(ended[0]?.state, "timed out");
+  });
+});
+
 describe("job messages", () => {
   const job: Job = { id: "j1", command: "npm run build", pid: 1, startedAt: 0, endedAt: 252_000, state: "exited", exitCode: 0, logPath: "/x" };
 
@@ -172,14 +288,16 @@ describe("the toriel-jobs extension", () => {
     const tools = new Map<string, Tool>();
     const handlers = new Map<string, (e: unknown, c: Record<string, never>) => void>();
     const messages: Array<{ customType: string; content: string }> = [];
+    const commands = new Map<string, (args: string, ctx: { ui: { notify: (m: string) => unknown } }) => Promise<void> | void>();
     extension({
+      registerCommand: (name, o) => commands.set(name, o.handler as never),
       registerTool: (t) => tools.set(t.name as string, t as unknown as Tool),
       on: (ev, h) => handlers.set(ev, h),
       sendMessage: (m) => {
         messages.push(m);
       },
     });
-    return { tools, handlers, messages };
+    return { tools, handlers, messages, commands };
   };
 
   beforeEach(() => {
@@ -239,6 +357,56 @@ describe("the toriel-jobs extension", () => {
     assert.match(stopped?.content[0]?.text ?? "", /Stopping j1/);
     const missing = await tools.get("toriel_job")?.execute("c3", { action: "output", id: "j9" });
     assert.equal(missing?.isError, true);
+    handlers.get("session_shutdown")?.({}, {});
+  });
+
+  it("moves a running foreground bash call to the background on the toriel-background command, and the call returns what it had", async () => {
+    const { tools, handlers, messages, commands } = load();
+    const ctx = { cwd: tmpdir(), sessionManager: { getSessionId: () => "s1", getSessionFile: () => undefined } };
+    const call = tools.get("bash")?.execute("c1", { command: "echo first; sleep 0.5; echo second" }, undefined, undefined, ctx);
+    await new Promise((r) => setTimeout(r, 150));
+    const notes: string[] = [];
+    await commands.get("toriel-background")?.("", { ui: { notify: (m: string) => notes.push(m) } });
+    assert.match(notes[0] ?? "", /Moved to the background: j1 \(echo first/);
+    const result = await call;
+    assert.match(result?.content[0]?.text ?? "", /first/);
+    assert.match(result?.content[0]?.text ?? "", /moved this command to the background as job j1/);
+    assert.notEqual(result?.isError, true);
+    await until(() => messages.length === 1);
+    assert.match(messages[0]?.content ?? "", /Background job j1 .* exited with code 0/);
+    assert.match(messages[0]?.content ?? "", /second/);
+    handlers.get("session_shutdown")?.({}, {});
+  });
+
+  it("says so when the command arrives with nothing running in the foreground", async () => {
+    const { handlers, commands } = load();
+    const notes: string[] = [];
+    await commands.get("toriel-background")?.("", { ui: { notify: (m: string) => notes.push(m) } });
+    assert.deepEqual(notes, ["No command is running in the foreground."]);
+    handlers.get("session_shutdown")?.({}, {});
+  });
+
+  it("says what stayed in the foreground, and not 'nothing running', when the limit refuses the move", async () => {
+    const { tools, handlers, commands } = load();
+    const ctx = { cwd: tmpdir(), sessionManager: { getSessionId: () => "s1", getSessionFile: () => undefined } };
+    for (let i = 0; i < 5; i++) {
+      await tools.get("bash")?.execute(`b${i}`, { command: "sleep 30", run_in_background: true }, undefined, undefined, ctx);
+    }
+    const call = tools.get("bash")?.execute("c1", { command: "sleep 0.4; echo fg-done" }, undefined, undefined, ctx);
+    await new Promise((r) => setTimeout(r, 100));
+    const notes: string[] = [];
+    await commands.get("toriel-background")?.("", { ui: { notify: (m: string) => notes.push(m) } });
+    assert.deepEqual(notes, ["1 stayed in the foreground: already 5 background jobs."]);
+    assert.match((await call)?.content[0]?.text ?? "", /fg-done/);
+    handlers.get("session_shutdown")?.({}, {});
+  });
+
+  it("reports a foreground failure as pi does: output plus the exit code, as an error", async () => {
+    const { tools, handlers } = load();
+    const ctx = { cwd: tmpdir(), sessionManager: { getSessionId: () => "s1", getSessionFile: () => undefined } };
+    const result = await tools.get("bash")?.execute("c1", { command: "echo oops; exit 3" }, undefined, undefined, ctx);
+    assert.equal(result?.isError, true);
+    assert.match(result?.content[0]?.text ?? "", /oops\s+Command exited with code 3/);
     handlers.get("session_shutdown")?.({}, {});
   });
 

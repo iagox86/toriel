@@ -263,6 +263,7 @@ async function handle(cmd) {
         commands: [
           { name: "skill:demo", description: "A demo skill", source: "skill" },
           { name: "compact", description: "Compact the context", source: "extension" },
+          ...(process.env.FAKE_PI_JOBS === "1" ? [{ name: "toriel-background", description: "toriel: move the running foreground bash command(s) to the background", source: "extension" }] : []),
           ...(process.env.FAKE_PI_BRIDGE === "1" ? [{ name: "toriel-inject", description: "toriel internal: deliver a message from another session", source: "extension" }] : []),
         ],
       });
@@ -272,6 +273,10 @@ async function handle(cmd) {
       return ok(cmd.id, "clear_queue", { steering, followUp: [] });
     }
     case "prompt": {
+      if (cmd.message === "/toriel-background") {
+        ok(cmd.id, "prompt", { disposition: "handled" });
+        return out({ type: "extension_ui_request", id: randomUUID(), method: "notify", message: "Moved to the background: j1 (fake)", notifyType: "info" });
+      }
       if (cmd.message.startsWith("/toriel-inject ")) {
         ok(cmd.id, "prompt", { disposition: "handled" });
         const p = JSON.parse(cmd.message.slice("/toriel-inject ".length));

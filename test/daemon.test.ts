@@ -305,6 +305,24 @@ describe("daemon: lifecycle", () => {
     assert.equal(meta?.sessionBridge, true);
   });
 
+  it("asks the child's jobs extension to move a running command to the background, and passes its notice on", async () => {
+    harness = await startDaemon({ FAKE_PI_JOBS: "1" });
+    const c = await harness.connect();
+    const { sessionId } = await c.request({ type: "spawn", cwd: harness.dir });
+    await c.waitFor((m) => m.type === "history");
+    await c.request({ type: "background", session: sessionId });
+    const note = await c.waitFor((m) => m.type === "ui_request" && m.request?.method === "notify");
+    assert.match(String(note.request.message), /Moved to the background: j1/);
+  });
+
+  it("refuses to move a command when the child has no jobs extension, instead of sending the model slash text", async () => {
+    harness = await startDaemon();
+    const c = await harness.connect();
+    const { sessionId } = await c.request({ type: "spawn", cwd: harness.dir });
+    await c.waitFor((m) => m.type === "history");
+    await assert.rejects(c.request({ type: "background", session: sessionId }), /background-jobs extension/);
+  });
+
   it("falls back to steering, with the session marked as lacking the bridge, when the child does not offer it", async () => {
     harness = await startDaemon();
     const c = await harness.connect();

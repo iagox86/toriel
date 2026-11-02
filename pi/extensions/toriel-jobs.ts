@@ -7,13 +7,15 @@
 // is told with a message that wakes an idle session. Runs only in children the
 // toriel daemon starts (TORIEL_CHILD), so plain pi keeps its own `bash`.
 import { type ChildProcess, spawn } from "node:child_process";
-import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { constants as osConstants, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { createBashToolDefinition, getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export const CUSTOM_TYPE = "toriel-job";
 export const STATUS_KEY = "toriel-jobs";
+/** The extension command the daemon sends to move running foreground commands to the background. */
+export const BACKGROUND_COMMAND = "toriel-background";
 export const MAX_RUNNING = 5;
 export const MAX_LIFETIME_MS = 2 * 60 * 60 * 1000;
 /** A job's log stops growing here; the rest of its output is dropped. */
@@ -37,12 +39,30 @@ export interface Job {
   logPath: string;
 }
 
+/** A foreground command's link to the tool call waiting for it. */
+interface Foreground {
+  onData(chunk: Buffer): void;
+  /** The process ended (`error` when it never started). */
+  onClose(code: number | null, signal: NodeJS.Signals | null, error?: Error): void;
+  /** The command became a background job; the tool call can return. */
+  onPromoted(job: Job): void;
+}
+
 interface Running {
   child: ChildProcess;
   logged: number;
   truncated: boolean;
-  timer: NodeJS.Timeout;
+  timer?: NodeJS.Timeout;
   killTimer?: NodeJS.Timeout;
+  /** Set while a tool call is waiting for the command: not a background job yet. */
+  fg?: Foreground;
+}
+
+export interface ForegroundOptions {
+  onData(chunk: Buffer): void;
+  signal?: AbortSignal;
+  /** Seconds, as the bash tool takes it. */
+  timeout?: number;
 }
 
 export interface RegistryOptions {
@@ -62,6 +82,7 @@ export class JobRegistry {
   private readonly jobs = new Map<string, Job>();
   private readonly running = new Map<string, Running>();
   private next = 1;
+  private nextForeground = 1;
 
   private readonly opts: RegistryOptions;
 
@@ -75,21 +96,21 @@ export class JobRegistry {
 
   start(command: string, cwd: string, env: NodeJS.ProcessEnv = process.env): Job {
     const max = this.opts.maxRunning ?? MAX_RUNNING;
-    if (this.running.size >= max) {
+    if (this.runningCount() >= max) {
       throw new Error(`already running ${max} background jobs; stop one with toriel_job (action "stop") or wait for one to finish`);
     }
-    const id = `j${this.next++}`;
+    return this.launch(command, cwd, env, undefined, `j${this.next++}`);
+  }
+
+  private launch(command: string, cwd: string, env: NodeJS.ProcessEnv, fg: Foreground | undefined, id: string): Job {
     const logPath = join(this.opts.dir, `${id}.log`);
     writeFileSync(logPath, "");
     const child = spawn("bash", ["-c", command], { cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     const job: Job = { id, command, pid: child.pid, startedAt: this.now(), state: "running", logPath };
-    const state: Running = {
-      child,
-      logged: 0,
-      truncated: false,
-      timer: setTimeout(() => this.end(job, "timed out"), this.opts.maxLifetimeMs ?? MAX_LIFETIME_MS),
-    };
-    state.timer.unref();
+    const state: Running = { child, logged: 0, truncated: false, fg };
+    if (!fg) {
+      this.armLifetime(job, state);
+    }
     this.jobs.set(id, job);
     this.running.set(id, state);
     const log = (chunk: Buffer): void => {
@@ -104,12 +125,13 @@ export class JobRegistry {
         state.truncated = true;
         appendFileSync(logPath, "\n[output limit reached, the rest is dropped]\n");
       }
+      state.fg?.onData(chunk);
     };
     child.stdout?.on("data", log);
     child.stderr?.on("data", log);
     child.on("error", (err) => {
       appendFileSync(logPath, `${err.message}\n`);
-      this.finish(job, "exited", 127, null);
+      this.finish(job, "exited", 127, null, err);
     });
     child.on("close", (code, signal) => {
       this.finish(job, job.state === "running" ? "exited" : job.state, code, signal);
@@ -118,9 +140,117 @@ export class JobRegistry {
     return job;
   }
 
+  private armLifetime(job: Job, state: Running): void {
+    state.timer = setTimeout(() => this.end(job, "timed out"), this.opts.maxLifetimeMs ?? MAX_LIFETIME_MS);
+    state.timer.unref();
+  }
+
+  /**
+   * Run a command for a bash tool call that is waiting for it (pi's bash tool,
+   * through its `operations`). It is a registered process, so `backgroundAll` can
+   * turn it into a job while the call waits; until then it is invisible (no id,
+   * no listing, no notice, no cap) and behaves like pi's own: output streams to
+   * `onData`, `signal` kills it, `timeout` kills it, and the promise settles with
+   * the exit code (rejecting "aborted" / "timeout:N" as pi's tool expects).
+   */
+  runForeground(command: string, cwd: string, env: NodeJS.ProcessEnv, o: ForegroundOptions): Promise<{ exitCode: number }> {
+    return new Promise((resolve, reject) => {
+      if (o.signal?.aborted) {
+        reject(new Error("aborted"));
+        return;
+      }
+      if (!existsSync(cwd)) {
+        reject(new Error(`Working directory does not exist: ${cwd}\nCannot execute bash commands.`));
+        return;
+      }
+      let aborted = false;
+      let timedOut = false;
+      let timeoutHandle: NodeJS.Timeout | undefined;
+      let job: Job | undefined;
+      const onAbort = (): void => {
+        aborted = true;
+        if (job) {
+          this.signalGroup(job, "SIGKILL");
+        }
+      };
+      const detach = (): void => {
+        clearTimeout(timeoutHandle);
+        o.signal?.removeEventListener("abort", onAbort);
+      };
+      job = this.launch(
+        command,
+        cwd,
+        env,
+        {
+          onData: o.onData,
+          onClose: (code, signal, error) => {
+            detach();
+            if (error) {
+              reject(error);
+            } else if (aborted) {
+              reject(new Error("aborted"));
+            } else if (timedOut) {
+              reject(new Error(`timeout:${o.timeout}`));
+            } else {
+              resolve({ exitCode: code ?? (signal ? 128 + (osConstants.signals[signal] ?? 0) : 1) });
+            }
+          },
+          onPromoted: (promoted) => {
+            detach();
+            o.onData(Buffer.from(movedNotice(promoted)));
+            resolve({ exitCode: 0 });
+          },
+        },
+        `fg${this.nextForeground++}`,
+      );
+      if (o.timeout !== undefined && Number.isFinite(o.timeout) && o.timeout > 0) {
+        timeoutHandle = setTimeout(() => {
+          timedOut = true;
+          if (job) {
+            this.signalGroup(job, "SIGKILL");
+          }
+        }, o.timeout * 1000);
+      }
+      o.signal?.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+
+  /**
+   * Turn every foreground command into a background job (the user's key). Commands
+   * past the running limit stay in the foreground and are counted as refused.
+   */
+  backgroundAll(): { promoted: Job[]; refused: number } {
+    const promoted: Job[] = [];
+    let refused = 0;
+    const max = this.opts.maxRunning ?? MAX_RUNNING;
+    for (const [oldId, r] of [...this.running]) {
+      const job = this.jobs.get(oldId);
+      if (!r.fg || !job || job.state !== "running") {
+        continue;
+      }
+      if (this.runningCount() >= max) {
+        refused++;
+        continue;
+      }
+      const fg = r.fg;
+      const id = `j${this.next++}`;
+      this.running.delete(oldId);
+      this.jobs.delete(oldId);
+      job.id = id;
+      this.running.set(id, r);
+      this.jobs.set(id, job);
+      r.fg = undefined;
+      this.armLifetime(job, r);
+      promoted.push(job);
+      this.opts.onChange?.();
+      fg.onPromoted(job);
+    }
+    return { promoted, refused };
+  }
+
   /** Ask a running job's process group to stop (SIGTERM, then SIGKILL). It is reported as stopped when it exits. */
   stop(id: string): Job | undefined {
-    const job = this.jobs.get(id);
+    const job = this.get(id);
     if (job?.state === "running") {
       this.end(job, "stopped");
     }
@@ -149,7 +279,7 @@ export class JobRegistry {
     }
   }
 
-  private finish(job: Job, state: JobState, code: number | null, signal: NodeJS.Signals | null): void {
+  private finish(job: Job, state: JobState, code: number | null, signal: NodeJS.Signals | null, error?: Error): void {
     const r = this.running.get(job.id);
     if (!r) {
       return;
@@ -157,6 +287,13 @@ export class JobRegistry {
     clearTimeout(r.timer);
     clearTimeout(r.killTimer);
     this.running.delete(job.id);
+    if (r.fg) {
+      // a foreground command is the tool call's business: no job record, no notice
+      this.jobs.delete(job.id);
+      rmSync(job.logPath, { force: true });
+      r.fg.onClose(code, signal, error);
+      return;
+    }
     const asked = job.state === "stopped";
     job.state = state;
     job.exitCode = code;
@@ -168,16 +305,18 @@ export class JobRegistry {
     }
   }
 
+  /** A background job by id; a foreground command is not one (so it cannot be read or stopped by the agent that is waiting for it). */
   get(id: string): Job | undefined {
-    return this.jobs.get(id);
+    return this.running.get(id)?.fg ? undefined : this.jobs.get(id);
   }
 
   list(): Job[] {
-    return [...this.jobs.values()];
+    return [...this.jobs.values()].filter((j) => !this.running.get(j.id)?.fg);
   }
 
+  /** Running background jobs (a foreground command is not one until it is moved). */
   runningCount(): number {
-    return this.running.size;
+    return [...this.running.values()].filter((r) => !r.fg).length;
   }
 
   /** A slice of the job's log from byte `since`; `next` is where to continue. Only the last `limit` bytes are returned. */
@@ -218,6 +357,11 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(s / 3600)}h${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}m`;
 }
 
+/** What the waiting bash call returns after its command was moved to the background. */
+export function movedNotice(job: Job): string {
+  return `\n[The user moved this command to the background as job ${job.id}; it keeps running and the output above is what it printed so far. You will be told when it exits; read its output with toriel_job (action "output", id "${job.id}").]\n`;
+}
+
 function describeEnd(job: Job): string {
   if (job.state === "timed out") {
     return "was stopped after reaching the lifetime limit";
@@ -252,10 +396,11 @@ interface Ctx {
   model?: { provider: string; id: string };
   thinkingLevel?: string;
   sessionManager?: { getSessionId(): string; getSessionFile(): string | undefined };
-  ui?: { setStatus(key: string, text: string | undefined): void };
+  ui?: { setStatus(key: string, text: string | undefined): void; notify?(message: string, type?: string): void };
 }
 interface Pi {
   registerTool(tool: Record<string, unknown>): void;
+  registerCommand?(name: string, options: { description?: string; handler: (args: string, ctx: Ctx) => Promise<void> | void }): void;
   on(event: string, handler: (event: unknown, ctx: Ctx) => void): void;
   sendMessage(message: { customType: string; content: string; display: boolean; details: unknown }, options?: { triggerTurn?: boolean; deliverAs?: string }): Promise<void> | void;
 }
@@ -331,7 +476,13 @@ export default function (pi: Pi) {
     }
   });
 
-  const base = createBashToolDefinition(process.cwd()) as unknown as {
+  // pi's bash tool with our process runner: a foreground command is a registered process, so the
+  // user can move it to the background while the call waits (everything else is pi's code)
+  const operations = {
+    exec: (command: string, cwd: string, o: { onData: (chunk: Buffer) => void; signal?: AbortSignal; timeout?: number; env?: NodeJS.ProcessEnv }) =>
+      registry.runForeground(command, cwd, o.env ?? shellEnv(), { onData: o.onData, signal: o.signal, timeout: o.timeout }),
+  };
+  const base = createBashToolDefinition(process.cwd(), { operations } as never) as unknown as {
     description: string;
     execute(id: string, params: Params, signal: unknown, onUpdate: unknown, ctx: Ctx): Promise<unknown>;
   };
@@ -358,6 +509,22 @@ export default function (pi: Pi) {
       } catch (err) {
         return { ...text(`Could not start the job: ${err instanceof Error ? err.message : String(err)}`), isError: true };
       }
+    },
+  });
+
+  pi.registerCommand?.(BACKGROUND_COMMAND, {
+    description: "toriel: move the running foreground bash command(s) to the background",
+    handler: async (_args, ctx) => {
+      const { promoted, refused } = registry.backgroundAll();
+      const parts = promoted.map((j) => `${j.id} (${j.command})`);
+      const stayed = `${refused} stayed in the foreground: already ${MAX_RUNNING} background jobs.`;
+      let message = "No command is running in the foreground.";
+      if (promoted.length > 0) {
+        message = `Moved to the background: ${parts.join(", ")}${refused > 0 ? `. ${stayed}` : ""}`;
+      } else if (refused > 0) {
+        message = stayed;
+      }
+      ctx.ui?.notify?.(message, promoted.length > 0 ? "info" : "warning");
     },
   });
 
