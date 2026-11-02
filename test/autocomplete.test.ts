@@ -139,3 +139,58 @@ describe("argument completion", () => {
     assert.deepEqual(await suggest({ ...base, sources }, "/compact "), []);
   });
 });
+
+describe("a tab popup in the real editor", () => {
+  const theme = { borderColor: (s: string) => s, selectList: { selectedPrefix: (s: string) => s, selectedText: (s: string) => s, description: (s: string) => s, scrollInfo: (s: string) => s, noMatch: (s: string) => s } };
+  const make = async (switcher: boolean) => {
+    const { InputEditor, configureEditorKeys } = await import("../src/editor.ts");
+    configureEditorKeys();
+    const ed = new InputEditor({ requestRender() {}, terminal: { rows: 40, columns: 80 } } as never, theme as never);
+    ed.setAutocompleteProvider(new CommandAutocomplete(() => ({ ...base, switcher, cwd: process.cwd() })));
+    const press = async (...keys: string[]) => {
+      for (const k of keys) {
+        ed.handleInput(k);
+        await new Promise((r) => setTimeout(r, 20));
+      }
+    };
+    return { ed, press };
+  };
+
+  it("closes when the switcher box holds text that is not a command", async () => {
+    const { ed, press } = await make(true);
+    await press("\t");
+    assert.equal(ed.isShowingAutocomplete(), true);
+    await press("t", "e", "s", "t");
+    assert.equal(ed.isShowingAutocomplete(), false);
+    await press("\r");
+    assert.ok(!ed.getText().includes("btw"), "no stale command was spliced into the text");
+  });
+
+  it("keeps completing commands when the text becomes a command name", async () => {
+    const { ed, press } = await make(false);
+    let submitted = "";
+    ed.onSubmit = (text) => {
+      submitted = text;
+    };
+    await press("\t", "/", "h");
+    assert.equal(ed.isShowingAutocomplete(), true);
+    await press("\r");
+    assert.equal(submitted.trim(), "/help");
+  });
+
+  it("is dismissed by esc, which never reaches the controller's own esc handling", async () => {
+    const { ed, press } = await make(false);
+    let sawEsc = false;
+    ed.onKey = (data) => {
+      sawEsc = sawEsc || data === "\x1b";
+      return false;
+    };
+    await press("\t");
+    assert.equal(ed.isShowingAutocomplete(), true);
+    await press("\x1b");
+    assert.equal(ed.isShowingAutocomplete(), false);
+    assert.equal(sawEsc, false);
+    await press("\x1b");
+    assert.equal(sawEsc, true, "with no popup, esc goes to the controller as before");
+  });
+});

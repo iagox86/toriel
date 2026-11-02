@@ -77,6 +77,11 @@ export class InputEditor extends Editor {
         // debug only
       }
     }
+    // an open completion popup owns esc: closing it must not also abort the run or leave the view
+    if (matchesKey(data, Key.escape) && this.isShowingAutocomplete()) {
+      super.handleInput(data);
+      return;
+    }
     if (this.onKey?.(data)) {
       return;
     }

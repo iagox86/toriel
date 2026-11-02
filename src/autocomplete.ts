@@ -62,6 +62,11 @@ export class CommandAutocomplete implements AutocompleteProvider {
     options: { signal: AbortSignal; force?: boolean },
   ): Promise<AutocompleteSuggestions | null> {
     const { ctx, provider } = this.delegate();
+    const typed = (lines[cursorLine] ?? "").slice(0, cursorCol);
+    if (options.force && /^\s*\/\S*$/.test(typed)) {
+      // a tab popup whose text has become a command name keeps completing commands, not files
+      options = { ...options, force: false };
+    }
     if (isEmpty(lines)) {
       // tab on an empty box would list files; the command list is the useful default
       return provider.getSuggestions(["/"], 0, 1, { ...options, force: false });
@@ -80,8 +85,8 @@ export class CommandAutocomplete implements AutocompleteProvider {
     return this.delegate().provider.applyCompletion(lines, cursorLine, cursorCol, item, prefix);
   }
 
-  shouldTriggerFileCompletion(lines: string[], cursorLine: number, cursorCol: number): boolean {
-    const { ctx, provider } = this.delegate();
-    return (ctx.switcher ? isEmpty(lines) : true) && provider.shouldTriggerFileCompletion(lines, cursorLine, cursorCol);
+  shouldTriggerFileCompletion(): boolean {
+    // always: a refusal leaves an open popup stale, whereas getSuggestions answers null (closing it) when nothing applies
+    return true;
   }
 }

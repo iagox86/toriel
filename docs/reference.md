@@ -120,7 +120,8 @@ summary column says `compacting`:
 - `/` completes commands (popup, tab); the list comes from `commands.ts`, so
   new commands appear automatically. Tab on an empty box lists the commands too (not
   files); file completion starts once there is text. While a permission dialog is
-  open tab does nothing (the dialog is modal)
+  open tab does nothing (the dialog is modal). `esc` with the popup open closes
+  the popup first (a second `esc` does whatever it did before)
 - the activity strip's timer reads `45s`, `12m05s`, `18h46m04s`, `1d02h05m09s`, and
   stops while the session waits on a dialog (the strip says `waiting on you`)
 - a code fence you type or paste with a remark after it (```` ```note about `x` ````) is repaired
