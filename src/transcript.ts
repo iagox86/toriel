@@ -219,17 +219,24 @@ export interface EventEffects {
   messageEnded?: boolean;
 }
 
-/** An assistant message with nothing to show (a tool call alone, or blank text). */
+/**
+ * An assistant message with nothing to show: a tool call alone (with or without
+ * thinking), or blank text. Thinking does not count: it is hidden by default
+ * (pi's hideThinkingBlock) and ctrl-t only restyles items in place, so folding
+ * is decided without it - with thinking shown the blocks still render, just
+ * after the run row that aggregates their calls.
+ */
 function rendersNothing(item: AssistantItem): boolean {
   return !item.partial.content.some((b) => {
-    const block = b as { type?: string; text?: string; thinking?: string };
-    return (block.type === "text" && Boolean(block.text?.trim())) || (block.type === "thinking" && Boolean(block.thinking?.trim()));
+    const block = b as { type?: string; text?: string };
+    return block.type === "text" && Boolean(block.text?.trim());
   });
 }
 
 /**
  * The tool run a new call joins: the last item, looking back past assistant
- * messages that show nothing (each call of an agent loop sits in its own).
+ * messages that show no text (each call of an agent loop sits in its own,
+ * usually with a thinking block attached).
  */
 function lastToolRun(items: readonly Item[]): ToolItem | undefined {
   for (let i = items.length - 1; i >= 0; i--) {

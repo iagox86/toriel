@@ -96,10 +96,13 @@ describe("applyEvent", () => {
   describe("consecutive tool calls", () => {
     // each call lives in its own assistant message, as in an agent loop
     const call = (id: string) => ({ role: "assistant", content: [{ type: "toolCall", id, name: "bash", arguments: { command: "ls" } }] });
-    const live = (view: ReturnType<typeof newView>, id: string, between?: unknown) => {
+    // a thinking model's call message: reasoning plus the call in one message
+    const callT = (id: string) => ({ role: "assistant", content: [{ type: "thinking", thinking: `step ${id}` }, { type: "toolCall", id, name: "bash", arguments: { command: "ls" } }] });
+    const live = (view: ReturnType<typeof newView>, message: unknown, between?: unknown) => {
       const e = { tui: { requestRender() {} } as never, cwd: "/w", addItem: (i: Item) => void view.items.push(i) };
-      applyEvent(view, { type: "message_start", message: call(id) }, e);
-      applyEvent(view, { type: "message_end", message: call(id) }, e);
+      const id = ((message as { content?: Array<{ type?: string; id?: string }> }).content ?? []).find((b) => b.type === "toolCall")?.id ?? "?";
+      applyEvent(view, { type: "message_start", message }, e);
+      applyEvent(view, { type: "message_end", message }, e);
       if (between) {
         applyEvent(view, { type: "message_start", message: between }, e);
         applyEvent(view, { type: "message_end", message: between }, e);
@@ -111,17 +114,32 @@ describe("applyEvent", () => {
 
     it("fold into one run even though each sits in its own assistant message", () => {
       const view = newView();
-      live(view, "1");
-      live(view, "2");
-      live(view, "3");
+      live(view, call("1"));
+      live(view, call("2"));
+      live(view, call("3"));
       assert.deepEqual(runs(view.items), [3]);
+    });
+
+    it("fold when each call sits in its own thinking message (a thinking model's loop)", () => {
+      const view = newView();
+      live(view, callT("1"));
+      live(view, callT("2"));
+      live(view, callT("3"));
+      assert.deepEqual(runs(view.items), [3]);
+    });
+
+    it("fold past a thinking-only assistant message between calls", () => {
+      const view = newView();
+      live(view, call("1"), { role: "assistant", content: [{ type: "thinking", thinking: "hmm" }] });
+      live(view, call("2"));
+      assert.deepEqual(runs(view.items), [2]);
     });
 
     it("are split by assistant text between them, and calls after it fold again", () => {
       const view = newView();
-      live(view, "1");
-      live(view, "2", { role: "assistant", content: [{ type: "text", text: "now the next step" }] });
-      live(view, "3");
+      live(view, call("1"));
+      live(view, call("2"), { role: "assistant", content: [{ type: "text", text: "now the next step" }] });
+      live(view, call("3"));
       assert.deepEqual(runs(view.items), [1, 2]);
     });
 
@@ -132,6 +150,8 @@ describe("applyEvent", () => {
       assert.deepEqual(runs(items), [3]);
       const split = itemsFromMessages([call("1"), result("1"), { role: "assistant", content: [{ type: "text", text: "next" }] }, call("2"), result("2")], tui, "/w");
       assert.deepEqual(runs(split), [1, 1]);
+      const thought = itemsFromMessages([callT("1"), result("1"), callT("2"), result("2")], tui, "/w");
+      assert.deepEqual(runs(thought), [2]);
     });
   });
 
