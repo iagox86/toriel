@@ -32,7 +32,7 @@ let sessionName = flag("--name");
 // let tests see how the daemon launched this child
 mkdirSync(dirname(sessionFile), { recursive: true });
 writeFileSync(`${sessionFile}.argv.json`, JSON.stringify(args));
-writeFileSync(`${sessionFile}.env.json`, JSON.stringify({ TORIEL_SESSION_ID: process.env.TORIEL_SESSION_ID ?? null, TORIEL_SOCK: process.env.TORIEL_SOCK ?? null }));
+writeFileSync(`${sessionFile}.env.json`, JSON.stringify({ TORIEL_SESSION_ID: process.env.TORIEL_SESSION_ID ?? null, TORIEL_SOCK: process.env.TORIEL_SOCK ?? null, TORIEL_CAN_SPAWN: process.env.TORIEL_CAN_SPAWN ?? null, TORIEL_AGENT_TYPES: process.env.TORIEL_AGENT_TYPES ?? null }));
 const messages = [];
 
 function loadMessages(file) {
@@ -206,6 +206,11 @@ async function handle(cmd) {
         messageCount: messages.length,
         pendingMessageCount: queue.length,
       });
+    case "get_last_assistant_text": {
+      const last = [...messages].reverse().find((m) => m.role === "assistant");
+      const part = Array.isArray(last?.content) ? last.content.find((c) => c.type === "text") : undefined;
+      return ok(cmd.id, "get_last_assistant_text", { text: part?.text ?? null });
+    }
     case "get_messages":
       return ok(cmd.id, "get_messages", { messages });
     case "set_session_name":
@@ -348,6 +353,24 @@ async function handle(cmd) {
       persist(user);
       out({ type: "message_end", message: user });
       await sleep(Number(process.env.FAKE_PI_RUN_MS ?? 50));
+      // "[turns N]" makes N-1 tool-call turns before the answer; "[hang]" runs until aborted (subagent limit tests)
+      aborted = false;
+      const turns = Number(/\[turns (\d+)\]/.exec(cmd.message)?.[1] ?? 1);
+      for (let i = 1; i < turns && !aborted; i++) {
+        const step = { role: "assistant", content: [{ type: "text", text: `step ${i}` }], usage: { totalTokens: 10, cost: { total: 0.001 } }, stopReason: "toolUse" };
+        out({ type: "message_start", message: step });
+        persist(step);
+        out({ type: "message_end", message: step });
+        await sleep(30);
+      }
+      while (cmd.message.includes("[hang]") && !aborted) {
+        await sleep(20);
+      }
+      if (aborted) {
+        streaming = false;
+        out({ type: "agent_settled" });
+        return;
+      }
       const assistant = {
         role: "assistant",
         content: [{ type: "text", text: `echo: ${cmd.message}${cmd.images?.length ? ` [${cmd.images.length} image(s): ${cmd.images.map((i) => i.mimeType).join(",")}]` : ""}` }],

@@ -1,0 +1,167 @@
+// Subagent bookkeeping and limits (docs/design.md item 9). Pure: the daemon
+// side (daemon-subagents.ts) starts and stops the sessions; this decides
+// whether a spawn is allowed and keeps the records the tools read back.
+import type { AgentProfile } from "./agents.ts";
+
+export interface SubagentLimits {
+  /** How many subagent links may sit above a session that spawns (1 = only the user's sessions spawn). */
+  maxDepth: number;
+  /** Subagents running at once, daemon-wide. */
+  maxConcurrent: number;
+  /** Spawns one session may make over its lifetime in this daemon. */
+  maxSpawnsPerParent: number;
+  /** Default token budget of one subagent when its profile sets none. */
+  budget: number;
+}
+
+/** `maxDepth` may be raised, but never past this. */
+export const HARD_MAX_DEPTH = 2;
+
+export const DEFAULT_SUBAGENT_LIMITS: SubagentLimits = { maxDepth: 1, maxConcurrent: 3, maxSpawnsPerParent: 20, budget: 150_000 };
+
+export type SubagentState = "running" | "done" | "stopped" | "limit" | "failed";
+
+export interface SubagentRecord {
+  /** The number the tools use (#1, #2...), unique per daemon run. */
+  handle: number;
+  /** UUID of the session that started it. */
+  parent: string;
+  /** Daemon session number of the subagent. */
+  session: number;
+  childId?: string;
+  childName?: string;
+  agent: string;
+  description: string;
+  background: boolean;
+  state: SubagentState;
+  startedAt: number;
+  endedAt?: number;
+  /** The subagent's final assistant text (partial after a stop or a limit). */
+  result?: string;
+  /** Why it ended early, or anything else the parent should know. */
+  note?: string;
+  /** Assistant messages so far. */
+  turns: number;
+  /** Token budget of this run (profile or default, capped by what the parent had left). */
+  budget: number;
+  maxTurns?: number;
+}
+
+export class SubagentBook {
+  private readonly records: SubagentRecord[] = [];
+  private nextHandle = 1;
+
+  add(init: Omit<SubagentRecord, "handle" | "state" | "startedAt" | "turns">, now = Date.now()): SubagentRecord {
+    const rec: SubagentRecord = { ...init, handle: this.nextHandle++, state: "running", startedAt: now, turns: 0 };
+    this.records.push(rec);
+    return rec;
+  }
+
+  get(handle: number): SubagentRecord | undefined {
+    return this.records.find((r) => r.handle === handle);
+  }
+
+  bySession(session: number): SubagentRecord | undefined {
+    return this.records.find((r) => r.session === session);
+  }
+
+  /** The record of the session with this UUID, when it is a subagent. */
+  byChild(uuid: string): SubagentRecord | undefined {
+    return this.records.find((r) => r.childId === uuid);
+  }
+
+  ofParent(parent: string): SubagentRecord[] {
+    return this.records.filter((r) => r.parent === parent);
+  }
+
+  running(): SubagentRecord[] {
+    return this.records.filter((r) => r.state === "running");
+  }
+}
+
+export interface SpawnContext {
+  limits: SubagentLimits;
+  book: SubagentBook;
+  parent: string;
+  /** The spawning session's own profile; undefined = a plain session the user started. */
+  parentProfile?: AgentProfile;
+  /** Subagent links above the parent. */
+  parentDepth: number;
+}
+
+/** Why a spawn is refused, in words the calling model can act on; undefined when it may go ahead. */
+export function refuseSpawn(c: SpawnContext): string | undefined {
+  const maxDepth = Math.min(c.limits.maxDepth, HARD_MAX_DEPTH);
+  if (c.parentProfile && !c.parentProfile.canSpawn) {
+    return `This agent profile ("${c.parentProfile.name}") may not start subagents (canSpawn is false). Do the work yourself.`;
+  }
+  if (c.parentDepth >= maxDepth) {
+    return `Subagents may not start subagents here (depth limit ${maxDepth}). Do the work yourself.`;
+  }
+  const spawned = c.book.ofParent(c.parent).length;
+  if (spawned >= c.limits.maxSpawnsPerParent) {
+    return `This session has already started ${spawned} subagents (limit ${c.limits.maxSpawnsPerParent}). Do the rest yourself or ask the user.`;
+  }
+  const running = c.book.running().length;
+  if (running >= c.limits.maxConcurrent) {
+    return `${running} subagents are already running (limit ${c.limits.maxConcurrent}). Wait for one with toriel_agents {action: "wait"} or try again shortly.`;
+  }
+  return undefined;
+}
+
+/** Token budget for a new subagent: its profile's, else the default, never more than its parent has left (undefined = unlimited parent). */
+export function childBudget(profileBudget: number | undefined, limits: SubagentLimits, parentLeft: number | undefined): number {
+  const own = profileBudget ?? limits.budget;
+  return parentLeft === undefined ? own : Math.max(0, Math.min(own, parentLeft));
+}
+
+export interface TurnCheck {
+  turns: number;
+  maxTurns?: number;
+  tokens: number;
+  budget: number;
+  /** The message ended in a tool call, so the run goes on (a run that is ending needs no cutting). */
+  continuing: boolean;
+}
+
+/** Whether a running subagent must be cut off, and the note for its parent. */
+export function limitBreach(c: TurnCheck): string | undefined {
+  if (!c.continuing) {
+    return undefined;
+  }
+  if (c.tokens >= c.budget) {
+    return `stopped: it used ${c.tokens} tokens, over its budget of ${c.budget}`;
+  }
+  if (c.maxTurns !== undefined && c.turns >= c.maxTurns) {
+    return `stopped: it reached its limit of ${c.maxTurns} turns`;
+  }
+  return undefined;
+}
+
+/** What a tool shows for one record. */
+export function describeRecord(r: SubagentRecord, now = Date.now()): string {
+  const secs = Math.round(((r.endedAt ?? now) - r.startedAt) / 1000);
+  const note = r.note ? ` - ${r.note}` : "";
+  return `#${r.handle} ${r.agent}: ${r.description} [${r.state}${r.background ? ", background" : ""}, ${r.turns} turn(s), ${secs}s]${note}`;
+}
+
+/** The result text a parent gets: the subagent's words, with the reason when it was cut short. */
+export function resultText(r: SubagentRecord): string {
+  const body = r.result?.trim() ? r.result.trim() : "(the subagent produced no text)";
+  switch (r.state) {
+    case "running":
+      return `#${r.handle} is still running.`;
+    case "done":
+      return body;
+    case "failed":
+      return `Subagent #${r.handle} failed${r.note ? `: ${r.note}` : ""}.${r.result ? `\n\nPartial result:\n${body}` : ""}`;
+    default:
+      return `Subagent #${r.handle} ${r.note ?? "was stopped"}.\n\nPartial result:\n${body}`;
+  }
+}
+
+/** "#3" or "3" as a handle number. */
+export function parseHandle(ref: string | undefined): number | undefined {
+  const m = /^#?(\d+)$/.exec((ref ?? "").trim());
+  return m ? Number(m[1]) : undefined;
+}

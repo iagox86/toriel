@@ -65,7 +65,7 @@ export function createServer(ctx: DaemonContext): net.Server {
           continue;
         }
         // one-shot callers (presence heartbeats, the agents and grants extensions) are not controllers: no sync, no attaches
-        if ((cmd.type === "external_register" || cmd.type === "message" || cmd.type === "permission_check") && !ctx.hub.isController(socket)) {
+        if ((cmd.type === "external_register" || cmd.type === "message" || cmd.type === "permission_check" || cmd.type === "agent_spawn" || cmd.type === "agents_op") && !ctx.hub.isController(socket)) {
           ctx.hub.addPresenceOnly(socket);
         } else if (!ctx.hub.isKnown(socket)) {
           syncController(ctx, socket);

@@ -17,15 +17,15 @@ model: litellm/gemma4:12b       # provider/id; default = your settings
 thinking: low                   # off, minimal, low, medium, high, xhigh, max
 extensions: false               # default true; false drops pi extensions (permission system, memory tools)
 minimal: true                   # default true; skips AGENTS.md/CLAUDE.md, skills, prompt templates
-maxTurns: 25                    # parsed now, enforced once subagents exist
-budget: 150000                  # tokens; same
-canSpawn: false                 # same
+maxTurns: 25                    # turns a subagent may take before it is cut off (toriel_agent runs)
+budget: 150000                  # tokens a subagent may use (default 150000, capped by its parent's remainder)
+canSpawn: false                 # may this agent start subagents of its own (also needs depth left; default false)
 ---
 The system prompt, appended to pi's own.
 ```
 
 What the launch does:
 
-- `tools` becomes `--tools`. pi keeps MCP tools unless an entry starts with `mcp__`, so a profile with no `mcp__` entry also gets `--no-mcp`. **An explicit `tools` list owns the loadout**: tools that extensions add are only kept if named (measured on the pinned pi 1.4.0 - a `-e` extension's tools are filtered out unless listed; pi's own agent-dir extension tools survive, so do not rely on that either). To keep messaging under `extensions: false`, name them: `tools: read, grep, toriel_message, toriel_usage`. A profile with no `tools` entry keeps toriel's tools (the daemon adds them additively); `extensions: false` alone makes a bare agent. A profile that names `bash` should also name `toriel_job`: `bash` accepts `run_in_background` in every toriel session, but without `toriel_job` the agent cannot list, read or stop what it starts (it still gets the exit notice).
+- `tools` becomes `--tools`. pi keeps MCP tools unless an entry starts with `mcp__`, so a profile with no `mcp__` entry also gets `--no-mcp`. **An explicit `tools` list owns the loadout**: tools that extensions add are only kept if named (measured on the pinned pi 1.4.0 - a `-e` extension's tools are filtered out unless listed; pi's own agent-dir extension tools survive, so do not rely on that either). To keep messaging under `extensions: false`, name them: `tools: read, grep, toriel_message, toriel_usage`. A profile with no `tools` entry keeps toriel's tools (the daemon adds them additively); `extensions: false` alone makes a bare agent. A profile with `canSpawn: true` that lists `tools` must name `toriel_agent` and `toriel_agents` to use them. A profile that names `bash` should also name `toriel_job`: `bash` accepts `run_in_background` in every toriel session, but without `toriel_job` the agent cannot list, read or stop what it starts (it still gets the exit notice).
 - A profile with `mcp__server__*` tools only sees that server's tools, but pi still connects every enabled server in `mcp.json` when the session starts. There is no per-run server choice in pi. The loader warns when a pattern names a server that is not configured.
 - `model` and `thinking` apply when a session is created; a resumed session keeps its own. The prompt, tools and flags are re-applied on every respawn (the profile is saved per session in `~/.local/share/toriel/session-agents.json`, so editing the file later does not change existing sessions).

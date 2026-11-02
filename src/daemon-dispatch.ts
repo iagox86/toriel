@@ -33,6 +33,7 @@ import {
   handleUiResponse,
 } from "./daemon-handlers-ops.ts";
 import { handleMessage } from "./daemon-handlers-messages.ts";
+import { handleAgentSpawn, handleAgentsOp } from "./daemon-subagents.ts";
 import { handlePermissionAdd, handlePermissionCheck, handlePermissionList, handlePermissionRestore, handlePermissionRevoke } from "./daemon-permissions.ts";
 import { handleResolve } from "./daemon-resolve.ts";
 import { handleScheduleAdd, handleScheduleList, handleScheduleOp } from "./daemon-schedule.ts";
@@ -76,6 +77,10 @@ export async function dispatch(ctx: DaemonContext, cmd: ClientCommand, socket: n
       return handleCommands(ctx, cmd, res);
     case "message":
       return handleMessage(ctx, cmd, res);
+    case "agent_spawn":
+      return handleAgentSpawn(ctx, cmd, socket, res);
+    case "agents_op":
+      return handleAgentsOp(ctx, cmd, socket, res);
     case "schedule_add":
       return handleScheduleAdd(ctx, cmd, res);
     case "schedule_list":

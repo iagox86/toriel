@@ -85,6 +85,23 @@ export function recordFork(parent: SessionRef, child: SessionRef, file = LINEAGE
   saveLineage(data, file);
 }
 
+/** Record that an agent started `child` on behalf of `parent`: like a fork, but nested under the parent in the UI. */
+export function recordSubagent(parent: SessionRef, child: SessionRef, file = LINEAGE_FILE): void {
+  recordFork(parent, child, file);
+  const data = loadLineage(file);
+  data[child.id] = { ...data[child.id], kind: "subagent" };
+  saveLineage(data, file);
+}
+
+/** Number of subagent links above `uuid` (0 = a session the user started or forked). */
+export function subagentDepth(uuid: string | undefined, parents: ReadonlyMap<string, string>): number {
+  let depth = 0;
+  for (let at = uuid; at && parents.has(at) && depth < 16; depth++) {
+    at = parents.get(at);
+  }
+  return depth;
+}
+
 /** The session UUID from a session file's header line, if readable. */
 export function sessionIdOfFile(file: string): string | undefined {
   try {
