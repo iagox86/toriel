@@ -122,7 +122,9 @@ export function activityLines(state: ActivityState, width: number, now: number):
   if (state.activity) {
     const { ms, waiting } = runElapsed(state, state.activity, now);
     const label = waiting ? "waiting on you" : state.activity.label;
-    lines.push(truncateToWidth(` ${spinner(spinnerFrame(now))} ${label} ${dim(formatElapsed(ms))}`, width));
+    // a shell command the agent waits for can be moved to the background: say how
+    const hint = !waiting && state.activity.label === "running bash" ? dim("  ctrl-b: run in background") : "";
+    lines.push(truncateToWidth(` ${spinner(spinnerFrame(now))} ${label} ${dim(formatElapsed(ms))}${hint}`, width));
   }
   return lines;
 }

@@ -78,6 +78,7 @@ export class SessionCommands {
         this.h.tui.requestRender();
       },
       abort: () => this.abort(),
+      background: () => this.background(),
       parent: () => this.parent(),
       detach: () => this.detach(),
       name: rename,
@@ -209,6 +210,27 @@ export class SessionCommands {
 
   private fail(what: string, err: unknown): void {
     this.h.notify(`${what} failed: ${errText(err)}`);
+  }
+
+  /**
+   * Move the command(s) the agent is waiting for to the background (ctrl-b while the
+   * agent works, or /background). Needs a running child but never wakes a sleeping
+   * session: with nothing running there is nothing to move. The session's pi answers
+   * with the notice that says what moved.
+   */
+  background(): void {
+    const meta = this.viewedMeta();
+    const view = this.h.viewing ? this.h.views.get(this.h.viewing) : undefined;
+    const working = Boolean(meta?.streaming) || (view?.echoes.length ?? 0) > 0;
+    if (meta?.id === undefined || !meta.attachedToYou || !working) {
+      this.h.notify("nothing is running here to move to the background");
+      return;
+    }
+    // short timeout: an answer takes milliseconds, and a daemon older than this controller never answers a request it does not know
+    this.h.request({ type: "background", session: meta.id }, 5000).catch((err: unknown) => {
+      const stale = err instanceof Error && /timed out/.test(err.message);
+      this.h.notify(stale ? "background: no answer from the daemon (is it older than this toriel? restart it: toriel kill-server)" : `background failed: ${errText(err)}`);
+    });
   }
 
   private abort(): void {

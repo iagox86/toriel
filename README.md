@@ -87,6 +87,7 @@ begin a new session, or use the keys below.
 | left / right on a parent session | switcher | fold / unfold its subagents (left on a subagent jumps up to the parent) |
 | left on an empty editor | session | back to the switcher |
 | esc | session | abort the running agent |
+| ctrl-b | session | while the agent waits for a shell command: move it to the background (`/background`) |
 | esc esc | session | rewind to an earlier message |
 | ctrl-o, ctrl-t | session | expand tool output, show thinking |
 | ctrl-r | session | search prompt history |
@@ -98,7 +99,7 @@ Type `/` for commands; tab completes them and their arguments, `/help` lists the
 - Switcher: `/new [-a agent]`, `/init`, `/agents`, `/permissions` (every session's permission grants), `/doctor`, `/detach`, `/stop`, `/delete`, `/rename`, `/group`, `/ungroup`, `/park`,
   `/filter`, `/comment`, `/summarize`, `/restore`, `/adopt`, `/feedback`, `/kill-daemon`, `/help`, `/exit`
 - In a session: `/help`, `/in`, `/at`, `/every`, `/loop`, `/cron` (timed prompts; `/schedules` lists them), `/permissions` (list, add and revoke "allow for 1 hour" grants), `/doctor`, `/btw`, `/comment`, `/model`, `/think`, `/compact`, `/clear`, `/fork`, `/park`, `/rename`, `/reload`,
-  `/mcp` (`list`, `status`, `explore`, `add`, `remove`, `reconnect`, `login`, `logout`), `/init`, `/why`, `/abort`,
+  `/mcp` (`list`, `status`, `explore`, `add`, `remove`, `reconnect`, `login`, `logout`), `/init`, `/why`, `/abort`, `/background`,
   `/feedback`, `/parent` (jump to the agent that started this subagent), `/detach` (cut that link), `/quit` (back to the switcher), `/exit`
 
 `/comment <text>` keeps a longer note to yourself about a session (why it exists, where it stands). It is not drawn in the list, but `/filter` and `ctrl-f` search it. With no text the switcher puts the current comment in the box to edit; `-c` removes it.
@@ -109,7 +110,7 @@ Clicking the transcript only toggles a thinking block or tool output on a double
 
 Anything else starting with `/` goes to pi (its skills and prompt templates).
 
-`!command` in a session (the chat box border turns yellow while you type it) runs a shell command in the session's directory and shows the output. The agent gets the command and output immediately, as a message wrapped in `<local-command>` tags with a note that you ran it yourself, so it reacts right away (or queues it behind its current turn). `esc` stops a running command; a command is stopped after 10 minutes; very long output is cut to its start and end. It needs a running session. `!!` is not supported.
+`!command` in a session (the chat box border turns yellow while you type it) runs a shell command in the session's directory and shows the output. The agent gets the command and output immediately, as a message wrapped in `<local-command>` tags with a note that you ran it yourself, so it reacts right away (or queues it behind its current turn). `esc` stops a running command; a command is stopped after 10 minutes; very long output is cut to its start and end. It needs a running session, and it sees the session's environment (`TORIEL_SESSION_ID`, `PI_SESSION_ID`, ...) like the agent's own shell. `!!` is not supported.
 
 Sessions can message each other: ask an agent to "tell the session called Mealie that the schema changed" and it uses the `toriel_message` tool (loaded into every session by toriel, along with a short `messaging` skill). The text arrives in the other session labelled `[from <name> (<id>)]` and shown as "from <name>" in the transcript; an idle session is started to read it. Delivered messages ride toriel's session bridge when the receiving session has it (see `docs/reference.md`), so they cannot strand in pi's steering queue; otherwise they fall back to plain steering. Agents are told to do this only when you ask. If the daemon goes away the controller keeps its screen and your typed text, reconnects on its own and redraws every session from the daemon; the notice line warns if toriel's own files are missing from the checkout or old toriel links are left in `~/.pi/agent`. `/name` with no argument shows the session's name and id.
 

@@ -3,7 +3,8 @@
 import * as fs from "node:fs";
 import type * as net from "node:net";
 import { compactAndWait } from "./compact-wait.ts";
-import { TRASH_DIR } from "./config.ts";
+import { bangEnv } from "./child-env.ts";
+import { SOCK, TRASH_DIR } from "./config.ts";
 import { type Cmd, type DaemonContext, requireNotInPi, type Responder } from "./daemon-context.ts";
 import { deliverToSession } from "./daemon-handlers-bridge.ts";
 import { sendHistory } from "./daemon-history.ts";
@@ -42,7 +43,7 @@ export async function handleBash(ctx: DaemonContext, cmd: Cmd<"bash">, res: Resp
   s.localCommand = abort;
   let result: LocalResult;
   try {
-    result = await runLocal(cmd.command, s.cwd, abort.signal);
+    result = await runLocal(cmd.command, s.cwd, abort.signal, undefined, bangEnv(s, SOCK));
   } finally {
     s.localCommand = undefined;
   }
@@ -56,6 +57,26 @@ export async function handleBash(ctx: DaemonContext, cmd: Cmd<"bash">, res: Resp
 
 export async function handleAbortBash(ctx: DaemonContext, cmd: Cmd<"abort_bash">, res: Responder): Promise<void> {
   ctx.registry.live(cmd.session).localCommand?.abort();
+  res(true);
+}
+
+/** Name of the toriel-jobs extension command (the same string as BACKGROUND_COMMAND in pi/extensions/toriel-jobs.ts; a test keeps them equal). */
+export const BACKGROUND_COMMAND = "toriel-background";
+
+/**
+ * Ask the session's pi to move the bash command(s) the agent is waiting for to the
+ * background. The extension command runs at once even mid-turn and answers with a
+ * notice ("Moved to the background: j2 (...)" or "No command is running in the
+ * foreground"). Never prompt for a command pi does not have: it would reach the
+ * model as text.
+ */
+export async function handleBackground(ctx: DaemonContext, cmd: Cmd<"background">, res: Responder): Promise<void> {
+  const child = ctx.registry.live(cmd.session).child;
+  const commands = await child.getCommands();
+  if (!commands.some((c) => c.name === BACKGROUND_COMMAND)) {
+    throw new Error("this session's pi does not have the background-jobs extension; restart the session");
+  }
+  await child.prompt(`/${BACKGROUND_COMMAND}`);
   res(true);
 }
 

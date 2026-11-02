@@ -82,6 +82,21 @@ export class SessionActions {
       this.lastEsc = now;
       return true;
     }
+    // ctrl-b = move the running command to the background. Only while the agent
+    // works (or a prompt was just sent): when idle it stays the editor's cursor-left.
+    if (matchesKey(data, Key.ctrl("b"))) {
+      const meta = this.h.viewing ? this.h.metaForPath(this.h.viewing) : undefined;
+      const view = this.h.viewing ? this.h.views.get(this.h.viewing) : undefined;
+      if (this.bangSession !== undefined) {
+        this.h.notify("a ! command cannot move to the background (esc stops it)");
+        return true;
+      }
+      if (meta?.streaming || (view?.echoes.length ?? 0) > 0) {
+        this.commands.background();
+        return true;
+      }
+      return false;
+    }
     if (matchesKey(data, Key.up) && this.h.editor.getText().length === 0) {
       const meta = this.h.viewing ? this.h.metaForPath(this.h.viewing) : undefined;
       const view = this.h.viewing ? this.h.views.get(this.h.viewing) : undefined;

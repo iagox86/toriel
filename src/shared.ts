@@ -126,6 +126,8 @@ type ClientCommandBody =
   | { type: "bash"; session: number; command: string }
   /** Stop a command started with `bash`. */
   | { type: "abort_bash"; session: number }
+  /** Move the bash command(s) the agent is waiting for in this session to the background (they become jobs). The child answers with a notice. */
+  | { type: "background"; session: number }
   /** Drop queued steering/follow-up messages; the response carries their text. */
   | { type: "clear_queue"; session: number }
   /** The text pi's /mcp prints (servers and their states), for listing and completion. */
