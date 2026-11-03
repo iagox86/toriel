@@ -129,6 +129,55 @@ describe("info panel taller than the screen", () => {
   });
 });
 
+describe("a closed info panel", () => {
+  const tall = (name: string): Component => ({ render: () => Array.from({ length: 60 }, (_, i) => `${name} ${i}`), invalidate: () => {} });
+  const nothing: Component = { render: () => [], invalidate: () => {} };
+  const stub = (line: string): Component => ({ render: () => [line], invalidate: () => {} });
+
+  function layouts(panel: InfoPanel) {
+    return buildLayouts({
+      editor: stub("EDITOR"),
+      statusLine: stub("STATUS"),
+      scroll: tall("chat"),
+      activityLine: nothing,
+      rewindPicker: nothing,
+      dialogPanel: nothing,
+      infoPanel: panel,
+      choicePanel: nothing,
+      banner: nothing,
+      scheduleStrip: nothing,
+      switcher: tall("list"),
+      dialogOpen: () => false,
+    });
+  }
+
+  it("leaves no gap between the chat and the input", () => {
+    const { chat } = layouts(new InfoPanel());
+    const lines = renderLayoutFrame(chat, 60, 20, () => {}).lines;
+    const editor = lines.indexOf("EDITOR");
+    assert.ok(editor > 0);
+    assert.match(lines[editor - 1] ?? "", /chat \d+/, lines.join("|"));
+  });
+
+  it("leaves no gap between the session list and the input", () => {
+    const { switcher } = layouts(new InfoPanel());
+    const lines = renderLayoutFrame(switcher, 60, 20, () => {}).lines;
+    const editor = lines.indexOf("EDITOR");
+    assert.ok(editor > 0);
+    assert.match(lines[editor - 1] ?? "", /list \d+/, lines.join("|"));
+  });
+
+  it("takes the rows back after it was shown and closed", () => {
+    const panel = new InfoPanel();
+    const { chat } = layouts(panel);
+    panel.show("a\nb");
+    renderLayoutFrame(chat, 60, 20, () => {});
+    panel.close();
+    const lines = renderLayoutFrame(chat, 60, 20, () => {}).lines;
+    assert.match(lines[lines.indexOf("EDITOR") - 1] ?? "", /chat \d+/);
+  });
+});
+
 describe("info panel actions", () => {
   it("runs the action for its key, closes, and ignores other keys", () => {
     const panel = new InfoPanel();
