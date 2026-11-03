@@ -23,7 +23,7 @@ describe("panels behind a dialog", () => {
       activityLine: text(""),
       rewindPicker: text(""),
       dialogPanel: text("PERMISSION DIALOG"),
-      infoPanel: text("BTW ANSWER"),
+      infoPanel: { ...text("BTW ANSWER"), isOpen: true },
       choicePanel: text("MODEL PICKER"),
       banner: text(""),
       scheduleStrip: text(""),

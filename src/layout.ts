@@ -9,7 +9,7 @@ export interface LayoutParts {
   activityLine: Component;
   rewindPicker: Component;
   dialogPanel: Component;
-  infoPanel: Component;
+  infoPanel: Component & { readonly isOpen: boolean };
   choicePanel: Component;
   banner: Component;
   /** The viewed session's schedules, a line each, above the input. */
@@ -38,7 +38,10 @@ export function buildLayouts(p: LayoutParts): { chat: VStack; switcher: VStack }
   // The info panel scrolls, so it must stay visible to the layout engine (a wrapper would hide its inner stack): it is
   // dropped with `visible` instead. It takes the height it needs and gives way to a shorter screen, keeping room for
   // its padding, one row of text and its footer.
-  const info = { component: p.infoPanel, basis: "auto" as const, grow: 0, shrink: 1, minSize: INFO_MIN_ROWS, visible: () => !p.dialogOpen() };
+  // minSize applies even to a panel that draws nothing (a closed one renders a single blank row), so a closed
+  // one must be dropped too or it reserves INFO_MIN_ROWS blank rows above the input.
+  const infoOpen = () => p.infoPanel.isOpen;
+  const info = { component: p.infoPanel, basis: "auto" as const, grow: 0, shrink: 1, minSize: INFO_MIN_ROWS, visible: () => !p.dialogOpen() && infoOpen() };
   const choice = hiddenWhile(p.dialogOpen, p.choicePanel);
   const dock = new VStack([
     { component: p.editor, shrink: 0, minSize: 3 },
@@ -58,6 +61,6 @@ export function buildLayouts(p: LayoutParts): { chat: VStack; switcher: VStack }
       fit(p.scheduleStrip),
       dockRow,
     ]),
-    switcher: new VStack([{ component: p.switcher, basis: 0, grow: 1, shrink: 1, minSize: 1 }, { ...info, visible: undefined }, fit(p.choicePanel), dockRow]),
+    switcher: new VStack([{ component: p.switcher, basis: 0, grow: 1, shrink: 1, minSize: 1 }, { ...info, visible: infoOpen }, fit(p.choicePanel), dockRow]),
   };
 }
