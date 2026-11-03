@@ -5,7 +5,8 @@ import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { getMarkdownTheme, getSelectListTheme, initTheme } from "@earendil-works/pi-coding-agent";
 import { FENCE_MARK } from "./components.ts";
-import { AGENT_DIR, THEME_NAME } from "./theme.ts";
+import { visibleFenceInfo } from "./fence-info.ts";
+import { AGENT_DIR, dim, THEME_NAME } from "./theme.ts";
 
 // initTheme(name) only searches $PI_CODING_AGENT_DIR/themes. Point it at our
 // own dir for the duration of the call; the daemon and its pi children must
@@ -22,8 +23,28 @@ try {
   }
 }
 
-// codeBlockBorder draws the ``` fence lines; components.ts drops lines carrying the mark
-export const mdTheme = { ...getMarkdownTheme(), codeBlockBorder: () => FENCE_MARK };
+// highlight.js, the instance pi's renderer reads (see highlightLanguagesLoaded below); undefined when it cannot be found
+const nextToPi = createRequire(import.meta.resolve("@earendil-works/pi-coding-agent"));
+const hljs: { getLanguage(name: string): unknown } | undefined = (() => {
+  try {
+    return nextToPi("highlight.js/lib/index.js");
+  } catch {
+    return undefined;
+  }
+})();
+// without the highlighter every single word counts as a language, so nothing is shown that might be one
+const isLanguage = (name: string): boolean => (hljs ? hljs.getLanguage(name.toLowerCase()) !== undefined : true);
+
+/**
+ * codeBlockBorder draws the ``` fence lines. Components drop lines carrying the mark, which is what a fence line
+ * normally becomes; one whose text is not a language ("```this is the first line") keeps that text as a dim line,
+ * indented like the code under it, so what the person wrote is not lost.
+ */
+export function fenceBorder(text: string): string {
+  const shown = text.startsWith("```") ? visibleFenceInfo(text.slice(3), isLanguage) : undefined;
+  return shown === undefined ? FENCE_MARK : `  ${dim(shown)}`;
+}
+export const mdTheme = { ...getMarkdownTheme(), codeBlockBorder: fenceBorder };
 export const selectListTheme = getSelectListTheme();
 
 /**

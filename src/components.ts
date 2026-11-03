@@ -1,6 +1,6 @@
 // Small adjustments to pi's message components that pi's own options don't
 // offer: no ``` fences around code blocks, and air above user messages.
-import { AssistantMessageComponent, CompactionSummaryMessageComponent, UserMessageComponent } from "@earendil-works/pi-coding-agent";
+import { AssistantMessageComponent, BashExecutionComponent, CompactionSummaryMessageComponent, UserMessageComponent } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { prettyError } from "./error-format.ts";
 
@@ -86,12 +86,26 @@ export class Dimmed implements Component {
 }
 
 /**
- * pi's compaction row, with its expand hint filled in: pi looks the key up in
- * its own app keybindings, which toriel does not load, so the hint comes out as
- * "( to expand)". Our toggle for it is ctrl-o.
+ * pi builds every "... N more lines (<key> to expand)" hint from its own app
+ * keybindings, which toriel does not load, so the key comes out empty: "( to
+ * expand)" or "lines,  to expand)". Put our toggle, ctrl-o, in. A hint that
+ * already has a key is left alone (the character before the colour codes is the
+ * last letter of the key, not a space or a bracket).
  */
+export function fillExpandKey(line: string): string {
+  return line.replace(/(^|[ (])((?:\x1b\[[0-9;]*m)*) to expand/g, "$1$2ctrl-o to expand");
+}
+
+/** pi's compaction row, with its expand hint filled in (fillExpandKey). */
 export class CompactionRow extends CompactionSummaryMessageComponent {
   override render(width: number): string[] {
-    return super.render(width).filter((l) => !l.includes(FENCE_MARK)).map((l) => l.replace(/\(((?:\x1b\[[0-9;]*m)*) to expand\)/, "($1ctrl-o to expand)"));
+    return super.render(width).filter((l) => !l.includes(FENCE_MARK)).map(fillExpandKey);
+  }
+}
+
+/** pi's row for a finished or running `!command`, with its expand hint filled in (fillExpandKey). */
+export class BashRow extends BashExecutionComponent {
+  override render(width: number): string[] {
+    return super.render(width).map(fillExpandKey);
   }
 }

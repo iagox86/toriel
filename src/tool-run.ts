@@ -4,6 +4,7 @@
 import type { ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { truncateToWidth } from "@earendil-works/pi-tui";
+import { fillExpandKey } from "./components.ts";
 import { attention, dim } from "./theme.ts";
 
 export interface ToolCall {
@@ -54,7 +55,7 @@ export class ToolRun implements Component {
           return c.cachedLines;
         }
         c.component.setExpanded(true); // pi truncates long output until expanded
-        const lines = c.component.render(width);
+        const lines = c.component.render(width).map(fillExpandKey);
         if (c.done) {
           c.cachedLines = lines;
           c.cachedWidth = width;

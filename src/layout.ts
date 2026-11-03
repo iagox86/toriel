@@ -19,6 +19,9 @@ export interface LayoutParts {
   dialogOpen: () => boolean;
 }
 
+/** Smallest the info panel is squeezed to: the gap and padding above, one row of text, the footer block below. */
+const INFO_MIN_ROWS = 6;
+
 /** A row that takes only the height its content needs (panels that are empty take none). */
 const fit = (component: Component) => ({ component, basis: "auto" as const, grow: 0, shrink: 0, minSize: 0 });
 
@@ -32,7 +35,10 @@ export function hiddenWhile(hidden: () => boolean, component: Component): Compon
 
 export function buildLayouts(p: LayoutParts): { chat: VStack; switcher: VStack } {
   // a dialog blocks the agent, so it owns the screen and the keys; a /btw answer or picker waits behind it
-  const info = hiddenWhile(p.dialogOpen, p.infoPanel);
+  // The info panel scrolls, so it must stay visible to the layout engine (a wrapper would hide its inner stack): it is
+  // dropped with `visible` instead. It takes the height it needs and gives way to a shorter screen, keeping room for
+  // its padding, one row of text and its footer.
+  const info = { component: p.infoPanel, basis: "auto" as const, grow: 0, shrink: 1, minSize: INFO_MIN_ROWS, visible: () => !p.dialogOpen() };
   const choice = hiddenWhile(p.dialogOpen, p.choicePanel);
   const dock = new VStack([
     { component: p.editor, shrink: 0, minSize: 3 },
@@ -46,12 +52,12 @@ export function buildLayouts(p: LayoutParts): { chat: VStack; switcher: VStack }
       fit(p.activityLine),
       fit(p.rewindPicker),
       fit(p.dialogPanel),
-      fit(info),
+      info,
       fit(choice),
       fit(p.banner),
       fit(p.scheduleStrip),
       dockRow,
     ]),
-    switcher: new VStack([{ component: p.switcher, basis: 0, grow: 1, shrink: 1, minSize: 1 }, fit(p.infoPanel), fit(p.choicePanel), dockRow]),
+    switcher: new VStack([{ component: p.switcher, basis: 0, grow: 1, shrink: 1, minSize: 1 }, { ...info, visible: undefined }, fit(p.choicePanel), dockRow]),
   };
 }

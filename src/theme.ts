@@ -63,14 +63,21 @@ const panelBg = `\x1b[48;2;${rgb(token("selectedBg"))}m`;
  * below. Content lines are truncated by the caller to `panelInnerWidth`.
  */
 export function panel(lines: string[], width: number, maxWidth = 100): string[] {
+  return ["", ...["", ...lines, ""].map(panelRowPainter(width, maxWidth))];
+}
+
+/**
+ * Paints one content line the way `panel()` does (centered, on the raised background). For a panel built from
+ * several stacked pieces, so one of them can scroll while the padding and footer stay put.
+ */
+export function panelRowPainter(width: number, maxWidth = 100): (line: string) => string {
   const w = Math.min(maxWidth, Math.max(10, width - 4));
   const margin = " ".repeat(Math.max(0, Math.floor((width - w) / 2)));
-  const paint = (line: string) => {
+  return (line) => {
     const armed = line.replace(/\x1b\[(?:0|49)?m/g, (m) => (m === "\x1b[49m" ? panelBg : `${m}${panelBg}`));
     const pad = " ".repeat(Math.max(0, w - visibleWidth(line)));
     return `${margin}${panelBg}${armed}${pad}\x1b[0m`;
   };
-  return ["", ...["", ...lines, ""].map(paint)];
 }
 
 /** Content width available inside `panel()` at terminal `width`. */
@@ -113,6 +120,7 @@ const dimFg = fg("muted");
 const accentFg = fg("accent");
 const warningFg = fg("warning");
 const errorFg = fg("error");
+const successFg = fg("success");
 const brightFg = fg("toolTitle");
 // bold white, bright grey, grey, dark grey
 const ageFgs = [`\x1b[1m\x1b[38;2;${rgb("base3")}m`, fg("toolTitle"), fg("text"), dimFg];
@@ -144,6 +152,8 @@ export const selected = (s: string) =>
   `\x1b[1m${accentFg}${s.replaceAll("\x1b[39m", `\x1b[39m${accentFg}`)}\x1b[39m\x1b[22m`;
 /** warning - streaming/working markers. */
 export const streaming = (s: string) => `${warningFg}${s}\x1b[39m`;
+/** success - a check that passed. */
+export const success = (s: string) => `${successFg}${s}\x1b[39m`;
 /** error - attention (waiting on permission, errors). */
 export const attention = (s: string) => `${errorFg}${s}\x1b[39m`;
 /** accent - the working spinner glyph. */

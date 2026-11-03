@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { type DoctorIo, doctorMain, DOCTOR_USAGE } from "../src/doctor-cli.ts";
+import { type DoctorIo, doctorMain, DOCTOR_USAGE, wantsColor } from "../src/doctor-cli.ts";
 import { GOOD_CONFIG, setup as setupIn, tempHome } from "./doctor-fixture.ts";
 
 let env: ReturnType<typeof tempHome>;
@@ -53,6 +53,25 @@ describe("toriel doctor (command line)", () => {
     assert.match(suggestions.text(), /2 problems, 2 fixable/);
     const broken = fakeIo();
     assert.equal(await doctorMain([], broken.io, setupIn(env.home, { noCli: true }).opts), 1);
+  });
+
+  it("colours the report only when the io says the terminal wants colour", async () => {
+    const opts = setupIn(env.home, unfixed).opts; // one setup: its temp directory shows in the messages
+    const plain = fakeIo();
+    await doctorMain([], plain.io, opts);
+    assert.doesNotMatch(plain.text(), /\x1b/);
+    const coloured = fakeIo();
+    coloured.io.color = true;
+    await doctorMain([], coloured.io, opts);
+    assert.match(coloured.text(), /\x1b\[31mPROBLEM\x1b\[39m/);
+    assert.equal(coloured.text().replace(/\x1b\[[0-9;]*m/g, ""), plain.text());
+  });
+
+  it("wants colour for a terminal, but not when piped or when NO_COLOR is set", () => {
+    assert.equal(wantsColor({}, true), true);
+    assert.equal(wantsColor({}, false), false);
+    assert.equal(wantsColor({ NO_COLOR: "1" }, true), false);
+    assert.equal(wantsColor({ NO_COLOR: "" }, true), true, "an empty NO_COLOR counts as unset (no-color.org)");
   });
 
   it("changes nothing without --fix", async () => {

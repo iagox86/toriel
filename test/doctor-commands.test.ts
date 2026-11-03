@@ -16,16 +16,23 @@ afterEach(() => env.done());
 
 function fakeHost() {
   const panels: string[] = [];
+  const raw: string[] = [];
   const notices: string[] = [];
   const choices: Array<{ title: string; options: string[]; pick: (c: string) => void }> = [];
   const host = {
     notify: (m: string) => void notices.push(m),
     daemonReport: () => "Daemon\n  (test)",
     tui: { requestRender: () => {} },
-    infoPanel: { show: (t: string) => void panels.push(t) },
+    // the tests below are about the words; the colours have their own test
+    infoPanel: {
+      show: (t: string) => {
+        raw.push(t);
+        panels.push(t.replace(/\x1b\[[0-9;]*m/g, ""));
+      },
+    },
     choicePanel: { open: (title: string, options: string[], _current: unknown, pick: (c: string) => void) => void choices.push({ title, options, pick }) },
   };
-  return { host: host as unknown as Host, panels, notices, choices };
+  return { host: host as unknown as Host, panels, raw, notices, choices };
 }
 
 const call = (fix: boolean) => ({ args: [], opts: fix ? { fix: true } : {} });
@@ -38,6 +45,14 @@ describe("/doctor", () => {
       assert.match((r as { text: string }).text, /--fix[\s\S]*never installs packages/);
       assert.equal(parseCommandLine(specs, "/doctor --fix").kind, "run");
     }
+  });
+
+  it("colours the panel with the controller theme: problems and passes get colours, the words stay the same", () => {
+    const t = fakeHost();
+    runDoctorCommand(t.host, call(false), setupIn(env.home, { config: {} }).opts);
+    assert.match(t.raw[0] ?? "", /\x1b\[[0-9;]*mPROBLEM\x1b\[39m/);
+    assert.match(t.raw[0] ?? "", /\x1b\[[0-9;]*mall 5 ok\x1b\[39m/);
+    assert.doesNotMatch(t.panels[0] ?? "", /\x1b/);
   });
 
   it("shows the compact report in a panel and changes nothing", () => {

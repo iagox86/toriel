@@ -124,12 +124,34 @@ export function runDoctor(opts: DoctorOptions = {}): Check[] {
   return checks;
 }
 
+/** How the report is coloured; the default adds nothing. */
+export interface DoctorStyle {
+  heading(text: string): string;
+  ok(text: string): string;
+  problem(text: string): string;
+  skipped(text: string): string;
+  dim(text: string): string;
+}
+
+const identity = (text: string): string => text;
+export const PLAIN_STYLE: DoctorStyle = { heading: identity, ok: identity, problem: identity, skipped: identity, dim: identity };
+
+/** Plain ANSI for a terminal (the command line has no theme): green ok, red problem, dim skipped, bold headings. */
+export const ANSI_STYLE: DoctorStyle = {
+  heading: (t) => `\x1b[1m${t}\x1b[22m`,
+  ok: (t) => `\x1b[32m${t}\x1b[39m`,
+  problem: (t) => `\x1b[31m${t}\x1b[39m`,
+  skipped: (t) => `\x1b[2m${t}\x1b[22m`,
+  dim: (t) => `\x1b[2m${t}\x1b[22m`,
+};
+
 /**
  * The report: a section per level, an OK or PROBLEM line per check, the fix under each problem.
  * `compact` (the in-app panel, which cannot scroll) leaves the passing checks out and counts them.
  */
-export function renderDoctor(checks: readonly Check[], opts: { compact?: boolean } = {}): string {
-  const lines = ["toriel doctor"];
+export function renderDoctor(checks: readonly Check[], opts: { compact?: boolean; style?: DoctorStyle } = {}): string {
+  const st = opts.style ?? PLAIN_STYLE;
+  const lines = [st.heading("toriel doctor")];
   for (const { level, heading } of LEVELS) {
     const inLevel = checks.filter((c) => c.level === level);
     if (inLevel.length === 0) {
@@ -137,12 +159,12 @@ export function renderDoctor(checks: readonly Check[], opts: { compact?: boolean
     }
     const passing = inLevel.filter((c) => c.state === "ok").length;
     if (opts.compact && passing === inLevel.length) {
-      lines.push("", `${heading.split(" (")[0]}: all ${passing} ok`);
+      lines.push("", `${st.heading(heading.split(" (")[0] as string)}: ${st.ok(`all ${passing} ok`)}`);
       continue;
     }
-    lines.push("", heading);
+    lines.push("", st.heading(heading));
     for (const c of opts.compact ? inLevel.filter((x) => x.state !== "ok") : inLevel) {
-      const tag = c.state === "ok" ? "ok     " : c.state === "skipped" ? "skipped" : "PROBLEM";
+      const tag = c.state === "ok" ? st.ok("ok     ") : c.state === "skipped" ? st.skipped("skipped") : st.problem("PROBLEM");
       lines.push(`  ${tag}  ${c.title}`);
       if (c.state === "skipped" && c.note) {
         lines.push(`           ${c.note}`);
@@ -152,16 +174,16 @@ export function renderDoctor(checks: readonly Check[], opts: { compact?: boolean
       }
     }
     if (opts.compact && passing > 0) {
-      lines.push(`  (${passing} ok)`);
+      lines.push(st.dim(`  (${passing} ok)`));
     }
   }
   const problems = checks.reduce((n, c) => n + c.findings.length, 0);
   const fixable = plannedFixes(checks).reduce((n, g) => n + g.fixes.length, 0);
   lines.push("");
   if (problems === 0) {
-    lines.push("Everything checks out.");
+    lines.push(st.ok("Everything checks out."));
   } else {
-    lines.push(`${problems} problem${problems === 1 ? "" : "s"}${fixable > 0 ? `, ${fixable} fixable automatically (toriel doctor --fix, or /doctor --fix)` : ""}.`);
+    lines.push(`${st.problem(`${problems} problem${problems === 1 ? "" : "s"}`)}${fixable > 0 ? `, ${fixable} fixable automatically (toriel doctor --fix, or /doctor --fix)` : ""}.`);
   }
   return lines.join("\n");
 }

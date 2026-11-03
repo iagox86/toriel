@@ -311,6 +311,13 @@ describe("compaction in a session file", () => {
     assert.deepEqual(items.map((i) => Boolean(i.dimmed)), [true, false, false]);
   });
 
+  it("does not fold a call that is still in context into a dimmed run of older calls", () => {
+    const result = (id: string, outOfContext: boolean) => ({ role: "toolResult", toolName: "bash", toolCallId: id, content: [{ type: "text", text: "ok" }], outOfContext });
+    const items = itemsFromMessages([result("1", true), result("2", true), result("3", false), result("4", false)], { requestRender() {} } as never, "/");
+    assert.deepEqual(items.map((i) => [i.kind, Boolean(i.dimmed)]), [["tools", true], ["tools", false]]);
+    assert.deepEqual(items.map((i) => (i as { component: { calls: unknown[] } }).component.calls.length), [2, 2]);
+  });
+
   it("shows everything undimmed for a session that was never compacted", () => {
     const items = itemsFromFile(file([msg("a", "user", "hi"), msg("b", "assistant", "yo")]), {} as never, "/");
     assert.ok(items.every((i) => !i.dimmed));

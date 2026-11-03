@@ -74,6 +74,36 @@ export function mcpCompletions(typed: string, servers: readonly McpServer[]): Co
     .map((s) => ({ value: `${action} ${s.name}`, description: s.detail }));
 }
 
+/**
+ * pi's `/mcp login` reports a failed sign-in as "Sign-in failed: <the error's text>", and the text is often a
+ * parser's complaint ("Unexpected token '<', "<!DOCTYPE "... is not valid JSON") that says nothing about the
+ * cause. For the failures people actually hit, say what probably happened and what to check; undefined for any
+ * other message, which is shown as pi wrote it.
+ */
+export function explainMcpFailure(text: string): string | undefined {
+  const m = /^Sign-in failed:\s*([\s\S]*)$/.exec(text.trim());
+  if (!m) {
+    return undefined;
+  }
+  const reason = (m[1] ?? "").trim();
+  const wrap = (what: string, checks: string[]) => [`MCP sign-in failed: ${what}`, "", ...checks.map((c) => `  - ${c}`), "", `pi's own message: ${reason}`].join("\n");
+  if (/Unexpected token '?<|<!DOCTYPE|<html|is not valid JSON/i.test(reason)) {
+    return wrap("the server answered with a web page where it should have sent JSON.", [
+      "a reverse proxy or a single-sign-on page in front of the server is probably answering instead of it",
+      "or the URL in mcp.json is a website's front page rather than the MCP endpoint",
+      "sign-in asks the server for /.well-known/oauth-* documents: the proxy has to pass those through unchanged",
+      "/mcp status <server> shows what the URL answers",
+    ]);
+  }
+  if (/fetch failed|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNRESET/i.test(reason)) {
+    return wrap("the server could not be reached.", ["the URL in mcp.json, and that the server is up", "/mcp status <server> checks whether the URL answers"]);
+  }
+  if (/certificate|self[- ]signed|CERT_|UNABLE_TO_VERIFY/i.test(reason)) {
+    return wrap("the server's TLS certificate was not accepted.", ["a self-signed or expired certificate, or one for another host name", "node uses its own CA list: NODE_EXTRA_CA_CERTS adds yours"]);
+  }
+  return undefined;
+}
+
 export interface McpEntry {
   url?: string;
   command?: string;

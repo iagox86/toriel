@@ -20,6 +20,13 @@ export interface DoctorIo {
   confirm(question: string): Promise<boolean>;
   /** Whether a person is at the terminal (otherwise --fix needs --yes). */
   interactive: boolean;
+  /** Colour the report (stdout is a terminal and NO_COLOR is unset). */
+  color?: boolean;
+}
+
+/** Whether the command line should colour: only for a person at a terminal, and never when NO_COLOR is set (no-color.org). */
+export function wantsColor(env: NodeJS.ProcessEnv, isTty: boolean): boolean {
+  return isTty && (env.NO_COLOR === undefined || env.NO_COLOR === "");
 }
 
 /** The terminal as the real command uses it. */
@@ -27,6 +34,7 @@ export function realIo(): DoctorIo {
   return {
     write: (text) => void process.stdout.write(text),
     interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY),
+    color: wantsColor(process.env, Boolean(process.stdout.isTTY)),
     confirm: async (question) => {
       const rl = createInterface({ input: process.stdin, output: process.stdout });
       try {
@@ -58,7 +66,8 @@ export async function doctorMain(args: readonly string[], io: DoctorIo, opts: Do
   const doctor = await import("./doctor.ts");
   const options = { ...opts, startup: [] };
   const checks = doctor.runDoctor(options);
-  io.write(`${doctor.renderDoctor(checks)}\n`);
+  const style = io.color ? doctor.ANSI_STYLE : undefined;
+  io.write(`${doctor.renderDoctor(checks, { style })}\n`);
   // informational: a running daemon of another build is worth knowing about, but it is not a setup problem and does not change the exit code
   const daemon = await daemonReport?.();
   if (daemon) {
@@ -92,6 +101,6 @@ export async function doctorMain(args: readonly string[], io: DoctorIo, opts: Do
     io.write(`Applied. The original is at ${doctor.applyFixes(file, fixes)}\n`);
   }
   const after = doctor.runDoctor(options);
-  io.write(`\nAfter fixing:\n\n${doctor.renderDoctor(after)}\n`);
+  io.write(`\nAfter fixing:\n\n${doctor.renderDoctor(after, { style })}\n`);
   return doctor.exitCode(after);
 }

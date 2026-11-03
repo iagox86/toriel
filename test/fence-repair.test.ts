@@ -26,6 +26,11 @@ describe("repairFences", () => {
     assert.equal(repairFences("  ````x `y`\nbody\n````"), "  ````x y\nbody\n````");
   });
 
+  it("repairs CRLF text the same way and keeps every line ending", () => {
+    assert.equal(repairFences("```Pushback on `x`\r\nbody\r\n```\r\n"), "```Pushback on x\r\nbody\r\n```\r\n");
+    assert.equal(repairFences("```a\r\n```b `c`\r\n```"), "```a\r\n```b `c`\r\n```");
+  });
+
   it("does not touch a backtick fence line inside a tilde fence, and a tilde line does not close a backtick fence", () => {
     assert.equal(repairFences("~~~\n```x `y`\n~~~"), "~~~\n```x `y`\n~~~");
     assert.equal(repairFences("```a\n~~~\n```b `c`\n```"), "```a\n~~~\n```b `c`\n```");
