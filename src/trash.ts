@@ -4,6 +4,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { messageText } from "./format.ts";
+import { moveFile } from "./util.ts";
 
 /** Move `file` into `trashDir`; returns the new location. */
 export function trashSessionFile(file: string, trashDir: string): string {
@@ -16,7 +17,7 @@ export function trashSessionFile(file: string, trashDir: string): string {
   if (fs.existsSync(target)) {
     target = path.join(trashDir, `${Date.now()}-${base}`);
   }
-  fs.renameSync(file, target);
+  moveFile(file, target);
   fs.writeFileSync(
     `${target}.json`,
     `${JSON.stringify({ originalPath: file, trashedAt: new Date().toISOString() }, null, 2)}\n`,
@@ -127,7 +128,7 @@ export function restoreTrashedSession(trashedTo: string, trashDir: string): stri
     throw new Error(`${originalPath} already exists`);
   }
   fs.mkdirSync(path.dirname(originalPath), { recursive: true });
-  fs.renameSync(resolved, originalPath);
+  moveFile(resolved, originalPath);
   fs.unlinkSync(manifest);
   return originalPath;
 }

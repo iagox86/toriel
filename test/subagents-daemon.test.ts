@@ -158,6 +158,8 @@ describe("daemon: subagents", () => {
       await new Promise((r) => setTimeout(r, 50));
     }
     await c.request({ type: "deactivate", session });
+    // the parent's stop ends its foreground subagent asynchronously (abort, last text, process stop)
+    await c.request({ type: "agents_op", from: uuid, action: "wait", ref: "#2", timeoutMs: 5000 });
     const list = (await c.request({ type: "agents_op", from: uuid, action: "list" })).text as string;
     assert.match(list, /#2 worker: fg \[stopped/);
     assert.match(list, /#1 worker: bg \[running, background/);
@@ -178,5 +180,79 @@ describe("daemon: subagents", () => {
     assert.equal(childEnv.TORIEL_CAN_SPAWN, null);
     assert.doesNotMatch(fs.readFileSync(`${child?.sessionFile}.argv.json`, "utf8"), /toriel_agent/);
     await c.request({ type: "agents_op", from: uuid, action: "stop", ref: "#1" });
+  });
+
+  it("marks a finished subagent delivered, then deletes it after the grace window: file in the trash, link cut, result still readable", async () => {
+    harness = await startDaemon({ TORIEL_SUBAGENT_KEEP_MS: "1500" });
+    const { c, uuid } = await parentSession(harness);
+    const r = await spawn(c, uuid, { task: "short job" });
+    assert.equal(r.state, "done");
+    const named = () => c.sessions().find((x) => x.sessionName?.startsWith("worker: look"));
+    for (let i = 0; i < 40 && !named()?.subagent?.delivered; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.deepEqual(named()?.subagent, { state: "done", delivered: true, parent: uuid });
+    const file = named()?.sessionFile as string;
+    assert.ok(fs.existsSync(file));
+    for (let i = 0; i < 100 && named(); i++) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.equal(named(), undefined, "the session left the switcher");
+    assert.equal(fs.existsSync(file), false);
+    assert.ok(fs.readdirSync(path.join(harness.dir, "trash")).length > 0, "the file is in the trash");
+    assert.equal(Object.values(lineage(harness)).filter((e) => e.kind === "subagent").length, 0, "the subagent link is gone");
+    assert.equal((await c.request({ type: "agents_op", from: uuid, action: "result", ref: "#1" })).text, "echo: short job");
+    assert.ok(c.sessions().some((x) => x.sessionId === uuid), "the parent stays");
+  });
+
+  it("does not delete a subagent that is still running", async () => {
+    harness = await startDaemon({ TORIEL_SUBAGENT_KEEP_MS: "300" });
+    const { c, uuid } = await parentSession(harness);
+    await spawn(c, uuid, { task: "[hang]", background: true });
+    await new Promise((r) => setTimeout(r, 1500));
+    assert.ok(c.sessions().some((x) => x.sessionName?.startsWith("worker: look")));
+    await c.request({ type: "agents_op", from: uuid, action: "stop", ref: "#1" });
+  });
+
+  it("keeps a waiting subagent's dialog pending, tells its parent's controllers, and takes the answer without an attach", async () => {
+    harness = await startDaemon({ FAKE_PI_ASK_MS: "0" });
+    const { c, uuid } = await parentSession(harness);
+    const r = await spawn(c, uuid, { task: "/ask", background: true });
+    assert.equal(r.state, "running");
+    const asked = await c.waitFor((m) => m.type === "ui_request" && m.request?.method === "confirm");
+    const child = c.sessions().find((x) => x.sessionName?.startsWith("worker: look"));
+    assert.equal(asked.session, child?.id);
+    assert.equal(child?.subagent?.parent, uuid, "the meta says whose subagent it is, so the parent's controller can show the dialog");
+    for (let i = 0; i < 40 && !c.sessions().find((x) => x.id === child?.id)?.pendingDialog; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.equal(c.sessions().find((x) => x.id === child?.id)?.pendingDialog, true, "the badge");
+    assert.equal(c.sessions().find((x) => x.id === child?.id)?.attachedToYou, false);
+    // a controller that connects later is shown the dialog too, and nothing was denied meanwhile
+    const late = await harness.connect();
+    await late.request({ type: "list" });
+    const again = await late.waitFor((m) => m.type === "ui_request" && m.session === child?.id);
+    assert.equal(again.request.id, asked.request.id);
+    await late.request({ type: "ui_response", session: child?.id, response: { type: "extension_ui_response", id: asked.request.id, confirmed: true } });
+    for (let i = 0; i < 40 && c.sessions().find((x) => x.id === child?.id)?.pendingDialog; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.equal(c.sessions().find((x) => x.id === child?.id)?.pendingDialog, false);
+    await c.request({ type: "agents_op", from: uuid, action: "stop", ref: "#1" });
+  });
+
+  it("does not bring a swept subagent back to life when a controller that still shows it sends a prompt", async () => {
+    harness = await startDaemon({ TORIEL_SUBAGENT_KEEP_MS: "0" });
+    const { c, uuid } = await parentSession(harness);
+    await spawn(c, uuid, { task: "short job" });
+    const named = () => c.sessions().find((x) => x.sessionName?.startsWith("worker: look"));
+    const file = named()?.sessionFile as string;
+    for (let i = 0; i < 100 && named(); i++) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.equal(fs.existsSync(file), false);
+    const before = c.sessions().length;
+    await assert.rejects(c.request({ type: "prompt", sessionFile: file, cwd: harness.dir, message: "still there?" }), /was deleted \(its file is gone\)/);
+    assert.equal(c.sessions().length, before, "no ghost session was created");
   });
 });

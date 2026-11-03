@@ -33,6 +33,7 @@ import { DaemonLink } from "./daemon-link.ts";
 import { buildLayouts } from "./layout.ts";
 
 /** Reconnect tries (backoff 0.5s doubling to 5s) before the controller gives up and exits. */
+import { dialogOwner } from "./dialog-route.ts";
 import { DEFAULT_GRANT_DURATIONS, type DialogRequest, DialogPanel, isTextDialog, withGrantRows, withOrigin } from "./dialogs.ts";
 
 // How long a reason typed on the select waits for the chained input dialog.
@@ -475,7 +476,7 @@ class Controller {
         });
       } else {
         // Name the session that is blocked, so the dialog says who is asking.
-        view.dialog = withGrantRows(withOrigin(request, sessionId, this.sessions.get(sessionId)?.sessionName), loadSettings().settings.permissionGrantDurations ?? DEFAULT_GRANT_DURATIONS);
+        view.dialog = withGrantRows(withOrigin(request, sessionId, this.sessions.get(sessionId)?.sessionName, this.sessions.get(sessionId)?.subagent ? "Subagent" : "Session"), loadSettings().settings.permissionGrantDurations ?? DEFAULT_GRANT_DURATIONS);
       }
     } else if (request && request.method === "notify") {
       const message = String(request.message ?? "notification");
@@ -489,7 +490,7 @@ class Controller {
         this.notify(message);
       }
     }
-    if (key === this.viewing) {
+    if (key === this.viewing || this.dialogOwnerKey(this.viewing) === key) {
       this.renderChrome();
     }
   }
@@ -591,8 +592,9 @@ class Controller {
         return true;
       }
     }
-    const view = this.viewing ? this.views.get(this.viewing) : undefined;
-    if (view?.dialog && dialogUp && this.session.dialogKeys(view, data)) {
+    const ownerKey = this.dialogOwnerKey(this.viewing);
+    const view = ownerKey ? this.views.get(ownerKey) : undefined;
+    if (ownerKey && view?.dialog && dialogUp && this.session.dialogKeys(view, data, ownerKey)) {
       return true;
     }
     if (this.historySearch.isOpen) {
@@ -894,7 +896,13 @@ class Controller {
 
   /** The dialog waiting in the session on screen; none while the switcher is up (it stays pending, and is shown again on re-entering). */
   private openDialog(key: string | null): DialogRequest | undefined {
-    return key && !this.switching.isOpen ? this.views.get(key)?.dialog : undefined;
+    const owner = this.dialogOwnerKey(key);
+    return owner && !this.switching.isOpen ? this.views.get(owner)?.dialog : undefined;
+  }
+
+  /** The view holding the dialog shown with `key` on screen: its own, else one a subagent it started is waiting on (dialog-route.ts). */
+  private dialogOwnerKey(key: string | null): string | undefined {
+    return dialogOwner(key, this.views, this.sessions.values(), (m) => this.keyFor(m));
   }
 
   /** Whether a dialog is waiting in the session on screen. */

@@ -10,7 +10,7 @@ import { Container, truncateToWidth, type Focusable } from "@earendil-works/pi-t
 import { fmtTokens, oneLine } from "./format.ts";
 import { fmtClockShort } from "./when.ts";
 import { groupTldr } from "./session-list.ts";
-import { childNote, visibleRows } from "./session-tree.ts";
+import { childNote, visibleRows, WAITING_NOTE } from "./session-tree.ts";
 import {
   attention,
   byAge,
@@ -64,12 +64,15 @@ export interface SwitcherSession {
   model?: string;
   /** Live in an external pi process: [pi] prefix + dimmed until selected. */
   muted?: boolean;
+  /** A subagent that has ended and whose parent has the result: dimmed until selected. undefined = not known to be one. */
+  finished?: boolean;
   /** Tree fields (session-tree.ts): set when the list is arranged under parents. */
   depth?: number;
   parentId?: string;
   descendants?: number;
   descendantsWorking?: number;
   descendantsParked?: number;
+  descendantsWaiting?: number;
   /** First user message, shown in the description column when idle-ish. */
   description?: string;
 }
@@ -380,15 +383,15 @@ export class Switcher extends Container implements Focusable {
       }
       const s = row.s;
       const isSel = s.key === this.selectedKey;
-      const marker = s.note === "waiting on permission" ? attention("!") : s.state === "streaming" ? streamingStyle(spinnerFrame(Date.now())) : MARKERS[s.state];
+      const marker = s.note === WAITING_NOTE || s.descendantsWaiting ? attention("!") : s.state === "streaming" ? streamingStyle(spinnerFrame(Date.now())) : MARKERS[s.state];
       const markerText = isSel ? marker : dim(marker);
       const displayName = this.treePrefix(s) + (s.muted ? `[pi] ${oneLine(s.name)}` : oneLine(s.name));
       const badge = scheduleBadge(s, new Date());
       const bodyCell = truncateToWidth(displayName, nameWidth - 3 - badge.length).padEnd(nameWidth - 3 - badge.length);
       // recency colours; the selected row keeps its accent, external ones stay dim
-      const body = (isSel ? bodyCell : s.muted ? dim(bodyCell) : byAge(s.ageMs, bodyCell)) + (isSel ? badge : dim(badge));
+      const body = (isSel ? bodyCell : s.muted || s.finished ? dim(bodyCell) : byAge(s.ageMs, bodyCell)) + (isSel ? badge : dim(badge));
       const ageText = truncateToWidth(s.age ?? "-", ageW).padEnd(ageW);
-      const ageCell = isSel ? dim(ageText) : byAge(s.muted ? undefined : s.ageMs, ageText);
+      const ageCell = isSel ? dim(ageText) : byAge(s.muted || s.finished ? undefined : s.ageMs, ageText);
       let line = `${markerText}  ${body}`;
       line += GAP + ageCell;
       if (showModel) {

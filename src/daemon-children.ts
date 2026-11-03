@@ -122,7 +122,9 @@ export class ChildManager {
    * the session's id and profile, which the child's environment and later respawns need.
    */
   private startArgs(s: DaemonSession, opts: StartOptions): { args: string[]; cfg: ChildConfig } {
-    const useFile = opts.forkPath ? undefined : (opts.sessionFile ?? s.sessionFile);
+    // a file that is gone (deleted, swept) is not resumed: pi refuses --session with --session-id, so it counts as a fresh session
+    const wanted = opts.forkPath ? undefined : (opts.sessionFile ?? s.sessionFile);
+    const useFile = wanted && fs.existsSync(wanted) ? wanted : undefined;
     const args: string[] = [];
     if (opts.forkPath) {
       args.push("--fork", opts.forkPath);

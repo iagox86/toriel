@@ -242,13 +242,14 @@ export class SessionActions {
   }
 
   /** Returns true when the key was consumed as a dialog answer. */
-  dialogKeys(view: SessionView, data: string): boolean {
+  dialogKeys(view: SessionView, data: string, ownerKey = this.h.viewing): boolean {
     const dialog = view.dialog!;
-    if (!this.h.viewing) {
+    if (!this.h.viewing || !ownerKey) {
       return false;
     }
-    const meta = this.h.metaForPath(this.h.viewing);
-    if (!meta?.attachedToYou) {
+    const meta = this.h.metaForPath(ownerKey);
+    // a subagent's dialog shown in its parent's view is answered without attaching to the subagent
+    if (!meta || (ownerKey === this.h.viewing && !meta.attachedToYou)) {
       return false;
     }
     if (isTextDialog(dialog)) {
@@ -575,7 +576,13 @@ export class SessionActions {
   private async sendToSleeping(key: string, out: Outgoing, text: string): Promise<boolean> {
     const info = this.h.local.get(key);
     if (!key.startsWith("/") || !info) {
-      this.h.notify("cannot start this session (no session file)");
+      // a session deleted while it was on screen (a finished subagent swept, a /delete elsewhere) has neither a daemon entry nor a file
+      const gone = key.startsWith("/") ? !fs.existsSync(key) : key.startsWith("daemon:");
+      this.h.notify(
+        gone
+          ? "that session was deleted - /restore brings it back from the trash (nothing was sent)"
+          : "cannot start this session (no session file)",
+      );
       return false;
     }
     // The file may be open in an external (non-daemon) pi process -

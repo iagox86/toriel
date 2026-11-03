@@ -101,6 +101,8 @@ export interface SessionMeta {
   grants?: number;
   nextGrantExpiry?: number;
   grantsSaved?: number;
+  /** A subagent this daemon run started: how it stands, and whether its parent has the result (the row greys out when it ended and was delivered). */
+  subagent?: { state: string; delivered: boolean; /** UUID of the session that started it. */ parent: string };
   /** Whether the current model takes images; undefined when pi did not say. */
   acceptsImages?: boolean;
   /** True iff THIS receiving controller holds the exclusive input attach. */

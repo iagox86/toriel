@@ -103,3 +103,32 @@ describe("prompt fork-confirm flow", () => {
     assert.equal(fh.requests.length, 2);
   });
 });
+
+describe("prompt to a session that was deleted while on screen", () => {
+  const gone = (key: string) => {
+    const fh = fakeHost([]);
+    (fh.host as unknown as { viewing: string; local: Map<string, unknown> }).viewing = key;
+    (fh.host as unknown as { local: Map<string, unknown> }).local = new Map();
+    return fh;
+  };
+
+  it("says it was deleted and sends nothing when its file is gone and no listing knows it", async () => {
+    const fh = gone("/tmp/toriel-swept-nonexistent/session.jsonl");
+    assert.equal(await new SessionActions(fh.host).prompt("hello"), false);
+    assert.deepEqual(fh.requests, []);
+    assert.match(fh.notices.join(" "), /that session was deleted - \/restore brings it back from the trash/);
+  });
+
+  it("says the same for a session that only ever lived in the daemon", async () => {
+    const fh = gone("daemon:7");
+    await new SessionActions(fh.host).prompt("hello");
+    assert.match(fh.notices.join(" "), /that session was deleted/);
+    assert.deepEqual(fh.requests, []);
+  });
+
+  it("keeps the old message for a file that exists but is not listed", async () => {
+    const fh = gone(import.meta.filename);
+    await new SessionActions(fh.host).prompt("hello");
+    assert.match(fh.notices.join(" "), /cannot start this session \(no session file\)/);
+  });
+});

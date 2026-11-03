@@ -326,3 +326,18 @@ describe("session comments", () => {
     assert.notEqual(row?.description, "remind me why");
   });
 });
+
+describe("buildSessionList: subagents", () => {
+  const finishedOf = (subagent?: SessionMeta["subagent"]) => build({ daemon: [meta({ sessionFile: "/a", subagent })], files: [local("/a")] })[0]?.finished;
+
+  it("marks a subagent finished once it has ended and its parent has the result", () => {
+    assert.equal(finishedOf({ state: "done", delivered: true, parent: "p" }), true);
+    assert.equal(finishedOf({ state: "stopped", delivered: true, parent: "p" }), true);
+  });
+
+  it("keeps a running or not yet delivered subagent looking alive, and says nothing about other sessions", () => {
+    assert.equal(finishedOf({ state: "running", delivered: false, parent: "p" }), false);
+    assert.equal(finishedOf({ state: "done", delivered: false, parent: "p" }), false);
+    assert.equal(finishedOf(undefined), undefined);
+  });
+});

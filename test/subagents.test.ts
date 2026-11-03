@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { AgentProfile } from "../src/agents.ts";
 import { subagentDepth } from "../src/lineage.ts";
-import { childBudget, DEFAULT_SUBAGENT_LIMITS, describeRecord, limitBreach, parseHandle, refuseSpawn, resultText, SubagentBook } from "../src/subagents.ts";
+import { childBudget, DEFAULT_SUBAGENT_LIMITS, describeRecord, expiredSubagents, keepMsFrom, type SweepCandidate, limitBreach, parseHandle, refuseSpawn, resultText, SubagentBook } from "../src/subagents.ts";
 
 const L = DEFAULT_SUBAGENT_LIMITS;
 const profile = (over: Partial<AgentProfile> = {}): AgentProfile => ({ name: "explore", description: "d", prompt: "", canSpawn: false, minimal: true, extensions: true, source: "built-in", file: "x", ...over });
@@ -94,5 +94,37 @@ describe("subagentDepth", () => {
   it("counts subagent links above a session", () => {
     const parents = new Map([["c", "b"], ["b", "a"]]);
     assert.deepEqual([subagentDepth("a", parents), subagentDepth("b", parents), subagentDepth("c", parents), subagentDepth(undefined, parents)], [0, 1, 2, 0]);
+  });
+});
+
+describe("expiredSubagents", () => {
+  const HOUR = 3_600_000;
+  const NOW = 10 * HOUR;
+  const cand = (over: Partial<SweepCandidate> = {}): SweepCandidate => ({ uuid: "u", mtime: 0, live: false, ...over });
+  const ids = (cs: SweepCandidate[]) => expiredSubagents(cs, NOW, 30 * 60_000).map((c) => c.uuid);
+
+  it("expires a finished subagent 30 minutes after its parent had the result", () => {
+    const rec = { state: "done" as const, endedAt: NOW - HOUR, deliveredAt: NOW - 31 * 60_000 };
+    assert.deepEqual(ids([cand({ record: rec }), cand({ uuid: "late", record: { ...rec, deliveredAt: NOW - 29 * 60_000 } })]), ["u"]);
+  });
+
+  it("starts a background subagent's window at delivery, not at the end of its run", () => {
+    const rec = { state: "done" as const, endedAt: NOW - 2 * HOUR, deliveredAt: NOW - 60_000 };
+    assert.deepEqual(ids([cand({ record: rec })]), []);
+  });
+
+  it("keeps one that is running, live, or was written to since", () => {
+    const old = { state: "done" as const, endedAt: NOW - 5 * HOUR, deliveredAt: NOW - 5 * HOUR };
+    assert.deepEqual(ids([cand({ record: { ...old, state: "running" } }), cand({ uuid: "live", live: true, record: old }), cand({ uuid: "used", mtime: NOW - 60_000, record: old })]), []);
+  });
+
+  it("dates a subagent from before a restart by its file alone, and never expires one it cannot date", () => {
+    assert.deepEqual(ids([cand({ uuid: "old", mtime: NOW - HOUR }), cand({ uuid: "fresh", mtime: NOW - 60_000 }), cand({ uuid: "unknown", mtime: 0 })]), ["old"]);
+  });
+});
+
+describe("keepMsFrom", () => {
+  it("reads a non-negative number of ms (0 included) and falls back to 30 minutes for anything else", () => {
+    assert.deepEqual(["1500", "0", "-5", "abc", "", undefined].map(keepMsFrom), [1500, 0, 1_800_000, 1_800_000, 1_800_000, 1_800_000]);
   });
 });

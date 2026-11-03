@@ -4,24 +4,28 @@
 // answers with its final text; a background call answers at once and the
 // result arrives later as a message to the parent. Limits live in
 // subagents.ts; this file starts, watches and stops the sessions.
+import * as fs from "node:fs";
 import type * as net from "node:net";
 import { findAgent, type AgentProfile } from "./agents.ts";
 import type { Cmd, DaemonContext, Responder } from "./daemon-context.ts";
+import { removeSession } from "./daemon-handlers-lifecycle.ts";
 import { deliverToTarget } from "./daemon-handlers-messages.ts";
 import type { DaemonSession } from "./daemon-session.ts";
-import { loadLineage, parentMap, recordSubagent, subagentDepth } from "./lineage.ts";
+import { detachFromParent, loadLineage, parentMap, recordSubagent, subagentDepth } from "./lineage.ts";
 import { log } from "./log.ts";
 import { formatReceived } from "./received.ts";
 import { uniqueName } from "./session-id.ts";
 import {
   childBudget,
   describeRecord,
+  expiredSubagents,
   limitBreach,
   parseHandle,
   refuseSpawn,
   resultText,
   SubagentBook,
   type SubagentLimits,
+  type SweepCandidate,
   type SubagentRecord,
   type SubagentState,
 } from "./subagents.ts";
@@ -41,9 +45,61 @@ export class SubagentManager {
   /** Handles being stopped, so two stops (a limit and a cancel) do not both abort. */
   private readonly stopping = new Set<number>();
 
-  constructor(ctx: () => DaemonContext, limits: SubagentLimits) {
+  /** How long a finished subagent stays in the switcher. */
+  readonly keepMs: number;
+
+  constructor(ctx: () => DaemonContext, limits: SubagentLimits, keepMs: number) {
     this.ctx = ctx;
     this.limits = limits;
+    this.keepMs = keepMs;
+  }
+
+  /** The parent has the result: the switcher greys the row, and the grace window before deletion starts. */
+  markDelivered(rec: SubagentRecord): void {
+    rec.deliveredAt ??= Date.now();
+    this.ctx().hub.broadcastSessions();
+  }
+
+  /**
+   * Delete the subagents whose grace window has ended, the way /delete does (the file goes to the
+   * trash, so /restore brings it back), and cut their lineage link so a restored one is top-level.
+   * Works from lineage.json and file times, so it also catches subagents finished before a restart.
+   */
+  async sweep(now = Date.now()): Promise<void> {
+    const ctx = this.ctx();
+    const lineage = loadLineage();
+    const mtime = (file: string | undefined): number => {
+      try {
+        return file ? fs.statSync(file).mtimeMs : 0;
+      } catch {
+        return 0;
+      }
+    };
+    const cands: SweepCandidate[] = [];
+    for (const [uuid, entry] of Object.entries(lineage)) {
+      if (entry.kind !== "subagent") {
+        continue;
+      }
+      const s = ctx.registry.all().find((x) => x.sessionId === uuid);
+      const file = s?.sessionFile ?? ((entry.parent ? lineage[entry.parent.id]?.forks?.find((f) => f.id === uuid)?.file : undefined) || undefined);
+      cands.push({ uuid, file, mtime: mtime(file), live: s?.child !== undefined || s?.spawning === true, record: this.book.byChild(uuid) });
+    }
+    let swept = false;
+    for (const c of expiredSubagents(cands, now, this.keepMs)) {
+      try {
+        await removeSession(ctx, ctx.registry.all().find((x) => x.sessionId === c.uuid), c.file);
+        log(`subagent session ${c.uuid} timed out of the switcher; its file is in the trash`);
+      } catch (err) {
+        // the link stays, so the next sweep tries again instead of stranding the file
+        log(`could not delete the finished subagent ${c.uuid}: ${errText(err)}`);
+        continue;
+      }
+      detachFromParent(c.uuid);
+      swept = true;
+    }
+    if (swept) {
+      ctx.hub.broadcastSessions();
+    }
   }
 
   /** Resolves when the record is no longer running. */
@@ -214,6 +270,7 @@ export class SubagentManager {
     const parent = ctx.registry.all().find((s) => s.sessionId === rec.parent);
     if (!parent) {
       log(`subagent #${rec.handle}: its parent is gone, result not delivered`);
+      this.markDelivered(rec);
       return;
     }
     const verb = rec.state === "done" ? "finished" : rec.state === "failed" ? "failed" : "was cut short";
@@ -227,6 +284,7 @@ export class SubagentManager {
     } catch (err) {
       log(`subagent #${rec.handle}: could not deliver its result: ${errText(err)}`);
     }
+    this.markDelivered(rec);
   }
 }
 
@@ -274,6 +332,7 @@ export async function handleAgentSpawn(ctx: DaemonContext, cmd: Cmd<"agent_spawn
   await ctx.subagents.whenEnded(rec);
   socket.off("close", cancel);
   res(true, undefined, { handle: rec.handle, state: rec.state, text: resultText(rec) });
+  ctx.subagents.markDelivered(rec);
 }
 
 /** `toriel_agents`: list, status, wait, stop and result for the subagents one session started. */

@@ -5,11 +5,13 @@ import type { GrantStore } from "./permissions.ts";
 import type { Presence } from "./presence.ts";
 import { scheduleStripLines } from "./schedule-format.ts";
 import type { Scheduler } from "./scheduler.ts";
+import type { SubagentBook } from "./subagents.ts";
 import type { SessionMeta, UsageReport } from "./shared.ts";
 
-function metaFor(s: DaemonSession, socket: net.Socket, presence: Presence, usage: ReadonlyMap<string, UsageReport>, scheduler?: Scheduler, grants?: GrantStore): SessionMeta {
+function metaFor(s: DaemonSession, socket: net.Socket, presence: Presence, usage: ReadonlyMap<string, UsageReport>, scheduler?: Scheduler, grants?: GrantStore, subagents?: SubagentBook): SessionMeta {
   const granted = s.sessionId && grants ? grants.active(s.sessionId).length : 0;
   const saved = s.sessionId && grants ? grants.dormantCount(s.sessionId) : 0;
+  const sub = subagents?.bySession(s.id);
   const active = s.sessionId && scheduler ? scheduler.list(s.sessionId).filter((x) => x.state === "active") : [];
   return {
     id: s.id,
@@ -45,6 +47,7 @@ function metaFor(s: DaemonSession, socket: net.Socket, presence: Presence, usage
     grants: granted > 0 ? granted : undefined,
     nextGrantExpiry: s.sessionId && grants ? grants.soonestExpiry(s.sessionId) : undefined,
     grantsSaved: saved > 0 ? saved : undefined,
+    subagent: sub ? { state: sub.state, delivered: sub.deliveredAt !== undefined, parent: sub.parent } : undefined,
   };
 }
 
@@ -56,8 +59,9 @@ export function sessionMetas(
   socket: net.Socket,
   scheduler?: Scheduler,
   grants?: GrantStore,
+  subagents?: SubagentBook,
 ): SessionMeta[] {
-  const metas = registry.all().map((s) => metaFor(s, socket, presence, usage, scheduler, grants));
+  const metas = registry.all().map((s) => metaFor(s, socket, presence, usage, scheduler, grants, subagents));
   const tracked = new Set(metas.map((m) => m.sessionFile).filter((f): f is string => !!f));
   return [...metas, ...presence.pseudoMetas(tracked)];
 }

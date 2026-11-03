@@ -70,8 +70,8 @@ export const DIALOG_GUARD_MS = 700;
  * Label a dialog request with the session that raised it. The numeric id
  * goes in because session names can repeat.
  */
-export function withOrigin(d: DialogRequest, id: number, name?: string): DialogRequest {
-  return { ...d, origin: name ? `Session ${id} '${name}'` : `Session ${id}`, shownAt: Date.now() };
+export function withOrigin(d: DialogRequest, id: number, name?: string, kind = "Session"): DialogRequest {
+  return { ...d, origin: name ? `${kind} ${id} '${name}'` : `${kind} ${id}`, shownAt: Date.now() };
 }
 
 /** Whether an answer that grants something must still be ignored (denying never is). */

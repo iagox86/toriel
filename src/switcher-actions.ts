@@ -19,7 +19,7 @@ import {
   type MutationResult,
 } from "./session-list.ts";
 import { detachFromParent, loadLineage, parentMap } from "./lineage.ts";
-import { arrangeTree } from "./session-tree.ts";
+import { arrangeTree, markFinishedSubagents } from "./session-tree.ts";
 import { INIT_PROMPT } from "./init-prompt.ts";
 import { loadAgentsChecked } from "./agents.ts";
 import { agentListing } from "./agents-completion.ts";
@@ -124,7 +124,9 @@ export class SwitcherActions {
       this.switchOrder = list.map((s) => s.key);
     }
     sortSessions(list, this.groups.order ?? [], this.switchOrder);
-    list = arrangeTree(list, parentMap(loadLineage()));
+    const parents = parentMap(loadLineage());
+    markFinishedSubagents(list, parents);
+    list = arrangeTree(list, parents);
     const order = appendUnranked(this.groups.order, list);
     if (order) {
       this.groups.order = order;

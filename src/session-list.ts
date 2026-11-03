@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { fmtAge, firstMessageLabel } from "./format.ts";
 import { type GroupsFile, isParked } from "./groups.ts";
 import type { SessionMeta } from "./shared.ts";
+import { WAITING_NOTE } from "./session-tree.ts";
 import type { SessionState, SwitcherSession } from "./switcher.ts";
 
 /** A session known from its file on disk (SessionManager.listAll). */
@@ -70,7 +71,7 @@ export function buildSessionList(inp: ListInputs): SwitcherSession[] {
     const group = sessionId ? (inp.groups.assignments[sessionId] ?? undefined) : undefined;
     let note: string | undefined;
     if (meta?.pendingDialog) {
-      note = "waiting on permission";
+      note = WAITING_NOTE;
     } else if (meta?.externallyLive) {
       note = "live in pi - /adopt to fork";
     } else if (meta?.attachedElsewhere) {
@@ -87,6 +88,7 @@ export function buildSessionList(inp: ListInputs): SwitcherSession[] {
       group,
       state,
       muted: !!meta?.externallyLive,
+      finished: meta?.subagent ? meta.subagent.state !== "running" && meta.subagent.delivered : undefined,
       daemonId: meta?.id,
       sessionId,
       cwd,

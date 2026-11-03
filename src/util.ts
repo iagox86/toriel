@@ -15,6 +15,22 @@ export function writeFileAtomic(file: string, text: string, mode?: number): void
   fs.renameSync(tmp, file);
 }
 
+/**
+ * Move a file, even to another filesystem (rename fails with EXDEV between, say, a tmpfs
+ * runtime dir and the home directory): then copy and delete. `rename` is injectable for tests.
+ */
+export function moveFile(from: string, to: string, rename: (a: string, b: string) => void = fs.renameSync): void {
+  try {
+    rename(from, to);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "EXDEV") {
+      throw err;
+    }
+    fs.copyFileSync(from, to);
+    fs.unlinkSync(from);
+  }
+}
+
 /** `writeFileAtomic` for a value, as two-space JSON with a trailing newline. */
 export function writeJsonAtomic(file: string, data: unknown, mode?: number): void {
   writeFileAtomic(file, `${JSON.stringify(data, null, 2)}\n`, mode);
