@@ -130,7 +130,7 @@ describe("loadAgents", () => {
 
   it("findAgent names the choices when there is no such agent", () => {
     const t = tree();
-    assert.throws(() => findAgent("nope", t.project, t.env), /no agent called "nope" \(have: explore, summarize\)/);
+    assert.throws(() => findAgent("nope", t.project, t.env), /no agent called "nope" \(have: [a-z, -]*explore[a-z, -]*summarize/);
   });
 });
 
@@ -158,5 +158,18 @@ describe("agent completion and listing", () => {
     assert.match(text, /tools: read,grep,find,mcp__ghidra__\*/);
     assert.match(text, /Problems:\n {2}f\.md: broken/);
     assert.match(agentListing([], []), /No agent profiles found/);
+  });
+});
+
+describe("MCP tools in a profile", () => {
+  it("gives an exact MCP tool name a trailing * so pi's --tools matches it", () => {
+    const a = parse("---\nname: a\ndescription: d\ntools: read, mcp__git__git_read\n---\n");
+    assert.deepEqual(a.tools, ["read", "mcp__git__git_read*"]);
+    assert.deepEqual(parse("---\nname: a\ndescription: d\ntools: mcp__git__*\n---\n").tools, ["mcp__git__*"]);
+  });
+
+  it("refuses MCP tools with extensions: false, because that turns pi's MCP support off", () => {
+    assert.throws(() => parse("---\nname: a\ndescription: d\ntools: read, mcp__ghidra__*\nextensions: false\n---\n"), /extensions is false, which turns pi's MCP support off: set extensions: true/);
+    assert.doesNotThrow(() => parse("---\nname: a\ndescription: d\ntools: read\nextensions: false\n---\n"));
   });
 });

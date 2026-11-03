@@ -57,7 +57,11 @@ const TOOL_ALIASES: Record<string, string> = { glob: "find", webfetch: "web_fetc
 
 export function normalizeTool(t: string): string {
   const name = t.trim();
-  if (name.startsWith("mcp__") || name.includes("*")) {
+  if (name.startsWith("mcp__")) {
+    // pi's --tools never matches an exact MCP tool name (measured on pi 1.4.0: `mcp__git__git_read` yields no tool, `mcp__git__git_read*` yields exactly it), so an exact name gets a trailing *
+    return name.includes("*") ? name : `${name}*`;
+  }
+  if (name.includes("*")) {
     return name;
   }
   const lower = name.toLowerCase();
@@ -147,6 +151,11 @@ export function parseAgent(text: string, source: string, file: string): AgentPro
   if (tools !== undefined && tools.length === 0) {
     throw new Error("tools is empty (leave it out for pi's defaults)");
   }
+  const extensions = asBool("extensions", fm.extensions, true);
+  if (!extensions && tools?.some((t) => t.startsWith("mcp__"))) {
+    // pi's MCP support is one of its built-in extensions, so --no-extensions removes every MCP tool
+    throw new Error("tools names MCP tools (mcp__...) but extensions is false, which turns pi's MCP support off: set extensions: true (the permission system then guards them)");
+  }
   return {
     name,
     description: fm.description,
@@ -158,7 +167,7 @@ export function parseAgent(text: string, source: string, file: string): AgentPro
     budget: asCount("budget", fm.budget),
     canSpawn: asBool("canSpawn", fm.canspawn, false),
     minimal: asBool("minimal", fm.minimal, true),
-    extensions: asBool("extensions", fm.extensions, true),
+    extensions,
     source,
     file,
   };

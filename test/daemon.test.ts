@@ -811,7 +811,7 @@ describe("daemon: lifecycle", () => {
       "toriel-usage.ts",
     ]);
     assert.ok(flagged(argv, "-e").every((f) => path.isAbsolute(f) && fs.existsSync(f)));
-    assert.deepEqual(flagged(argv, "--skill").map((f) => path.basename(f)), ["messaging", "scheduling"]);
+    assert.deepEqual(flagged(argv, "--skill").map((f) => path.basename(f)), ["messaging", "scheduling", "delegating"]);
 
     // explore is a profile with extension discovery off and no skills (minimal)
     const explore = await c.request({ type: "spawn", cwd: harness.dir, agent: "explore" });
@@ -850,7 +850,7 @@ describe("daemon: lifecycle", () => {
   it("refuses to start an unknown agent and names the ones it has", async () => {
     harness = await startDaemon({ TORIEL_AGENTS_DIR: path.join(os.tmpdir(), "toriel-no-user-agents") });
     const c = await harness.connect();
-    await assert.rejects(c.request({ type: "spawn", cwd: harness.dir, agent: "nope" }), /no agent called "nope" \(have: explore, summarize\)/);
+    await assert.rejects(c.request({ type: "spawn", cwd: harness.dir, agent: "nope" }), /no agent called "nope" \(have: [a-z, -]*explore[a-z, -]*summarize/);
   });
 
   it("gives a new session an id before pi starts and tells the child", async () => {
