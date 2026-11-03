@@ -39,7 +39,7 @@ export function realIo(): DoctorIo {
 }
 
 /** Run the command; returns the exit code. `opts` lets tests point it at a temporary setup. */
-export async function doctorMain(args: readonly string[], io: DoctorIo, opts: DoctorOptions = {}): Promise<number> {
+export async function doctorMain(args: readonly string[], io: DoctorIo, opts: DoctorOptions = {}, daemonReport?: () => Promise<string | undefined>): Promise<number> {
   const known = new Set(["--fix", "--yes", "-y", "--help", "-h"]);
   const unknown = args.find((a) => !known.has(a));
   if (unknown !== undefined) {
@@ -59,6 +59,11 @@ export async function doctorMain(args: readonly string[], io: DoctorIo, opts: Do
   const options = { ...opts, startup: [] };
   const checks = doctor.runDoctor(options);
   io.write(`${doctor.renderDoctor(checks)}\n`);
+  // informational: a running daemon of another build is worth knowing about, but it is not a setup problem and does not change the exit code
+  const daemon = await daemonReport?.();
+  if (daemon) {
+    io.write(`\n${daemon}\n`);
+  }
   if (!args.includes("--fix")) {
     return doctor.exitCode(checks);
   }

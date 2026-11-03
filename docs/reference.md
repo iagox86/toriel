@@ -14,6 +14,7 @@ cd ~/projects/toriel
 npm install                # once; symlinks the global pi + pi-tui
 toriel              # auto-starts the daemon in the background if none is running
 toriel kill-server  # stop the daemon (orderly: children shut down too)
+toriel --isolated   # a separate instance for trying out a checkout (see "Developing toriel")
 ```
 
 The daemon detaches and keeps running when the controller exits; restarting
@@ -22,7 +23,52 @@ one daemon. There is only ever one daemon per state directory: it takes a lock
 (`daemon.pid` under `~/.local/share/toriel`, holding its pid) and a second one
 refuses to start, naming the running pid, whatever socket it was given. A lock
 left by a dead daemon is replaced. `kill-server` uses that pidfile and refuses to
-signal anything that is not the toriel daemon.
+signal anything that is not the toriel daemon. It names the code the daemon was
+running, and after stopping it watches for about a second: a controller that is
+still open somewhere starts a new daemon from ITS checkout at once, and
+kill-server then says a new daemon (pid, build, folder) is already running.
+
+## Which code is running
+
+A daemon and a controller can come from different checkouts (a branch under test next to the real
+install, or a daemon left over from before an update). The daemon's first message to every new
+controller is `hello` (`src/shared.ts`): `protocol` (an integer bumped by hand when the message set
+or a message shape changes incompatibly), `build` (`fingerprint`, `label`, `dir`), `pid`, `sock`
+and, for an isolated instance, `profile`. `DaemonLink` compares it with its own build on every
+connect, including reconnects, in `compareDaemon` (`version-check.ts`):
+
+- **Same protocol, same fingerprint:** nothing is said.
+- **Same protocol, different fingerprint:** a warning (flash plus a standing `[daemon runs other
+  code, see /doctor]` tag before the status line).
+- **No hello at all:** the daemon predates this check, so it is older than the controller; also a
+  warning, because whether it still works is not known.
+- **Different protocol:** blocked. The link sends nothing but `list` and `shutdown` (a request
+  rejects at once with the reason, a `send` flashes `not sent: ...`) and the tag says so.
+
+The fingerprint hashes the content (not mtimes) of every `.ts` under `src/` and `pi/extensions/`,
+computed once when the process starts, so the same code in two folders agrees and an uncommitted
+edit shows. The label is for people: the git short hash with `+dirty` when `src` or
+`pi/extensions` has changes, else the fingerprint (no `.git`, or no git binary). Nothing restarts a
+daemon for you; the notice names `toriel kill-server` and says running sessions stop with it.
+`/doctor` and `toriel doctor` end with a "Daemon" block (what runs where, then the verdict;
+informational, it does not change the exit code). Bump `PROTOCOL` when a change makes an old daemon
+or controller misbehave rather than merely lack a feature.
+
+Not covered: a pi child keeps the extensions it was started with, but a daemon restart stops its
+children, so a child cannot outlive the build that spawned it; if sessions ever survive a daemon
+swap, record the build per session then.
+
+## Developing toriel
+
+`toriel --isolated [name]` (or `TORIEL_PROFILE=name`) runs a separate instance for trying out a
+branch without touching the real one: its own daemon, socket, pidfile, data (groups, schedules,
+grants, lineage, history), trash and daemon log, all under `$XDG_RUNTIME_DIR/toriel-<name>/`
+(mode 0700, so cleared at logout). The name defaults to the folder the code runs from, so a
+worktree names itself. The switcher shows `[isolated: name]`, `/doctor` prints the daemon's socket
+and folder, and `toriel --isolated name kill-server` / `doctor` address the same instance. The
+explicit variables (`TORIEL_SOCK`, `TORIEL_LOG`, ...) still win over the profile. Not isolated:
+pi's own session files and settings under `~/.pi` (use a scratch working directory), and the
+`--seed` idea from the ticket (copying groups in) is not built.
 
 ## Sessions opened in plain pi
 
@@ -259,6 +305,7 @@ A session's address is its UUID (pi's session id). toriel picks it before pi sta
 - `TORIEL_SOCK` - socket path (default `$XDG_RUNTIME_DIR/toriel.sock`). The daemon
   also puts it in every child's environment as `TORIEL_SOCK`, which is how the
   extensions find it. The pidfile/lock is `daemon.pid` in the data dir, not next to the socket.
+- `TORIEL_PROFILE` - name of an isolated instance (also `toriel --isolated [name]`): everything below moves under `$XDG_RUNTIME_DIR/toriel-<name>/`, see "Developing toriel"
 - `TORIEL_PI_CLI` - pi cli.js the daemon spawns as children (tests point this at the fake pi)
 - `TORIEL_LOG` - daemon log (default `~/.local/state/toriel/daemon.log`, `$XDG_STATE_HOME` honored; kept under 5 MB: over that it moves to `daemon.log.1`, checked at start and every 10 minutes)
 - `TORIEL_TRASH` - trash dir (default `$XDG_DATA_HOME/toriel/trash`)

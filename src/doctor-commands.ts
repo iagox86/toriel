@@ -8,7 +8,7 @@ import { errText } from "./util.ts";
 /** `/doctor [--fix]`. A running controller has passed the start-up checks, so those are not repeated. */
 export function runDoctorCommand(h: Host, call: Invocation, opts: DoctorOptions = {}): void {
   const checks = runDoctor({ ...opts, startup: [] });
-  const report = renderDoctor(checks, { compact: true });
+  const report = `${renderDoctor(checks, { compact: true })}\n\n${h.daemonReport()}`;
   if (call.opts.fix !== true) {
     h.infoPanel.show(report);
     h.tui.requestRender();

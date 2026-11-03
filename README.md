@@ -60,6 +60,7 @@ ln -s ~/projects/toriel/bin/toriel ~/.local/bin/toriel   # once, so `toriel` wor
 toriel              # starts the daemon if needed, opens the switcher
 toriel doctor       # check the setup, say how to fix what is wrong (--fix applies the safe fixes)
 toriel kill-server  # stop the daemon and every session it owns
+toriel --isolated   # a separate instance (own daemon, socket, data, log) for trying out a branch
 ```
 
 `bin/toriel` finds the node version in `.nvmrc` even when your default node is
