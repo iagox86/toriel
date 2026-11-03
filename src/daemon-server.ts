@@ -15,6 +15,7 @@ const GRANT_CHANGES: ReadonlySet<string> = new Set(["permission_add", "permissio
 /** A new controller's initial sync: its own session view, then the transcript of every live child. */
 function syncController(ctx: DaemonContext, socket: net.Socket): void {
   ctx.hub.addController(socket);
+  ctx.hub.sendHello(socket);
   ctx.hub.sendSessions(socket);
   for (const s of ctx.registry.all()) {
     if (!s.child) {

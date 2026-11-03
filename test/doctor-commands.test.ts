@@ -20,6 +20,7 @@ function fakeHost() {
   const choices: Array<{ title: string; options: string[]; pick: (c: string) => void }> = [];
   const host = {
     notify: (m: string) => void notices.push(m),
+    daemonReport: () => "Daemon\n  (test)",
     tui: { requestRender: () => {} },
     infoPanel: { show: (t: string) => void panels.push(t) },
     choicePanel: { open: (title: string, options: string[], _current: unknown, pick: (c: string) => void) => void choices.push({ title, options, pick }) },

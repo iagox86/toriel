@@ -61,6 +61,8 @@ export interface Host {
   /** Undo echoPrompt when the send failed. */
   dropEcho(key: string, text: string): void;
   notify(message: string): void;
+  /** The "Daemon" block of /doctor: which code the daemon runs and how it compares with this controller. */
+  daemonReport(): string;
   /** Put text on the clipboard (and the primary selection); true or an error message. */
   copyText(text: string): Promise<boolean | string>;
   renderChrome(): void;

@@ -5,7 +5,11 @@
 import * as net from "node:net";
 import { SOCK } from "./config.ts";
 import { ensureDaemon } from "./lifecycle.ts";
-import { type ClientCommand, type DaemonMessage, type DistributiveOmit, encodeLine, LineSplitter } from "./shared.ts";
+import { type BuildInfo, type ClientCommand, type DaemonMessage, type DistributiveOmit, encodeLine, LineSplitter } from "./shared.ts";
+import { compareDaemon, type DaemonVerdict, type Hello } from "./version-check.ts";
+
+/** What a controller may still say to a daemon it cannot trust. */
+const ALLOWED_WHEN_BLOCKED: ReadonlySet<string> = new Set(["list", "shutdown"]);
 
 const RECONNECT_ATTEMPTS = 20;
 const FIRST_LIST_TIMEOUT_MS = 3000;
@@ -24,6 +28,8 @@ export interface LinkHooks {
   /** Every retry failed. */
   gaveUp(): void;
   notify(text: string): void;
+  /** Once per connection, before the first session list is used: how the daemon's code compares with ours. */
+  daemonChecked?(verdict: DaemonVerdict, hello: Hello | undefined): void;
 }
 
 export class DaemonLink {
@@ -35,9 +41,16 @@ export class DaemonLink {
   private reqSeq = 0;
   private readonly responses = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   private readonly hooks: LinkHooks;
+  private readonly local: BuildInfo;
+  /** The daemon of this connection has been compared with us (reset on every connect). */
+  private checked = false;
+  /** Why nothing but `list`/`shutdown` goes out: the daemon speaks another protocol. */
+  private blocked?: string;
 
-  constructor(hooks: LinkHooks) {
+  /** `local` is the code this controller runs (build-id.ts), to compare with the daemon's. */
+  constructor(hooks: LinkHooks, local: BuildInfo) {
     this.hooks = hooks;
+    this.local = local;
   }
 
   /** Connect, starting the daemon first if nothing answers; resolves once the first session list is in. */
@@ -55,6 +68,8 @@ export class DaemonLink {
       const socket = net.connect(SOCK);
       socket.once("connect", () => {
         this.socket = socket;
+        this.checked = false;
+        this.blocked = undefined;
         // Announce ourselves: the daemon classifies connections by their
         // first command (presence heartbeats vs controllers), and its
         // initial sync + broadcast membership are keyed on that. Without
@@ -98,7 +113,25 @@ export class DaemonLink {
     });
   }
 
+  /** Compare once per connection: on the daemon's hello, or on its first session list when it never sent one (an older daemon). */
+  private check(hello: Hello | undefined): void {
+    if (this.checked) {
+      return;
+    }
+    this.checked = true;
+    const verdict = compareDaemon(this.local, hello);
+    this.blocked = verdict.level === "blocked" ? verdict.text : undefined;
+    this.hooks.daemonChecked?.(verdict, hello);
+  }
+
   private receive(msg: DaemonMessage): void {
+    if (msg.type === "hello") {
+      this.check(msg);
+      return;
+    }
+    if (msg.type === "sessions") {
+      this.check(undefined);
+    }
     if (msg.type !== "response") {
       this.hooks.message(msg);
       return;
@@ -154,11 +187,18 @@ export class DaemonLink {
       }
       return;
     }
+    if (this.blocked && !ALLOWED_WHEN_BLOCKED.has(String(msg.type))) {
+      this.hooks.notify(`not sent: ${this.blocked}`);
+      return;
+    }
     this.socket.write(encodeLine(msg));
   }
 
   /** Send a command with response correlation. */
   request(cmd: DistributiveOmit<ClientCommand, "id">, timeoutMs = 30_000): Promise<unknown> {
+    if (this.blocked && !ALLOWED_WHEN_BLOCKED.has(cmd.type)) {
+      return Promise.reject(new Error(this.blocked));
+    }
     const id = `req-${++this.reqSeq}`;
     return new Promise((resolve, reject) => {
       this.responses.set(id, { resolve, reject });

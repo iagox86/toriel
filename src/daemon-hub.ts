@@ -12,9 +12,19 @@ export class ClientHub {
   private readonly presenceOnly = new Set<net.Socket>();
   private readonly metasFor: (socket: net.Socket) => SessionMeta[];
 
-  /** `metasFor` builds the session list as one particular socket should see it (its own attaches differ). */
-  constructor(metasFor: (socket: net.Socket) => SessionMeta[]) {
+  private readonly hello?: DaemonMessage;
+
+  /** `metasFor` builds the session list as one particular socket should see it (its own attaches differ); `hello` says which code this daemon runs. */
+  constructor(metasFor: (socket: net.Socket) => SessionMeta[], hello?: DaemonMessage) {
     this.metasFor = metasFor;
+    this.hello = hello;
+  }
+
+  /** Sent before anything else to a new controller, so it can compare versions before it relies on the daemon. */
+  sendHello(socket: net.Socket): void {
+    if (this.hello) {
+      this.send(socket, this.hello);
+    }
   }
 
   get controllerCount(): number {

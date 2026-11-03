@@ -1241,3 +1241,26 @@ Not done (slices 4+):
 - Jobs in subagent sessions and whether they count against the spawn limits (ticket 5).
 - A profile that names `bash` in `tools:` without `toriel_job` can start jobs it cannot list or
   stop (see agents/README.md).
+
+## Client/daemon identity and isolated instances (#105, #106, built 2026-11-02)
+
+Found while verifying #8: a stray controller from the main checkout kept restarting a main-checkout
+daemon, and a branch controller's new request got 30 s of silence. Two parts.
+
+- **Handshake.** The daemon sends `hello` before the first session list; the controller compares at
+  every connect. `protocol` (hand-bumped integer) blocks, the content `fingerprint` only warns. Decided
+  against comparing git hashes: a commit cannot tell a daemon from main apart from a worktree with
+  uncommitted edits on top of the same commit, which is the case that went wrong. The hash is the label
+  for people. The ticket suggested path + size + mtime; content is used instead because mtime differs
+  between two checkouts of the same code (a fresh `git checkout` sets it to now) and the whole tree is a
+  few hundred KB, hashed once at start. A daemon with no hello counts as older and only warns: blocking
+  would lock out the one daemon that still works. The blocked state allows `list` and `shutdown` only,
+  enforced in `DaemonLink` so no caller can forget it.
+- **Isolation.** One variable (`TORIEL_PROFILE`, set by `--isolated [name]` before `config.ts` loads,
+  so the daemon it spawns inherits it) derives every path. It does not isolate `~/.pi`, and a
+  `--seed` option is not built. `kill-server` watches for a respawn rather than trying to find other
+  controllers: the daemon cannot tell which checkout a controller runs, and what matters is the
+  observable fact that a new daemon appeared.
+- Not done: a per-session "child predates the daemon's build" marker (ticket item 5): children do not
+  outlive the daemon today. Per-request refusal of unknown types (from #8) stays as the second line of
+  defence for a daemon that is new enough to answer.

@@ -16,7 +16,8 @@
 // this env, including pi settings/auth/extensions.)
 import "./migrate-on-start.ts";
 import * as fs from "node:fs";
-import { LOG, PERMISSIONS_FILE, PID_FILE, SCHEDULES_FILE, SOCK } from "./config.ts";
+import { buildInfo } from "./build-id.ts";
+import { LOG, PERMISSIONS_FILE, PID_FILE, PROFILE, SCHEDULES_FILE, SOCK } from "./config.ts";
 import { BridgeTracker } from "./daemon-bridge.ts";
 import { ChildManager } from "./daemon-children.ts";
 import type { DaemonContext } from "./daemon-context.ts";
@@ -36,7 +37,7 @@ import { DEFAULT_SUBAGENT_LIMITS } from "./subagents.ts";
 import { needsAwake, SleepInhibitor } from "./sleep-inhibit.ts";
 import { collectFindings } from "./doctor.ts";
 import { loadSettings } from "./settings.ts";
-import type { UsageReport } from "./shared.ts";
+import { PROTOCOL, type UsageReport } from "./shared.ts";
 import { errText, rotateLog } from "./util.ts";
 
 /** Wire the daemon's collaborators together; `shutdown` is late-bound because they need each other first. */
@@ -44,7 +45,14 @@ function createContext(shutdown: () => void): DaemonContext {
   const registry = new SessionRegistry();
   const presence = new Presence();
   const usage = new Map<string, UsageReport>();
-  const hub = new ClientHub((socket) => sessionMetas(registry, presence, usage, socket, ctx.scheduler, ctx.grants));
+  const hub = new ClientHub((socket) => sessionMetas(registry, presence, usage, socket, ctx.scheduler, ctx.grants), {
+    type: "hello",
+    protocol: PROTOCOL,
+    build: buildInfo(),
+    pid: process.pid,
+    sock: SOCK,
+    profile: PROFILE,
+  });
   const bridges = new BridgeTracker();
   const children = new ChildManager(hub, usage, bridges);
   // the scheduler's host reads the context lazily, so it can be built inside it

@@ -26,7 +26,8 @@ import { bannerText, childCost, relationOf } from "./session-tree.ts";
 import { uniqueName } from "./session-id.ts";
 import { loadAgents } from "./agents.ts";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { DIALOG_METHODS, HISTORY_FILE, KEY_LOG } from "./config.ts";
+import { buildInfo } from "./build-id.ts";
+import { DIALOG_METHODS, HISTORY_FILE, KEY_LOG, PROFILE } from "./config.ts";
 import { DaemonLink } from "./daemon-link.ts";
 import { buildLayouts } from "./layout.ts";
 
@@ -48,6 +49,7 @@ import { autocompleteMaxVisible, hideThinkingBlock, wheelScrollLines } from "./p
 import { SessionActions } from "./session-actions.ts";
 import { SwitcherActions } from "./switcher-actions.ts";
 import { killServer } from "./lifecycle.ts";
+import { compareDaemon, describeDaemon, type DaemonVerdict, type Hello } from "./version-check.ts";
 import { selectListTheme } from "./pi-theme.ts";
 import {
   displayName,
@@ -70,7 +72,7 @@ import { CompletionSources } from "./completion-sources.ts";
 import { ClipboardTerminal } from "./clipboard-terminal.ts";
 import { InfoPanel } from "./info-panel.ts";
 import type { ToolRun } from "./tool-run.ts";
-import { accent, assertTruecolor, dim, OSC_RESET_BG, OSC_SET_BG, streaming } from "./theme.ts";
+import { accent, assertTruecolor, attention, dim, OSC_RESET_BG, OSC_SET_BG, streaming } from "./theme.ts";
 import { Switcher, } from "./switcher.ts";
 import {
   applyEvent,
@@ -164,6 +166,10 @@ class Controller {
   private mouseOn = true;
   /** Required toriel resources missing from the pi agent dir; re-checked with the session list. */
   private resourceNotice = "";
+  /** This controller's own code and the daemon's, as last compared (on every connect). */
+  private readonly build = buildInfo();
+  private daemonVerdict: DaemonVerdict = { level: "ok" };
+  private daemonHello?: Hello;
   private flash = "";
   private flashTimer?: ReturnType<typeof setTimeout>;
   private listTimer?: ReturnType<typeof setInterval>;
@@ -187,7 +193,8 @@ class Controller {
         this.dispose();
       },
       notify: (text) => this.notify(text),
-    });
+      daemonChecked: (verdict, hello) => this.onDaemonChecked(verdict, hello),
+    }, this.build);
     this.clip = new ClipboardActions(this, () => this.canPaste());
     this.completions = new CompletionSources(this);
     this.tui = guardClicks(
@@ -263,6 +270,35 @@ class Controller {
     } finally {
       this.tui.stop();
     }
+  }
+
+  /** The daemon of a new connection has been compared with this controller: keep the result for the status line and /doctor, and say it once. */
+  private onDaemonChecked(verdict: DaemonVerdict, hello: Hello | undefined): void {
+    this.daemonVerdict = verdict;
+    this.daemonHello = hello;
+    if (verdict.level !== "ok") {
+      this.notify(verdict.text);
+    }
+    this.renderChrome();
+  }
+
+  /** The "Daemon" block of /doctor: what runs where and what differs. */
+  daemonReport(): string {
+    return describeDaemon(this.build, this.daemonHello, compareDaemon(this.build, this.daemonHello));
+  }
+
+  /** Always-visible tags before the status line: an isolated instance, and a daemon that is not this toriel's code. */
+  private statusTags(): string {
+    const tags: string[] = [];
+    if (PROFILE) {
+      tags.push(`[isolated: ${PROFILE}]`);
+    }
+    if (this.daemonVerdict.level === "blocked") {
+      tags.push("[daemon protocol differs: nothing is sent, see /doctor]");
+    } else if (this.daemonVerdict.level === "warn") {
+      tags.push("[daemon runs other code, see /doctor]");
+    }
+    return tags.length > 0 ? `${attention(tags.join(" "))} ` : "";
   }
 
   /** The connection dropped: keep the UI and the editor text; views are replaced by the daemon's replay on reconnect. */
@@ -884,7 +920,7 @@ class Controller {
       // a clipboard problem is worth a standing note while the switcher is up; it is not an error
       notice: (this.link.down ? "daemon connection lost - reconnecting (your input is kept)" : "") || this.resourceNotice || settingsNotice(this.sessions.values(), settingsMtime()) || bridgeNotice(this.sessions.values()) || (this.clip.clipboard.problem ? `clipboard: ${this.clip.clipboard.problem}` : ""),
     });
-    this.statusLine.setText(truncateToWidth(status, width));
+    this.statusLine.setText(truncateToWidth(`${this.statusTags()}${status}`, width));
     this.tui.requestRender();
   }
 }

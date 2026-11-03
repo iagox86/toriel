@@ -7,6 +7,23 @@
 // every connected controller still sees the full event stream (viewing is
 // never exclusive).
 
+/**
+ * Bumped by hand when the message set or a message shape changes in a way an
+ * older daemon or controller cannot cope with. A mismatch blocks the controller
+ * (see version-check.ts); a mere code difference with the same protocol only warns.
+ */
+export const PROTOCOL = 1;
+
+/** Which toriel code a process runs (build-id.ts). */
+export interface BuildInfo {
+  /** Hash of the source; the only thing compared. */
+  fingerprint: string;
+  /** For people: git short hash (+dirty), else the fingerprint. */
+  label: string;
+  /** The checkout the code was loaded from. */
+  dir: string;
+}
+
 /** One quota window of a provider account, e.g. z.ai's rolling 5h. */
 export interface UsageWindow {
   label: string;
@@ -283,6 +300,8 @@ export interface ScheduleView {
 
 // daemon -> controller
 export type DaemonMessage =
+  /** First thing a controller hears: which code the daemon runs. A daemon that never sends it predates the version check. */
+  | { type: "hello"; protocol: number; build: BuildInfo; pid: number; sock: string; profile?: string }
   | { type: "sessions"; sessions: SessionMeta[] }
   | { type: "event"; session: number; event: Record<string, unknown> }
   | { type: "history"; session: number; messages: unknown[] }
