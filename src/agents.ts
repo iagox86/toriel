@@ -57,7 +57,11 @@ const TOOL_ALIASES: Record<string, string> = { glob: "find", webfetch: "web_fetc
 
 export function normalizeTool(t: string): string {
   const name = t.trim();
-  if (name.startsWith("mcp__") || name.includes("*")) {
+  if (name.startsWith("mcp__")) {
+    // pi's --tools never matches an exact MCP tool name (measured on pi 1.4.0: `mcp__git__git_read` yields no tool, `mcp__git__git_read*` yields exactly it), so an exact name gets a trailing *
+    return name.includes("*") ? name : `${name}*`;
+  }
+  if (name.includes("*")) {
     return name;
   }
   const lower = name.toLowerCase();
@@ -147,6 +151,11 @@ export function parseAgent(text: string, source: string, file: string): AgentPro
   if (tools !== undefined && tools.length === 0) {
     throw new Error("tools is empty (leave it out for pi's defaults)");
   }
+  const extensions = asBool("extensions", fm.extensions, true);
+  if (!extensions && tools?.some((t) => t.startsWith("mcp__"))) {
+    // pi's MCP support is one of its built-in extensions, so --no-extensions removes every MCP tool
+    throw new Error("tools names MCP tools (mcp__...) but extensions is false, which turns pi's MCP support off: set extensions: true (the permission system then guards them)");
+  }
   return {
     name,
     description: fm.description,
@@ -158,7 +167,7 @@ export function parseAgent(text: string, source: string, file: string): AgentPro
     budget: asCount("budget", fm.budget),
     canSpawn: asBool("canSpawn", fm.canspawn, false),
     minimal: asBool("minimal", fm.minimal, true),
-    extensions: asBool("extensions", fm.extensions, true),
+    extensions,
     source,
     file,
   };
@@ -207,16 +216,42 @@ export function mcpServersOf(tools: readonly string[]): string[] {
 }
 
 /** One warning per MCP server the profile names that mcp.json does not configure. */
-export function mcpWarnings(profile: AgentProfile, configured: readonly string[]): string[] {
-  const normalized = new Set(configured.map((s) => s.replace(/-/g, "_")));
-  return mcpServersOf(profile.tools ?? [])
-    .filter((s) => !normalized.has(s.replace(/-/g, "_")))
-    .map((s) => `${profile.name}: MCP server "${s}" is not configured in mcp.json`);
+export function mcpWarnings(profile: AgentProfile, servers: Readonly<Record<string, McpServerInfo>>): string[] {
+  const byName = new Map(Object.entries(servers).map(([name, info]) => [name.replace(/-/g, "_"), info]));
+  return mcpServersOf(profile.tools ?? []).flatMap((server) => {
+    const info = byName.get(server.replace(/-/g, "_"));
+    if (!info) {
+      return [`${profile.name}: MCP server "${server}" is not configured in mcp.json`];
+    }
+    if (info.exposure !== "direct") {
+      // pi's default (codemode) never declares the tools to the model, so an agent limited to them has none
+      return [`${profile.name}: MCP server "${server}" has exposure ${info.exposure ?? "codemode (the default)"} in mcp.json, so the agent is never given its tools: set "exposure": "direct"`];
+    }
+    return [];
+  });
 }
 
-/** Server names in an mcp.json (`mcpServers` object); empty when unreadable. */
-export function configuredMcpServers(file: string): string[] {
-  return Object.keys(readJsonOr<{ mcpServers?: Record<string, unknown> }>(file, {}).mcpServers ?? {});
+/** What a profile needs to know about an MCP server entry. */
+export interface McpServerInfo {
+  /** pi's `exposure` for the server; undefined = its default, codemode. */
+  exposure?: string;
+}
+
+/** The servers of one mcp.json (`mcpServers` object); empty when unreadable. */
+export function readMcpServers(file: string): Record<string, McpServerInfo> {
+  const raw = readJsonOr<{ mcpServers?: Record<string, { exposure?: unknown } | null> }>(file, {}).mcpServers ?? {};
+  return Object.fromEntries(Object.entries(raw).map(([name, entry]) => [name, { exposure: typeof entry?.exposure === "string" ? entry.exposure : undefined }]));
+}
+
+/** Several mcp.json files, lowest priority first: a later entry of the same name overrides the keys it sets (pi lets a project entry override only `exposure`). */
+export function mergeMcpServers(files: readonly string[]): Record<string, McpServerInfo> {
+  const out: Record<string, McpServerInfo> = {};
+  for (const file of files) {
+    for (const [name, info] of Object.entries(readMcpServers(file))) {
+      out[name] = { ...out[name], ...(info.exposure !== undefined ? info : {}) };
+    }
+  }
+  return out;
 }
 
 export interface AgentDirs {
@@ -268,7 +303,7 @@ export function mcpConfigFiles(cwd: string, env: NodeJS.ProcessEnv = process.env
 /** Load agents and add the MCP warnings. */
 export function loadAgentsChecked(cwd: string, env: NodeJS.ProcessEnv = process.env): LoadedAgents {
   const loaded = loadAgents(cwd, env);
-  const servers = mcpConfigFiles(cwd, env).flatMap(configuredMcpServers);
+  const servers = mergeMcpServers(mcpConfigFiles(cwd, env));
   return { agents: loaded.agents, problems: [...loaded.problems, ...loaded.agents.flatMap((a) => mcpWarnings(a, servers))] };
 }
 

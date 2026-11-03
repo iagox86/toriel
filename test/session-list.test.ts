@@ -331,13 +331,26 @@ describe("buildSessionList: subagents", () => {
   const finishedOf = (subagent?: SessionMeta["subagent"]) => build({ daemon: [meta({ sessionFile: "/a", subagent })], files: [local("/a")] })[0]?.finished;
 
   it("marks a subagent finished once it has ended and its parent has the result", () => {
-    assert.equal(finishedOf({ state: "done", delivered: true, parent: "p" }), true);
-    assert.equal(finishedOf({ state: "stopped", delivered: true, parent: "p" }), true);
+    assert.equal(finishedOf({ state: "done", delivered: true, parent: "p", tokens: 0, budget: 150000, turns: 0 }), true);
+    assert.equal(finishedOf({ state: "stopped", delivered: true, parent: "p", tokens: 0, budget: 150000, turns: 0 }), true);
   });
 
   it("keeps a running or not yet delivered subagent looking alive, and says nothing about other sessions", () => {
-    assert.equal(finishedOf({ state: "running", delivered: false, parent: "p" }), false);
-    assert.equal(finishedOf({ state: "done", delivered: false, parent: "p" }), false);
+    assert.equal(finishedOf({ state: "running", delivered: false, parent: "p", tokens: 0, budget: 150000, turns: 0 }), false);
+    assert.equal(finishedOf({ state: "done", delivered: false, parent: "p", tokens: 0, budget: 150000, turns: 0 }), false);
     assert.equal(finishedOf(undefined), undefined);
+  });
+});
+
+describe("buildSessionList: a running subagent's budget", () => {
+  const descriptionOf = (subagent: SessionMeta["subagent"]) => build({ daemon: [meta({ sessionFile: "/a", subagent })], files: [local("/a")] })[0]?.description;
+
+  it("leads a running subagent's description with how much of its budget it used", () => {
+    assert.match(descriptionOf({ state: "running", delivered: false, parent: "p", tokens: 3000, budget: 150000, turns: 2 }) ?? "", /^budget 3\.0k\/150\.0k - /);
+  });
+
+  it("leaves a finished subagent's and an ordinary session's description alone", () => {
+    assert.doesNotMatch(descriptionOf({ state: "done", delivered: true, parent: "p", tokens: 3000, budget: 150000, turns: 2 }) ?? "", /budget/);
+    assert.doesNotMatch(descriptionOf(undefined) ?? "", /budget/);
   });
 });

@@ -13,7 +13,7 @@ import { recordHandled } from "./handled-files.ts";
 import { historyOf } from "./daemon-history.ts";
 import { resourceArgs, SPAWN_TOOLS, TORIEL_TOOLS } from "./resources.ts";
 import { lineageArgs, loadLineage, parentMap, sessionIdOfFile, subagentDepth } from "./lineage.ts";
-import { DEFAULT_SUBAGENT_LIMITS, HARD_MAX_DEPTH } from "./subagents.ts";
+import { mayDelegate, type SubagentLimits } from "./subagents.ts";
 import { profileOfSession, saveSessionAgent } from "./session-agents.ts";
 import { log } from "./log.ts";
 import type { UsageReport } from "./shared.ts";
@@ -48,12 +48,17 @@ export class ChildManager {
   private readonly bridges: BridgeTracker;
   /** Called when a session's run settles or its compaction ends (the daemon uses it to wake waiting schedules). */
   onSettled?: (s: DaemonSession) => void;
+  /** Processes that have been spawned but whose start has not finished: not on any session yet, so a shutdown must find them here. */
+  private readonly launching = new Set<RpcClient>();
   /** Called with each finished assistant message (the subagent manager counts turns and tokens with it). */
-  onAssistantMessage?: (s: DaemonSession, message: { role?: string; stopReason?: string } | undefined) => void;
+  onAssistantMessage?: (s: DaemonSession, message: { role?: string; stopReason?: string; errorMessage?: string; usage?: { input?: number; output?: number; cacheWrite?: number } } | undefined) => void;
+  /** The limits that decide which sessions get the toriel_agent tools: the same object the subagent manager enforces. */
+  private readonly subagentLimits: SubagentLimits;
   /** Called when a session's process is stopped or found dead (subagents end with their session; foreground ones with their parent). */
   onStopped?: (s: DaemonSession) => void;
 
-  constructor(hub: ClientHub, usage: Map<string, UsageReport>, bridges: BridgeTracker) {
+  constructor(hub: ClientHub, usage: Map<string, UsageReport>, bridges: BridgeTracker, subagentLimits: SubagentLimits) {
+    this.subagentLimits = subagentLimits;
     this.hub = hub;
     this.usage = usage;
     this.bridges = bridges;
@@ -77,8 +82,7 @@ export class ChildManager {
 
   /** Whether `s` gets the toriel_agent tools: its profile allows spawning and it is not already too deep. */
   mayDelegate(s: DaemonSession): boolean {
-    const depth = subagentDepth(s.sessionId, parentMap(loadLineage()));
-    return (!s.agent || s.agent.canSpawn) && depth < Math.min(DEFAULT_SUBAGENT_LIMITS.maxDepth, HARD_MAX_DEPTH);
+    return mayDelegate(s.agent, subagentDepth(s.sessionId, parentMap(loadLineage())), this.subagentLimits);
   }
 
   /** The environment the toriel_agent tool reads: whether to register, and the agent types its description lists. */
@@ -108,7 +112,12 @@ export class ChildManager {
       env: { ...childEnv(s, SOCK), ...this.delegationEnv(s) },
     });
     client.onEvent((event) => this.onEvent(s, event as Record<string, unknown>));
-    await client.start();
+    this.launching.add(client);
+    try {
+      await client.start();
+    } finally {
+      this.launching.delete(client);
+    }
     try {
       await client.setSteeringMode(cfg.steeringMode);
     } catch (err) {
@@ -201,6 +210,21 @@ export class ChildManager {
     } finally {
       s.spawning = false;
       this.hub.broadcastSessions();
+    }
+  }
+
+  /**
+   * Signal every pi process: those of live sessions, and those still starting (a subagent spawned a moment
+   * before shutdown has no `child` yet). Sends SIGTERM at once and does not wait, for the daemon is exiting.
+   */
+  stopAll(sessions: Iterable<DaemonSession>): void {
+    for (const s of sessions) {
+      if (s.child) {
+        void s.child.stop().catch(() => {});
+      }
+    }
+    for (const client of this.launching) {
+      void client.stop().catch(() => {});
     }
   }
 
@@ -463,7 +487,7 @@ export class ChildManager {
         s.totalTokens += usage.totalTokens ?? 0;
         s.totalCost += usage.cost?.total ?? 0;
       }
-      this.onAssistantMessage?.(s, event.message as { role?: string; stopReason?: string } | undefined);
+      this.onAssistantMessage?.(s, event.message as Parameters<NonNullable<ChildManager["onAssistantMessage"]>>[1]);
     }
     if (type === "message_start" || type === "message_end" || type === "agent_start" || type === "agent_settled") {
       log(

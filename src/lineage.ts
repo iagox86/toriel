@@ -118,7 +118,12 @@ const describe = (r: SessionRef) => `"${r.name}" (session id ${r.id}, file ${r.f
 /** System-prompt text for a session with this lineage (only its parent); undefined when it has none. */
 export function lineageNote(entry: LineageEntry | undefined): string | undefined {
   const parts: string[] = [];
-  if (entry?.parent) {
+  if (entry?.parent && entry.kind === "subagent") {
+    // a respawned subagent keeps its role: it is not a copy of its parent's conversation
+    parts.push(
+      `This session is a subagent of the session ${describe(entry.parent)}. That session started it for one task and sees only your final message of a run as the result.`,
+    );
+  } else if (entry?.parent) {
     parts.push(
       `This session is a fork of the session ${describe(entry.parent)}. It began as a copy of that session's conversation and has diverged since; the two now evolve independently.`,
     );

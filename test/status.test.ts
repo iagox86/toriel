@@ -69,6 +69,14 @@ describe("buildStatusLine", () => {
     assert.equal(line, "alpha | glm-5.3-flash (zai-coding-cn) | idle | ctx 45.2k/200.0k 23% | think high | $1.23");
   });
 
+  it("shows a subagent's budget next to its parent, as a warning near the cap", () => {
+    const sub = (tokens: number) => meta({ subagent: { state: "running", delivered: false, parent: "p", tokens, budget: 150_000, turns: 3, maxTurns: 25 } });
+    const line = (tokens: number) => buildStatusLine({ ...base, relation: { kind: "subagent", parentName: "Boss" }, meta: sub(tokens) });
+    assert.match(plain(line(38_000)), /SUBAGENT of Boss \| budget 38\.0k\/150\.0k, turn 3\/25 \|/);
+    assert.notEqual(line(38_000).replace(/38\.0k/, "x"), line(130_000).replace(/130\.0k/, "x"), "drawn differently near the cap");
+    assert.doesNotMatch(plain(buildStatusLine({ ...base, meta: sub(1000) })), /budget/, "only on a subagent's own view");
+  });
+
   it("says what the session is doing while it works", () => {
     const line = plain(buildStatusLine({ ...base, activity: "running bash", meta: meta({ streaming: true }) }));
     assert.match(line, /alpha|<unnamed>/);

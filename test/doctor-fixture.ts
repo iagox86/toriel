@@ -33,6 +33,8 @@ export interface Over {
   noResources?: boolean;
   noCli?: boolean;
   noInhibit?: boolean;
+  /** The git MCP server in mcp.json: "direct" (default, healthy), another exposure, or "none" for no mcp.json at all. */
+  gitMcp?: string;
 }
 
 export function setup(home: string, over: Over = {}) {
@@ -48,6 +50,10 @@ export function setup(home: string, over: Over = {}) {
   if (over.stale) {
     mk(path.join(agentDir, "extensions"));
     fs.symlinkSync("/nowhere", path.join(agentDir, "extensions", "toriel-agents.ts"));
+  }
+  if (over.gitMcp !== "none" && !over.noPiDir) {
+    mk(agentDir);
+    fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { git: { command: "node", args: ["x"], ...(over.gitMcp === "default" ? {} : { exposure: over.gitMcp ?? "direct" }) } } }));
   }
   const root = path.join(base, "pi");
   if (!over.noResources) {

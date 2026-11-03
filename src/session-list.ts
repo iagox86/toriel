@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { fmtAge, firstMessageLabel } from "./format.ts";
 import { type GroupsFile, isParked } from "./groups.ts";
 import type { SessionMeta } from "./shared.ts";
+import { budgetText } from "./subagent-budget.ts";
 import { WAITING_NOTE } from "./session-tree.ts";
 import type { SessionState, SwitcherSession } from "./switcher.ts";
 
@@ -80,6 +81,12 @@ export function buildSessionList(inp: ListInputs): SwitcherSession[] {
       note = "crashed - prompt respawns";
     }
     const modified = info?.modified ?? 0;
+    const description =
+      note ||
+      (sessionId ? inp.groups.summaries?.[sessionId]?.text : undefined) ||
+      inp.summaries.get(key) ||
+      info?.lastActivity ||
+      (explicitName ? (first ?? path.basename(cwd)) : path.basename(cwd));
     list.push({
       key,
       // Unnamed sessions show their first message as the name; the project
@@ -101,12 +108,8 @@ export function buildSessionList(inp: ListInputs): SwitcherSession[] {
       ageMs: modified > 0 && !isParked(inp.groups, sessionId, modified) ? inp.now - modified : undefined,
       parked: isParked(inp.groups, sessionId, modified),
       model: meta?.model ? meta.model.split("/").pop() : info?.model,
-      description:
-        note ||
-        (sessionId ? inp.groups.summaries?.[sessionId]?.text : undefined) ||
-        inp.summaries.get(key) ||
-        info?.lastActivity ||
-        (explicitName ? (first ?? path.basename(cwd)) : path.basename(cwd)),
+      // a subagent that is still running shows how much of its budget it has used, ahead of the usual text
+      description: meta?.subagent?.state === "running" ? `${budgetText(meta.subagent)} - ${description}` : description,
     });
   }
   return list;

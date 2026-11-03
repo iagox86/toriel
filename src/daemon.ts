@@ -55,7 +55,7 @@ function createContext(shutdown: () => void): DaemonContext {
     profile: PROFILE,
   });
   const bridges = new BridgeTracker();
-  const children = new ChildManager(hub, usage, bridges);
+  const children = new ChildManager(hub, usage, bridges, DEFAULT_SUBAGENT_LIMITS);
   // the scheduler's host reads the context lazily, so it can be built inside it
   const grants = new GrantStore(PERMISSIONS_FILE, Date.now, { perSession: loadSettings().settings.permissionGrantLimit ?? DEFAULT_GRANT_LIMITS.perSession });
   const ctx: DaemonContext = { registry, hub, children, presence, bridges, scheduler: new Scheduler(schedulerHost(() => ctx, usage), SCHEDULES_FILE, { ...DEFAULT_LIMITS, dailyFires: loadSettings().settings.scheduleDailyLimit ?? DEFAULT_LIMITS.dailyFires }), grants, subagents: new SubagentManager(() => ctx, DEFAULT_SUBAGENT_LIMITS, keepMsFrom(process.env.TORIEL_SUBAGENT_KEEP_MS)), shutdown };
@@ -86,11 +86,7 @@ async function main(): Promise<void> {
     server.close();
     ctx.scheduler.stop();
     inhibitor.stop();
-    for (const s of ctx.registry.all()) {
-      if (s.child) {
-        void s.child.stop().catch(() => {});
-      }
-    }
+    ctx.children.stopAll(ctx.registry.all());
     fs.rmSync(SOCK, { force: true });
     releaseDaemonLock(PID_FILE);
     process.exit(0);

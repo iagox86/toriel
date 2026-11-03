@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import { agentCompletions, agentListing } from "../src/agents-completion.ts";
-import { findAgent, loadAgents, mcpWarnings, parseAgent, profileArgs } from "../src/agents.ts";
+import { findAgent, loadAgents, mcpWarnings, mergeMcpServers, parseAgent, profileArgs, readMcpServers } from "../src/agents.ts";
 
 const FILE = [
   "---",
@@ -84,10 +84,38 @@ describe("profileArgs", () => {
 describe("mcpWarnings", () => {
   it("warns about MCP servers the config lacks, ignoring - versus _", () => {
     const a = parse(FILE);
-    assert.deepEqual(mcpWarnings(a, ["mealie"]), ['explore: MCP server "ghidra" is not configured in mcp.json']);
-    assert.deepEqual(mcpWarnings(a, ["ghidra"]), []);
+    assert.deepEqual(mcpWarnings(a, { mealie: { exposure: "direct" } }), ['explore: MCP server "ghidra" is not configured in mcp.json']);
+    assert.deepEqual(mcpWarnings(a, { ghidra: { exposure: "direct" } }), []);
     const dashed = parse("---\nname: a\ndescription: d\ntools: mcp__my_srv__*\n---\n");
-    assert.deepEqual(mcpWarnings(dashed, ["my-srv"]), []);
+    assert.deepEqual(mcpWarnings(dashed, { "my-srv": { exposure: "direct" } }), []);
+  });
+
+  it("warns when the server is not exposed directly, because pi then never declares its tools to the agent", () => {
+    const a = parse(FILE);
+    assert.match(mcpWarnings(a, { ghidra: {} })[0] ?? "", /exposure codemode \(the default\) in mcp\.json, so the agent is never given its tools: set "exposure": "direct"/);
+    assert.match(mcpWarnings(a, { ghidra: { exposure: "deferred" } })[0] ?? "", /exposure deferred/);
+  });
+});
+
+describe("mcp.json reading", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-mcpjson-"));
+  const write = (name: string, data: unknown) => {
+    const file = path.join(dir, name);
+    fs.writeFileSync(file, JSON.stringify(data));
+    return file;
+  };
+
+  it("reads each server's exposure, and nothing for a file that is missing or broken", () => {
+    const file = write("a.json", { mcpServers: { git: { command: "node", exposure: "direct" }, other: { url: "http://x" } } });
+    assert.deepEqual(readMcpServers(file), { git: { exposure: "direct" }, other: { exposure: undefined } });
+    assert.deepEqual(readMcpServers(path.join(dir, "missing.json")), {});
+  });
+
+  it("lets a later file override a server's exposure while keeping the rest", () => {
+    const user = write("u.json", { mcpServers: { git: { command: "node", exposure: "codemode" }, mealie: { command: "x", exposure: "direct" } } });
+    const project = write("p.json", { mcpServers: { git: { exposure: "direct" } } });
+    assert.deepEqual(mergeMcpServers([user, project]), { git: { exposure: "direct" }, mealie: { exposure: "direct" } });
+    assert.deepEqual(mergeMcpServers([project, user]).git, { exposure: "codemode" });
   });
 });
 
@@ -130,7 +158,7 @@ describe("loadAgents", () => {
 
   it("findAgent names the choices when there is no such agent", () => {
     const t = tree();
-    assert.throws(() => findAgent("nope", t.project, t.env), /no agent called "nope" \(have: explore, summarize\)/);
+    assert.throws(() => findAgent("nope", t.project, t.env), /no agent called "nope" \(have: [a-z, -]*explore[a-z, -]*summarize/);
   });
 });
 
@@ -158,5 +186,18 @@ describe("agent completion and listing", () => {
     assert.match(text, /tools: read,grep,find,mcp__ghidra__\*/);
     assert.match(text, /Problems:\n {2}f\.md: broken/);
     assert.match(agentListing([], []), /No agent profiles found/);
+  });
+});
+
+describe("MCP tools in a profile", () => {
+  it("gives an exact MCP tool name a trailing * so pi's --tools matches it", () => {
+    const a = parse("---\nname: a\ndescription: d\ntools: read, mcp__git__git_read\n---\n");
+    assert.deepEqual(a.tools, ["read", "mcp__git__git_read*"]);
+    assert.deepEqual(parse("---\nname: a\ndescription: d\ntools: mcp__git__*\n---\n").tools, ["mcp__git__*"]);
+  });
+
+  it("refuses MCP tools with extensions: false, because that turns pi's MCP support off", () => {
+    assert.throws(() => parse("---\nname: a\ndescription: d\ntools: read, mcp__ghidra__*\nextensions: false\n---\n"), /extensions is false, which turns pi's MCP support off: set extensions: true/);
+    assert.doesNotThrow(() => parse("---\nname: a\ndescription: d\ntools: read\nextensions: false\n---\n"));
   });
 });
