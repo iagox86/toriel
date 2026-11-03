@@ -81,7 +81,7 @@ begin a new session, or use the keys below.
 | shift+up / shift+down | switcher | move a session or group (crossing a header changes group) |
 | ctrl-n | switcher | new session |
 | ctrl-k | switcher | stop the session's process (file kept) |
-| ctrl-x (twice) | switcher | delete (to trash, recoverable with `/restore`) |
+| ctrl-x, then ctrl-x again within 1s | switcher | delete (to trash, recoverable with `/restore`); any other key cancels |
 | ctrl-r or f2 | switcher | rename |
 | ctrl-g, ctrl-f | switcher | group, filter |
 | left / right / enter on a group | switcher | fold or unfold |
@@ -97,11 +97,11 @@ begin a new session, or use the keys below.
 Type `/` for commands; tab completes them and their arguments, `/help` lists them, and
 `/<command> --help` explains one (what it does, every option, examples). Commands toriel handles itself:
 
-- Switcher: `/new [-a agent]`, `/init`, `/agents`, `/permissions` (every session's permission grants), `/doctor`, `/detach`, `/stop`, `/delete`, `/rename`, `/group`, `/ungroup`, `/park`,
-  `/filter`, `/comment`, `/summarize`, `/restore`, `/adopt`, `/feedback`, `/kill-daemon`, `/help`, `/exit`
-- In a session: `/help`, `/in`, `/at`, `/every`, `/loop`, `/cron` (timed prompts; `/schedules` lists them), `/permissions` (list, add and revoke "allow for 1 hour" grants), `/doctor`, `/btw`, `/comment`, `/model`, `/think`, `/compact`, `/clear`, `/fork`, `/cd`, `/park`, `/rename`, `/reload`,
+- Switcher: `/new [-n name] [-a agent] [-C dir]`, `/init`, `/agents`, `/permissions` (every session's permission grants), `/doctor`, `/cd <dir>` (where `/new`, `/init` and a typed first message start, for this window), `/detach`, `/stop`, `/delete [-y]`, `/rename`, `/group`, `/ungroup`, `/park [-u]`,
+  `/filter [-r]`, `/comment [-c] [text]`, `/summarize`, `/restore`, `/adopt <file>`, `/feedback`, `/mouse [on|off|toggle]`, `/schedules` (every session's timed prompts), `/cancel /pause /resume <id|name>` and `/fire <schedule>` (manage a timed prompt), `/kill-daemon`, `/help`, `/exit`
+- In a session: `/help`, `/name` (show or rename; same as `/rename`), `/in`, `/at`, `/every`, `/loop`, `/cron` (timed prompts; `/schedules` lists them, `/cancel /pause /resume <id|name>` and `/fire <schedule>` manage one), `/permissions` (list, add and revoke "allow for 1 hour" grants), `/doctor`, `/btw`, `/comment`, `/model`, `/think`, `/compact`, `/clear`, `/fork [-n name] [--keep-permissions]` (works while the session is running; the copy gets everything up to its last finished step), `/cd <dir>` (move this session to another directory), `/park`, `/rename`, `/reload`,
   `/mcp` (`list`, `status`, `explore`, `add`, `remove`, `reconnect`, `login`, `logout`), `/init`, `/why`, `/abort`, `/background`,
-  `/feedback`, `/parent` (jump to the agent that started this subagent), `/detach` (cut that link), `/quit` (back to the switcher), `/exit`
+  `/feedback`, `/parent` (jump to the agent that started this subagent), `/detach` (cut that link), `/mouse [on|off|toggle]`, `/quit` (back to the switcher), `/exit`
 
 `/comment <text>` keeps a longer note to yourself about a session (why it exists, where it stands). It is not drawn in the list, but `/filter` and `ctrl-f` search it. With no text the switcher puts the current comment in the box to edit; `-c` removes it.
 
