@@ -33,7 +33,7 @@ export interface Finding {
 }
 
 export interface Resource {
-  kind: "extension" | "skill";
+  kind: "extension" | "skill" | "theme";
   /** Path under pi/ (a file for an extension, a directory for a skill). */
   path: string;
   /** What breaks without it. */
@@ -55,6 +55,7 @@ export const RESOURCES: readonly Resource[] = [
   { kind: "extension", path: "extensions/toriel-cache-warn.ts", why: "no warning before a prompt hits an expired prompt cache" },
   { kind: "skill", path: "skills/messaging", why: "agents are not told how to use toriel_message" },
   { kind: "skill", path: "skills/scheduling", why: "agents are not told how to use toriel_schedule_create" },
+  { kind: "theme", path: "themes/solarized-dark.json", why: "the controller reads the theme at startup: without it toriel does not start" },
 ];
 
 /** `--tools` modifiers that add toriel's tools to whatever loadout a session has or restores. */
@@ -71,6 +72,9 @@ export function resourceArgs(opts: { skills?: boolean } = {}, root = PI_RESOURCE
   for (const r of RESOURCES) {
     if (r.kind === "skill" && opts.skills === false) {
       continue;
+    }
+    if (r.kind === "theme") {
+      continue; // read by the controller itself, never loaded into pi
     }
     args.push(r.kind === "extension" ? "-e" : "--skill", join(root, r.path));
   }

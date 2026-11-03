@@ -28,6 +28,8 @@ describe("doctor checks", () => {
       setup({ stale: true }).opts,
       setup({ noPackage: true }).opts,
       setup({ config: {} }).opts,
+      { ...setup({}).opts, env: { WAYLAND_DISPLAY: "wayland-0" }, pathDirs: ["/nonexistent-path"], startup: [] },
+      { ...setup({}).opts, tty: true, env: { TERM: "xterm-256color" }, startup: [] },
     ];
     const seen = new Set<string>();
     for (const opts of scenarios) {
@@ -51,6 +53,33 @@ describe("doctor checks", () => {
     const noCli = runDoctor(setup({ noCli: true }).opts);
     assert.equal(exitCode(noCli), 1);
     assert.match(collectFindings(setup({ noCli: true }).opts)[0]?.message ?? "", /pi's cli\.js is not at .*cli\.js: run npm install/);
+  });
+
+  it("clipboard: only when a display is present, and only when its tool is missing", () => {
+    const { opts } = setup({});
+    const base = path.dirname(opts.agentDir as string);
+    const bin = path.join(base, "bin");
+    const nothing = fs.mkdtempSync(path.join(base, "empty-")); // not /bin: on Fedora it is a symlink to /usr/bin, which may hold the tools
+    for (const tool of ["wl-paste", "wl-copy", "xclip"]) {
+      fs.writeFileSync(path.join(bin, tool), "#!/bin/sh\n", { mode: 0o755 });
+    }
+    const finding = (env: NodeJS.ProcessEnv, pathDirs: readonly string[] = [env.PATH ?? ""]) => collectFindings({ ...opts, env, startup: [], pathDirs }).filter((f) => f.id === "clipboard");
+    assert.deepEqual(finding({}), [], "no display, no clipboard finding");
+    assert.equal(finding({ WAYLAND_DISPLAY: "wayland-0" }, [nothing]).length, 1, "wayland without wl-clipboard");
+    assert.match(finding({ WAYLAND_DISPLAY: "wayland-0" }, [nothing])[0]?.message ?? "", /wl-clipboard/);
+    assert.deepEqual(finding({ WAYLAND_DISPLAY: "wayland-0" }, [bin]), [], "wl-paste and wl-copy present");
+    assert.equal(finding({ DISPLAY: ":0" }, [nothing]).length, 1, "x11 without xclip");
+    assert.match(finding({ DISPLAY: ":0" }, [nothing])[0]?.message ?? "", /xclip/);
+    assert.deepEqual(finding({ DISPLAY: ":0" }, [bin]), [], "xclip present");
+  });
+
+  it("truecolor: only for a real terminal without a truecolor signal", () => {
+    const finding = (env: NodeJS.ProcessEnv, tty?: boolean) => collectFindings({ ...setup({}).opts, tty, env, startup: [] }).filter((f) => f.id === "truecolor");
+    assert.deepEqual(finding({ TERM: "xterm-256color" }), [], "not a real terminal: skipped");
+    assert.equal(finding({ TERM: "xterm-256color" }, true).length, 1);
+    assert.match(finding({ TERM: "xterm-256color" }, true)[0]?.message ?? "", /truecolor/);
+    assert.deepEqual(finding({ COLORTERM: "truecolor", TERM: "xterm-256color" }, true), [], "COLORTERM says truecolor");
+    assert.deepEqual(finding({ TERM: "xterm-kitty" }, true), [], "a known truecolor terminal by name");
   });
 
   it("skips the checks that need the permission package when it is not there, and says so", () => {
@@ -86,7 +115,7 @@ describe("doctor report", () => {
     assert.match(text, /Required: all 5 ok/);
     assert.match(text, /Recommended: all 2 ok/);
     assert.doesNotMatch(text, / ok {7}/);
-    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(1 ok\)/);
+    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(3 ok\)/);
   });
 });
 
@@ -115,7 +144,7 @@ describe("doctor report colours", () => {
   it("colours the compact report too, with the passing checks' count dim", () => {
     const coloured = renderDoctor(checks(), { compact: true, style: ANSI_STYLE });
     assert.match(coloured, /Required\x1b\[22m: \x1b\[32mall 5 ok\x1b\[39m/);
-    assert.match(coloured, /\x1b\[2m {2}\(1 ok\)\x1b\[22m/);
+    assert.match(coloured, /\x1b\[2m {2}\(3 ok\)\x1b\[22m/);
   });
 });
 

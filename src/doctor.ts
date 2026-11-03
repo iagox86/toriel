@@ -37,6 +37,8 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: "permission-package", level: "recommended", title: "pi-permission-system is installed and has a usable config" },
   { id: "grants-chain", level: "feature", title: 'permission grants are switched on ("toriel-grants" in authorizerChain)', needsPermissionPackage: true },
   { id: "sleep-lock", level: "feature", title: "the machine is kept awake for scheduled runs (systemd-inhibit)" },
+  { id: "clipboard", level: "feature", title: "clipboard tools for paste and copy (wl-clipboard on Wayland, xclip on X11)" },
+  { id: "truecolor", level: "feature", title: "the terminal shows toriel's theme as intended (truecolor)" },
   { id: "grants-path-rule", level: "hardening", title: "an agent cannot edit the permission grants file unasked (a path rule)", needsPermissionPackage: true },
 ];
 
@@ -61,6 +63,8 @@ export interface DoctorOptions extends AuditOptions {
   pathDirs?: readonly string[];
   /** Start-up problems already known, instead of running the preflight checks (the running daemon and controller pass []). */
   startup?: readonly string[];
+  /** Whether the report goes to a real terminal; the terminal checks only run then (the CLI passes stdout.isTTY). */
+  tty?: boolean;
 }
 
 function onPath(name: string, dirs: readonly string[]): boolean {
@@ -93,6 +97,18 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
   const dirs = opts.pathDirs ?? (env.PATH ?? "").split(delimiter).filter(Boolean);
   if ((opts.platform ?? process.platform) === "linux" && loaded.settings.preventSleep !== false && !onPath("systemd-inhibit", dirs)) {
     out.push({ id: "sleep-lock", level: "feature", message: 'systemd-inhibit is not on PATH, so the machine can sleep through a scheduled run (install systemd, or set "preventSleep": false in the toriel settings to stop asking)' });
+  }
+  const display = env.WAYLAND_DISPLAY ? "wayland" : env.DISPLAY ? "x11" : undefined;
+  if (display === "wayland" && !(onPath("wl-paste", dirs) && onPath("wl-copy", dirs))) {
+    out.push({ id: "clipboard", level: "feature", message: "wl-clipboard is not on PATH, so paste and /btw's copy have no clipboard (install wl-clipboard; copying may still work through the terminal)" });
+  } else if (display === "x11" && !onPath("xclip", dirs)) {
+    out.push({ id: "clipboard", level: "feature", message: "xclip is not on PATH, so paste and /btw's copy have no clipboard (install xclip; copying may still work through the terminal)" });
+  }
+  if (opts.tty === true) {
+    const term = `${env.COLORTERM ?? ""} ${env.TERM ?? ""}`;
+    if (!/truecolor|24bit/i.test(term) && !/kitty|ghostty|wezterm|contour|foot/i.test(term)) {
+      out.push({ id: "truecolor", level: "feature", message: "the terminal does not advertise truecolor (COLORTERM/TERM), so toriel's theme colors are approximated; a terminal with truecolor support shows them as intended" });
+    }
   }
   return out;
 }

@@ -46,7 +46,7 @@ up or a `settings.json` pi cannot read, files missing from the checkout, old
 toriel links in `~/.pi/agent`. `toriel doctor` (or `/doctor` inside toriel) prints
 the whole checklist, graded: what toriel cannot work without, what is
 recommended (the permission package and its config), optional features
-(permission grants, the sleep lock) and hardening, each with its fix;
+(permission grants, the sleep lock, clipboard tools, a truecolor terminal) and hardening, each with its fix;
 `toriel doctor --fix` applies the safe ones (edits to the permission package's
 `config.json`, after showing a diff, keeping a backup). The notice line only
 shows what matters most and counts the rest.

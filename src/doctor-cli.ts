@@ -22,6 +22,8 @@ export interface DoctorIo {
   interactive: boolean;
   /** Colour the report (stdout is a terminal and NO_COLOR is unset). */
   color?: boolean;
+  /** The report goes to a real terminal: the terminal checks (truecolor) run. */
+  tty?: boolean;
 }
 
 /** Whether the command line should colour: only for a person at a terminal, and never when NO_COLOR is set (no-color.org). */
@@ -35,6 +37,7 @@ export function realIo(): DoctorIo {
     write: (text) => void process.stdout.write(text),
     interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY),
     color: wantsColor(process.env, Boolean(process.stdout.isTTY)),
+    tty: Boolean(process.stdout.isTTY),
     confirm: async (question) => {
       const rl = createInterface({ input: process.stdin, output: process.stdout });
       try {
@@ -64,7 +67,7 @@ export async function doctorMain(args: readonly string[], io: DoctorIo, opts: Do
     return 1;
   }
   const doctor = await import("./doctor.ts");
-  const options = { ...opts, startup: [] };
+  const options = { ...opts, startup: [], tty: io.tty === true };
   const checks = doctor.runDoctor(options);
   const style = io.color ? doctor.ANSI_STYLE : undefined;
   io.write(`${doctor.renderDoctor(checks, { style })}\n`);
