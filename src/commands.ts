@@ -7,6 +7,7 @@
 // a handler, so adding one is: an entry here, plus a function there.
 // A session command that talks to a running pi child must also wake a sleeping
 // session first (`liveMeta()` in session-commands.ts; see AGENTS.md).
+import { dirCompletions } from "./dir-completion.ts";
 import type { Command } from "commander";
 import type { CommandSpec } from "./cli.ts";
 import { agentCompletions } from "./agents-completion.ts";
@@ -75,11 +76,11 @@ export const SWITCHER_COMMANDS = [
   {
     name: "new",
     description: "start a new session",
-    help: "Starts an empty session and opens it. It runs in the directory toriel was started from unless -C says otherwise.\n\nExamples:\n  /new\n  /new -n \"Mealie import\" -C ~/projects/mealie\n  /new -a explore          (a read-only agent profile; see /agents)",
+    help: "Starts an empty session and opens it. It runs in the directory toriel was started from (or the one /cd set) unless -C says otherwise.\n\nExamples:\n  /new\n  /new -n \"Mealie import\" -C ~/projects/mealie\n  /new -a explore          (a read-only agent profile; see /agents)",
     build: (cmd) => {
       cmd
         .option("-n, --name <name>", "name for the new session")
-        .option("-C, --cwd <dir>", "working directory for the new session (default: where toriel was started)")
+        .option("-C, --cwd <dir>", "working directory for the new session (default: where toriel was started, or the /cd directory)")
         .option("-a, --agent <name>", "start it as an agent profile (see /agents; tab completes the name after -a)");
     },
     // flags are not completed in general; this one value is worth it
@@ -118,6 +119,15 @@ export const SWITCHER_COMMANDS = [
     help: "Moves the session file to toriel's trash; /restore brings it back. Without -y you press ctrl-x (or enter the command) a second time to confirm. A running session is stopped first. Sessions nested under it stay.",
     build: (cmd) => {
       cmd.option("-y, --yes", "skip the confirmation");
+    },
+  },
+  {
+    name: "cd",
+    description: "change the directory new sessions start in",
+    help: "With no argument shows the directory /new, /init and a typed message start sessions in. With one, sets it for as long as this toriel window is open (a session started with -C ignores it). It does not touch any existing session: open one and use /cd there to move that session.\n\nExamples:\n  /cd\n  /cd ~/projects/mealie",
+    complete: (typed) => dirCompletions(typed),
+    build: (cmd) => {
+      cmd.argument("[dir...]", "directory (relative to the current default; ~ is your home)");
     },
   },
   { name: "rename", needsSession: true, description: "rename the highlighted session",
@@ -338,6 +348,15 @@ export const SESSION_COMMANDS = [
     help: "Shows the session's name and id when called with no name; with a name it renames the session (kept unique: a taken name gets ' #2').\n\nExample: /name Mealie import", build: nameArgument("show the current name") },
   { name: "rename", description: "rename this session (same as /name)",
     help: "Same as /name: renames this session (kept unique: a taken name gets ' #2'); with no name it shows the current name and id.", build: nameArgument("show the current name") },
+  {
+    name: "cd",
+    description: "move this session to another directory",
+    help: "With no argument shows the session's directory. With one, moves the session there: pi is restarted on the same conversation in the new directory, so tools, !commands, relative paths and project files (AGENTS.md, skills, settings) all come from it from the next message on. The conversation so far is kept as it is, and the agent is not told; say so in your next message if it matters. Refused while the agent is working (abort it first), and for a session with no messages yet (start it in the right place with /new -C instead).\n\nExamples:\n  /cd\n  /cd ~/projects/mealie\n  /cd ../other-repo",
+    complete: (typed) => dirCompletions(typed),
+    build: (cmd) => {
+      cmd.argument("[dir...]", "directory (relative to the session's current one; ~ is your home)");
+    },
+  },
   { name: "reload", description: "restart pi on this session to pick up new extensions and settings",
     help: "Restarts pi on this session's file so new extensions, skills, prompt templates and settings are read. Refused while the agent is working (abort it first). A sleeping session is simply started (which loads everything fresh)." },
   {
@@ -373,11 +392,12 @@ export const SESSION_COMMANDS = [
   {
     name: "fork",
     description: "continue in a copy of this session, listed right below it",
-    help: "Makes a copy of this session's file and continues in the copy; the original is untouched. The copy knows it is a fork, but is an ordinary session in the list (not nested). With a prompt the copy starts working on it at once.\n\nExamples:\n  /fork\n  /fork -n \"Try the other approach\" --no-switch\n  /fork -- -v is the flag I meant",
+    help: "Makes a copy of this session's file and continues in the copy; the original is untouched. The copy knows it is a fork, but is an ordinary session in the list (not nested). With a prompt the copy starts working on it at once.\n\nA session that is busy can be forked too: the copy has everything up to the last finished step (a tool call still running is left out), and the original carries on untouched. The copy starts with no permission grants unless you pass --keep-permissions, which copies the ones that are active now (with their expiry times).\n\nExamples:\n  /fork\n  /fork --keep-permissions\n  /fork -n \"Try the other approach\" --no-switch\n  /fork -- -v is the flag I meant",
     build: (cmd) => {
       cmd
         .option("-n, --name <name>", "name for the copy (default: a fork mark plus this session's name)")
         .option("--no-switch", "stay in this session instead of entering the copy")
+        .option("--keep-permissions", "give the copy this session's active permission grants")
         .argument("[prompt...]", "first message for the copy; put -- before one that starts with -");
     },
   },

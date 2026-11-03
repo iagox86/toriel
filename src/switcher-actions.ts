@@ -52,15 +52,26 @@ export function isF2(data: string): boolean {
 /** What runs a switcher /command: its parsed call and the highlighted session, if any. */
 type CommandHandler = (call: Invocation, target: SwitcherSession | undefined) => Promise<void>;
 
+const NORMAL_HINT = "type / for commands, or a message to start a session - enter open - ctrl-n new - ctrl-k stop - ctrl-x delete - ctrl-r rename - ctrl-g group - ctrl-f filter";
+
+/** How long a first ctrl-x stays a pending confirm. */
+export const CONFIRM_MS = 1000;
+
 export class SwitcherActions {
   groups: GroupsFile = { groups: [], assignments: {} };
   isOpen = false;
+  /** Where a new session starts when nothing says otherwise: where toriel was started, or the last /cd. */
+  defaultCwd = process.cwd();
 
   /** The temporary list filter (/filter, ctrl-f). */
   readonly filter: SwitcherFilter;
 
   private lastRefused: string | null = null;
-  private armedDelete: string | null = null;
+  /** The row a first ctrl-x is waiting to confirm, and when it was pressed. */
+  private armedDelete: { key: string; at: number } | null = null;
+  private disarmTimer: NodeJS.Timeout | undefined;
+  /** The confirm hint is only taken down again if nothing has replaced it since. */
+  private armHint = "";
   /** Session key order captured when the switcher opened; frozen while open. */
   private switchOrder: string[] | null = null;
 
@@ -84,14 +95,14 @@ export class SwitcherActions {
     this.groups = loadGroups();
     this.filter.reset();
     this.switchOrder = null;
-    this.armedDelete = null;
+    this.disarm(false);
     this.lastRefused = null;
     this.h.session.resetArmed();
     // Land on the session we were just in, else the first session.
     this.h.switcher.selectedKey = this.h.viewing;
     this.refresh();
     this.h.switcher.height = this.h.tui.terminal.rows || 24;
-    this.h.switcher.hint = "type / for commands, or a message to start a session - enter open - ctrl-n new - ctrl-k stop - ctrl-x delete - ctrl-r rename - ctrl-g group - ctrl-f filter";
+    this.h.switcher.hint = NORMAL_HINT;
     this.h.switcher.heightProvider = () => Math.max(6, (this.h.tui.terminal.rows || 24) - 4);
     this.isOpen = true;
     this.h.tui.setLayoutRoot(this.h.switcherLayout);
@@ -103,6 +114,7 @@ export class SwitcherActions {
 
   close(): void {
     this.isOpen = false;
+    this.disarm(false);
     this.filter.reset();
     this.h.tui.setLayoutRoot(this.h.chatLayout);
     this.h.rebuildChat();
@@ -189,7 +201,7 @@ export class SwitcherActions {
   }
 
   /** Spawn a session; `firstMessage` is prompted once it is entered. */
-  async newSession(firstMessage?: string, name?: string, cwd = process.cwd(), agent?: string): Promise<void> {
+  async newSession(firstMessage?: string, name?: string, cwd = this.defaultCwd, agent?: string): Promise<void> {
     try {
       const data = (await this.h.request({ type: "spawn", cwd, name: name ? this.h.uniqueSessionName(name) : name, agent })) as { sessionId?: number };
       if (typeof data?.sessionId === "number") {
@@ -233,19 +245,44 @@ export class SwitcherActions {
     this.h.tui.requestRender();
   }
 
+  /** A first ctrl-x on `key`: show `hint` and wait CONFIRM_MS for the second. */
+  private arm(key: string, hint: string): void {
+    this.disarm(false);
+    this.armedDelete = { key, at: Date.now() };
+    this.armHint = hint;
+    this.h.switcher.hint = hint;
+    this.disarmTimer = setTimeout(() => this.disarm(true), CONFIRM_MS);
+    this.disarmTimer.unref();
+    this.h.tui.requestRender();
+  }
+
+  /** Whether `key` has a confirm that is still within its window (checked here too, so a late timer cannot matter). */
+  private isArmed(key: string): boolean {
+    return this.armedDelete?.key === key && Date.now() - this.armedDelete.at < CONFIRM_MS;
+  }
+
+  /** Drop a pending confirm; `redraw` takes its hint down as well (unless something else has replaced it). */
+  private disarm(redraw: boolean): void {
+    clearTimeout(this.disarmTimer);
+    this.disarmTimer = undefined;
+    if (this.armedDelete && redraw && this.h.switcher.hint === this.armHint) {
+      this.h.switcher.hint = NORMAL_HINT;
+      this.h.tui.requestRender();
+    }
+    this.armedDelete = null;
+  }
+
   /** Move to trash, with a press-twice confirm; a live child is stopped first (by the daemon). */
   async remove(s: SwitcherSession, confirmed = false): Promise<void> {
     try {
-      if (!confirmed && this.armedDelete !== s.key) {
-        this.armedDelete = s.key;
+      if (!confirmed && !this.isArmed(s.key)) {
         const live = isLiveState(s.state);
         const kids = s.descendants ?? 0;
         const orphans = kids > 0 ? ` (its ${kids} ${kids === 1 ? "child stays" : "children stay"}, listed on their own)` : "";
-        this.h.switcher.hint = `${s.name}: press ctrl-x again to ${live ? "stop it and " : ""}move to trash${orphans}`;
-        this.h.tui.requestRender();
+        this.arm(s.key, `${s.name}: press ctrl-x again to ${live ? "stop it and " : ""}move to trash${orphans}`);
         return;
       }
-      this.armedDelete = null;
+      this.disarm(false);
       // keep the cursor where it is: select the next entry (or the
       // previous one at the end) before the row disappears
       this.h.switcher.selectNextAfter(s.key);
@@ -258,6 +295,21 @@ export class SwitcherActions {
       this.h.switcher.hint = `delete failed: ${errText(err)}`;
     }
     this.h.tui.requestRender();
+  }
+
+  /** /cd in the list: show or change the directory new sessions start in. */
+  private cd(arg: string): void {
+    if (!arg.trim()) {
+      this.h.switcher.hint = `new sessions start in ${this.defaultCwd} (/cd <dir> changes it)`;
+      return;
+    }
+    const cwd = path.resolve(this.defaultCwd, arg.trim().replace(/^~(?=$|\/)/, os.homedir()));
+    if (!(fs.existsSync(cwd) && fs.statSync(cwd).isDirectory())) {
+      this.h.switcher.alert(`cd: ${cwd} is not a directory`);
+      return;
+    }
+    this.defaultCwd = cwd;
+    this.h.switcher.hint = `new sessions now start in ${cwd}`;
   }
 
   /** Start the unattended summary pass (while toriel is open). */
@@ -303,13 +355,11 @@ export class SwitcherActions {
     const armKey = `group:${title}`;
     const deletable = title !== "(ungrouped)" && !this.h.switcher.sessions.some((s) => s.group === title);
     // a group that cannot be deleted just gets the explanation; an empty one needs a second ctrl-x
-    if (deletable && this.armedDelete !== armKey) {
-      this.armedDelete = armKey;
-      this.h.switcher.hint = `${title}: press ctrl-x again to delete this group`;
-      this.h.tui.requestRender();
+    if (deletable && !this.isArmed(armKey)) {
+      this.arm(armKey, `${title}: press ctrl-x again to delete this group`);
       return;
     }
-    this.armedDelete = null;
+    this.disarm(false);
     this.applyGroupChange(deleteEmptyGroup(this.groups, this.h.switcher.sessions, title));
   }
 
@@ -341,7 +391,7 @@ export class SwitcherActions {
     if (dir === undefined) {
       return {};
     }
-    const cwd = path.resolve(dir.replace(/^~(?=$|\/)/, os.homedir()));
+    const cwd = path.resolve(this.defaultCwd, dir.replace(/^~(?=$|\/)/, os.homedir()));
     if (!(fs.existsSync(cwd) && fs.statSync(cwd).isDirectory())) {
       this.h.switcher.alert(`${verb}: ${cwd} is not a directory`);
       return undefined;
@@ -384,7 +434,7 @@ export class SwitcherActions {
       init: async (call) => {
         const dir = this.startDir("init", call);
         if (dir) {
-          await this.newSession(INIT_PROMPT, (call.opts.name as string | undefined) ?? `init ${path.basename(dir.cwd ?? process.cwd())}`, dir.cwd);
+          await this.newSession(INIT_PROMPT, (call.opts.name as string | undefined) ?? `init ${path.basename(dir.cwd ?? this.defaultCwd)}`, dir.cwd);
         }
       },
       stop: needsTarget("stop", (t) => this.stop(t)),
@@ -531,7 +581,7 @@ export class SwitcherActions {
   }
 
   /** The rest: help, listings, feedback, leaving, stopping the daemon. */
-  private miscCommands(): Pick<Record<SwitcherCommandName, CommandHandler>, "agents" | "feedback" | "mouse" | "help" | "exit" | "quit" | "kill-daemon" | "schedules" | "cancel" | "pause" | "resume" | "permissions" | "doctor"> {
+  private miscCommands(): Pick<Record<SwitcherCommandName, CommandHandler>, "agents" | "feedback" | "mouse" | "help" | "exit" | "quit" | "kill-daemon" | "schedules" | "cancel" | "pause" | "resume" | "permissions" | "doctor" | "cd"> {
     const leave = async () => {
       this.h.dispose();
     };
@@ -548,6 +598,7 @@ export class SwitcherActions {
       permissions: async (call) => runPermissions(this.h, call, undefined),
       doctor: async (call) => runDoctorCommand(this.h, call),
       mouse: async (call) => this.h.setMouse(call.args[0] ?? ""),
+      cd: async (call) => this.cd(call.args.join(" ")),
       help: async () => {
         this.h.infoPanel.show(listing(SWITCHER_COMMANDS));
       },
@@ -561,6 +612,10 @@ export class SwitcherActions {
   }
 
   keys(data: string): boolean {
+    // any key but the confirming ctrl-x cancels a pending delete
+    if (this.armedDelete && !matchesKey(data, Key.ctrl("x"))) {
+      this.disarm(true);
+    }
     if (this.filter.live && this.filter.liveKeys(data)) {
       return true;
     }

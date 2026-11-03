@@ -198,6 +198,27 @@ export class GrantStore {
     return grant;
   }
 
+  /**
+   * Give `to` its own copy of what `from` is allowed right now (a /fork copy has a new session id and would
+   * otherwise ask for everything again). Saved-but-not-restored grants stay behind, expiry times are kept
+   * as they are, and a copy that would pass the per-session limit stops there. Returns the copies.
+   */
+  copySession(from: string, to: string): Grant[] {
+    const copies: Grant[] = [];
+    for (const g of this.active(from)) {
+      if (this.list(to).length >= this.limits.perSession) {
+        break;
+      }
+      const copy: Grant = { ...g, id: this.nextId++, session: to, createdAt: this.now() };
+      this.grants.set(copy.id, copy);
+      copies.push(copy);
+    }
+    if (copies.length > 0) {
+      this.save();
+    }
+    return copies;
+  }
+
   revoke(id: number): Grant | undefined {
     const g = this.grants.get(id);
     if (!g) {

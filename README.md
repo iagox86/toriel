@@ -99,7 +99,7 @@ Type `/` for commands; tab completes them and their arguments, `/help` lists the
 
 - Switcher: `/new [-a agent]`, `/init`, `/agents`, `/permissions` (every session's permission grants), `/doctor`, `/detach`, `/stop`, `/delete`, `/rename`, `/group`, `/ungroup`, `/park`,
   `/filter`, `/comment`, `/summarize`, `/restore`, `/adopt`, `/feedback`, `/kill-daemon`, `/help`, `/exit`
-- In a session: `/help`, `/in`, `/at`, `/every`, `/loop`, `/cron` (timed prompts; `/schedules` lists them), `/permissions` (list, add and revoke "allow for 1 hour" grants), `/doctor`, `/btw`, `/comment`, `/model`, `/think`, `/compact`, `/clear`, `/fork`, `/park`, `/rename`, `/reload`,
+- In a session: `/help`, `/in`, `/at`, `/every`, `/loop`, `/cron` (timed prompts; `/schedules` lists them), `/permissions` (list, add and revoke "allow for 1 hour" grants), `/doctor`, `/btw`, `/comment`, `/model`, `/think`, `/compact`, `/clear`, `/fork`, `/cd`, `/park`, `/rename`, `/reload`,
   `/mcp` (`list`, `status`, `explore`, `add`, `remove`, `reconnect`, `login`, `logout`), `/init`, `/why`, `/abort`, `/background`,
   `/feedback`, `/parent` (jump to the agent that started this subagent), `/detach` (cut that link), `/quit` (back to the switcher), `/exit`
 

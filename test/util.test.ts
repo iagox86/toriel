@@ -71,31 +71,32 @@ describe("rotateLog", () => {
 });
 
 describe("moveFile", () => {
-  const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "toriel-move-"));
+  const exdev = (): never => {
+    throw Object.assign(new Error("EXDEV: cross-device link not permitted"), { code: "EXDEV" });
+  };
 
-  it("moves a file with a plain rename", () => {
-    const dir = tmp();
-    fs.writeFileSync(path.join(dir, "a"), "x");
+  it("moves a file with a plain rename on one filesystem", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-move-"));
+    fs.writeFileSync(path.join(dir, "a"), "hello");
     moveFile(path.join(dir, "a"), path.join(dir, "b"));
-    assert.equal(fs.readFileSync(path.join(dir, "b"), "utf8"), "x");
+    assert.equal(fs.readFileSync(path.join(dir, "b"), "utf8"), "hello");
     assert.equal(fs.existsSync(path.join(dir, "a")), false);
   });
 
-  it("copies and deletes when the rename crosses filesystems (EXDEV)", () => {
-    const dir = tmp();
-    fs.writeFileSync(path.join(dir, "a"), "session");
-    const exdev = () => {
-      throw Object.assign(new Error("EXDEV: cross-device link not permitted"), { code: "EXDEV" });
-    };
+  it("copies and removes the original when the rename crosses filesystems", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-move-"));
+    fs.writeFileSync(path.join(dir, "a"), "hello");
     moveFile(path.join(dir, "a"), path.join(dir, "b"), exdev);
-    assert.equal(fs.readFileSync(path.join(dir, "b"), "utf8"), "session");
-    assert.equal(fs.existsSync(path.join(dir, "a")), false);
+    assert.equal(fs.readFileSync(path.join(dir, "b"), "utf8"), "hello");
+    assert.deepEqual(fs.readdirSync(dir), ["b"]);
   });
 
-  it("does not hide any other failure", () => {
-    const denied = () => {
+  it("passes any other error through and leaves the file where it was", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-move-"));
+    fs.writeFileSync(path.join(dir, "a"), "hello");
+    assert.throws(() => moveFile(path.join(dir, "a"), path.join(dir, "b"), () => {
       throw Object.assign(new Error("EACCES"), { code: "EACCES" });
-    };
-    assert.throws(() => moveFile("/nonexistent-a", "/nonexistent-b", denied), /EACCES/);
+    }), /EACCES/);
+    assert.equal(fs.existsSync(path.join(dir, "a")), true);
   });
 });

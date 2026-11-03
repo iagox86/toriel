@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Component } from "@earendil-works/pi-tui";
-import { renderLayoutFrame } from "@earendil-works/pi-tui/dist/layout.js";
+import { getScrollViewsAt, renderLayoutFrame } from "@earendil-works/pi-tui/dist/layout.js";
 import { InfoPanel, wrapHanging } from "../src/info-panel.ts";
 import { buildLayouts } from "../src/layout.ts";
 
@@ -40,6 +40,10 @@ describe("info panel taller than the screen", () => {
 
   /** The chat layout at 60x16 with `panel` docked in it, as the screen would draw it. */
   function screen(panel: InfoPanel, height = 16): string[] {
+    return frame(panel, height).lines.map(strip);
+  }
+
+  function frame(panel: InfoPanel, height = 16): ReturnType<typeof renderLayoutFrame> {
     const { chat } = buildLayouts({
       editor: text("EDITOR"),
       statusLine: text("STATUS"),
@@ -56,7 +60,7 @@ describe("info panel taller than the screen", () => {
     });
     // first frame lets the scroll view learn its height; the second is what the user sees
     renderLayoutFrame(chat, 60, height, () => {});
-    return renderLayoutFrame(chat, 60, height, () => {}).lines.map(strip);
+    return renderLayoutFrame(chat, 60, height, () => {});
   }
 
   it("fits the screen, keeping the editor, the footer and the first lines visible", () => {
@@ -88,6 +92,20 @@ describe("info panel taller than the screen", () => {
     assert.doesNotMatch(end, /more below/);
     assert.equal(panel.scrollKey("\x1b[H"), true, "home");
     assert.match(screen(panel).join("\n"), /line 1\b/);
+  });
+
+  it("scrolls under the mouse wheel when the pointer is over it, and not when it is elsewhere", () => {
+    const panel = new InfoPanel();
+    panel.show(numbered(60));
+    const f = frame(panel);
+    const row = f.lines.findIndex((l) => strip(l).includes("line 2"));
+    const over = getScrollViewsAt(f, 5, row);
+    assert.ok(over.length > 0, "a scroll view sits under the panel text");
+    over[0]?.scrollBy(3);
+    const after = screen(panel).join("\n");
+    assert.doesNotMatch(after, /line 1\b/);
+    assert.match(after, /more above and more below/);
+    assert.equal(getScrollViewsAt(f, 5, 0).length, 0, "nothing scrolls over the chat stub");
   });
 
   it("leaves other keys for the caller, which closes the panel on them", () => {

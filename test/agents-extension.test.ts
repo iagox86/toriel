@@ -7,6 +7,9 @@ import { describe, it } from "node:test";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-agentsext-"));
 const sock = path.join(dir, "d.sock");
+// a run from inside a toriel session inherits its spawn rights; these tests set what they need
+delete process.env.TORIEL_CAN_SPAWN;
+delete process.env.TORIEL_AGENT_TYPES;
 process.env.TORIEL_CHILD = "1";
 process.env.TORIEL_SOCK = sock;
 process.env.TORIEL_SESSION_ID = "0b1c2d3e-aaaa-4bbb-8ccc-111111111111";
