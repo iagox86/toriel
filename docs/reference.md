@@ -33,7 +33,7 @@ kill-server then says a new daemon (pid, build, folder) is already running.
 A daemon and a controller can come from different checkouts (a branch under test next to the real
 install, or a daemon left over from before an update). The daemon's first message to every new
 controller is `hello` (`src/shared.ts`): `protocol` (an integer bumped by hand when the message set
-or a message shape changes incompatibly), `build` (`fingerprint`, `label`, `dir`), `pid`, `sock`
+or a message shape changes incompatibly), `build` (`fingerprint`, `label`, `dir`, built by `build-id.ts`), `pid`, `sock`
 and, for an isolated instance, `profile`. `DaemonLink` compares it with its own build on every
 connect, including reconnects, in `compareDaemon` (`version-check.ts`):
 
@@ -366,7 +366,7 @@ Pasting and selecting (Linux; `wl-clipboard` on Wayland, `xclip` on X11):
   click out of the input before pi-tui's mouse handling), `attachments.ts`.
 
 Daemon side:
-- `daemon.ts` - entry point: wires the pieces below together, owns startup, polling and shutdown
+- `daemon.ts` - entry point: wires the pieces below together, owns startup, polling and shutdown (a session whose child does not answer is probed on a backoff - `poll-backoff.ts`)
 - `daemon-session.ts` (session record + registry), `daemon-hub.ts` (connected controllers, fan-out),
   `daemon-children.ts` (starting/stopping pi children, their events), `daemon-meta.ts` (session list per
   controller), `daemon-history.ts` (what a controller shows for a session)
@@ -388,6 +388,9 @@ Daemon side:
 - `trash.ts` - delete-to-trash with manifest; `rewind.ts` - cut a session file back to before a user message (tail to trash)
 - `settings.ts` - toriel settings file, layered with `TORIEL_*` env, re-read at every child spawn
 - `config.ts`, `log.ts` - env-derived paths, daemon log
+- `build-id.ts` (the running code's fingerprint, git label and checkout dir) and `version-check.ts`
+  (compare our build with the daemon's hello: same protocol and code is quiet, same protocol with other
+  code warns, a different protocol blocks everything but list and shutdown)
 - `dialog-route.ts` (whose dialog is on screen: a subagent's shows in its parent's view), `subagents.ts` (limits, records, result wording and the sweep rule for subagents; pure), `daemon-subagents.ts` (starts, watches and stops them; the `agent_spawn` and `agents_op` handlers)
 - `session-header.ts` (a session file's first line holds its working directory, which pi reads on resume: `/cd` rewrites it), `dir-completion.ts` (tab completion of `/cd`'s directory)
 - `fork-snapshot.ts` - what `/fork` copies from a session that is mid-turn
