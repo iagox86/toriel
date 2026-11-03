@@ -25,6 +25,12 @@ describe("shipped resources", () => {
     assert.deepEqual(missingResources(), []);
   });
 
+  it("includes the theme file: the controller reads it at startup and cannot start without it", () => {
+    assert.deepEqual(RESOURCES.filter((r) => r.kind === "theme").map((r) => r.path), ["themes/solarized-dark.json"]);
+    const empty = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-res-"));
+    assert.ok(missingResources(empty).some((r) => r.path === "themes/solarized-dark.json"));
+  });
+
   it("covers every extension file in pi/extensions except presence, which is only for plain pi", () => {
     const shipped = RESOURCES.filter((r) => r.kind === "extension").map((r) => path.basename(r.path));
     const onDisk = fs.readdirSync(path.join(PI_RESOURCES_DIR, "extensions")).filter((n) => n !== "toriel-presence.ts");
@@ -35,9 +41,13 @@ describe("shipped resources", () => {
 describe("resourceArgs", () => {
   it("passes every extension with -e and the skill with --skill, as absolute paths", () => {
     const args = resourceArgs({}, "/r/pi");
-    assert.deepEqual(args.filter((_, i) => i % 2 === 0), RESOURCES.map((r) => (r.kind === "extension" ? "-e" : "--skill")));
+    assert.deepEqual(args.filter((_, i) => i % 2 === 0), RESOURCES.filter((r) => r.kind !== "theme").map((r) => (r.kind === "extension" ? "-e" : "--skill")));
     assert.ok(args.includes("/r/pi/extensions/toriel-agents.ts"));
     assert.ok(args.includes("/r/pi/skills/messaging"));
+  });
+
+  it("never loads the theme into pi (the controller reads it itself)", () => {
+    assert.ok(!resourceArgs().some((a) => a.includes("themes")));
   });
 
   it("leaves the skill out when a profile wants no skills, but keeps the extensions", () => {
