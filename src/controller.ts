@@ -27,6 +27,7 @@ import { uniqueName } from "./session-id.ts";
 import { loadAgents } from "./agents.ts";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { buildInfo } from "./build-id.ts";
+import { explainMcpFailure } from "./mcp.ts";
 import { DIALOG_METHODS, HISTORY_FILE, KEY_LOG, PROFILE } from "./config.ts";
 import { DaemonLink } from "./daemon-link.ts";
 import { buildLayouts } from "./layout.ts";
@@ -477,7 +478,16 @@ class Controller {
         view.dialog = withGrantRows(withOrigin(request, sessionId, this.sessions.get(sessionId)?.sessionName), loadSettings().settings.permissionGrantDurations ?? DEFAULT_GRANT_DURATIONS);
       }
     } else if (request && request.method === "notify") {
-      this.notify(String(request.message ?? "notification"));
+      const message = String(request.message ?? "notification");
+      const explained = explainMcpFailure(message);
+      if (explained) {
+        // a panel, not the one-line flash: the explanation and what to check do not fit on the status line
+        this.infoPanel.show(explained);
+        this.tui.requestRender();
+        this.notify("MCP sign-in failed (details in the panel)");
+      } else {
+        this.notify(message);
+      }
     }
     if (key === this.viewing) {
       this.renderChrome();
@@ -569,7 +579,12 @@ class Controller {
         this.tui.requestRender();
         return true;
       }
-      // any key dismisses command output; esc/enter are only for that
+      // arrows, page keys, home and end scroll text taller than the screen
+      if (this.infoPanel.scrollKey(data)) {
+        this.tui.requestRender();
+        return true;
+      }
+      // any other key dismisses command output; esc/enter are only for that
       this.infoPanel.close();
       this.tui.requestRender();
       if (matchesKey(data, Key.escape) || matchesKey(data, Key.enter)) {

@@ -1,14 +1,18 @@
 // The controller side of /doctor: the setup report in a panel, and with --fix a confirmation
 // before anything is written. Shared by the session and switcher command tables.
 import type { Invocation } from "./cli.ts";
-import { applyFixes, type DoctorOptions, plannedFixes, previewFixes, renderDoctor, runDoctor } from "./doctor.ts";
+import { applyFixes, type DoctorOptions, type DoctorStyle, plannedFixes, previewFixes, renderDoctor, runDoctor } from "./doctor.ts";
 import type { Host } from "./host.ts";
+import { attention, dim, success } from "./theme.ts";
 import { errText } from "./util.ts";
+
+/** The panel's colours come from the controller theme, as the rest of the chrome's do. */
+const PANEL_STYLE: DoctorStyle = { heading: (t) => t, ok: success, problem: attention, skipped: dim, dim };
 
 /** `/doctor [--fix]`. A running controller has passed the start-up checks, so those are not repeated. */
 export function runDoctorCommand(h: Host, call: Invocation, opts: DoctorOptions = {}): void {
   const checks = runDoctor({ ...opts, startup: [] });
-  const report = `${renderDoctor(checks, { compact: true })}\n\n${h.daemonReport()}`;
+  const report = `${renderDoctor(checks, { compact: true, style: PANEL_STYLE })}\n\n${h.daemonReport()}`;
   if (call.opts.fix !== true) {
     h.infoPanel.show(report);
     h.tui.requestRender();

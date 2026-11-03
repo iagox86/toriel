@@ -3,7 +3,30 @@ import { after, describe, it } from "node:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { addMcpServer, mcpCompletions, mcpEntry, mcpListLines, mcpServerConnected, parseMcpStatus, removeMcpServer, skillForServer } from "../src/mcp.ts";
+import { addMcpServer, explainMcpFailure, mcpCompletions, mcpEntry, mcpListLines, mcpServerConnected, parseMcpStatus, removeMcpServer, skillForServer } from "../src/mcp.ts";
+
+describe("explainMcpFailure", () => {
+  it("says a proxy page is probably answering when the sign-in got HTML instead of JSON, and keeps pi's text", () => {
+    const text = `Sign-in failed: Unexpected token '<', "<!DOCTYPE "... is not valid JSON`;
+    const out = explainMcpFailure(text) ?? "";
+    assert.match(out, /answered with a web page where it should have sent JSON/);
+    assert.match(out, /reverse proxy/);
+    assert.match(out, /\.well-known\/oauth/);
+    assert.ok(out.endsWith(`pi's own message: Unexpected token '<', "<!DOCTYPE "... is not valid JSON`));
+  });
+
+  it("recognises an unreachable server and a rejected certificate", () => {
+    assert.match(explainMcpFailure("Sign-in failed: fetch failed") ?? "", /could not be reached/);
+    assert.match(explainMcpFailure("Sign-in failed: connect ECONNREFUSED 127.0.0.1:8080") ?? "", /could not be reached/);
+    assert.match(explainMcpFailure("Sign-in failed: self-signed certificate") ?? "", /certificate was not accepted/);
+  });
+
+  it("leaves other messages, and other sign-in failures, as pi wrote them", () => {
+    assert.equal(explainMcpFailure("Sign-in cancelled."), undefined);
+    assert.equal(explainMcpFailure("Sign-in failed: access_denied"), undefined);
+    assert.equal(explainMcpFailure("reconnected to the toriel daemon"), undefined);
+  });
+});
 
 const STATUS = [
   "mealie: connected, 12 tools (direct)",

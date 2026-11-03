@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { AssistantMessage, CompactionRow, Dimmed, UserMessage } from "../src/components.ts";
+import { AssistantMessage, BashRow, CompactionRow, Dimmed, fillExpandKey, UserMessage } from "../src/components.ts";
 import { mdTheme } from "../src/pi-theme.ts";
 
 const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
@@ -60,6 +60,30 @@ describe("CompactionRow", () => {
     const text = row.render(80).join("\n").replace(/\x1b\[[0-9;]*m/g, "");
     assert.doesNotMatch(text, /fence/);
     assert.match(text, /kept/);
+  });
+});
+
+describe("fillExpandKey", () => {
+  const dimmed = "\x1b[2m";
+  const reset = "\x1b[0m";
+
+  it("fills in the key where pi left it empty, in both of pi's layouts", () => {
+    assert.equal(strip(fillExpandKey(`... 87 more lines (${dimmed}${reset}${dimmed} to expand${reset})`)), "... 87 more lines (ctrl-o to expand)");
+    assert.equal(strip(fillExpandKey(`... (5 more lines, ${dimmed}${reset}${dimmed} to expand${reset})`)), "... (5 more lines, ctrl-o to expand)");
+    assert.equal(fillExpandKey("( to expand)"), "(ctrl-o to expand)");
+  });
+
+  it("leaves a hint that already names a key alone", () => {
+    assert.equal(fillExpandKey("... (5 more lines, ctrl-o to expand)"), "... (5 more lines, ctrl-o to expand)");
+    assert.equal(fillExpandKey(`... (${dimmed}ctrl-o${reset} to expand)`), `... (${dimmed}ctrl-o${reset} to expand)`);
+  });
+
+  it("shows ctrl-o on a long ! command's collapsed row", () => {
+    const row = new BashRow("seq 1 200", { requestRender() {} } as never, false, 1);
+    row.appendOutput(Array.from({ length: 200 }, (_, i) => String(i + 1)).join("\n"));
+    row.setComplete(0, false, undefined, undefined);
+    const text = row.render(80).map(strip).join("\n");
+    assert.match(text, /more lines \(ctrl-o to expand\)/);
   });
 });
 

@@ -3,8 +3,8 @@
 // message/tool components; this module builds and updates them.
 import * as fs from "node:fs";
 import { Text, type TuiAltScreen } from "@earendil-works/pi-tui";
-import { BashExecutionComponent, ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
-import { AssistantMessage, CompactionRow, UserMessage } from "./components.ts";
+import { ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
+import { AssistantMessage, BashRow, CompactionRow, UserMessage } from "./components.ts";
 import { type ActivityState, reduceActivity } from "./activity.ts";
 import { messagesAdded } from "./drift.ts";
 import { repairFences } from "./fence-repair.ts";
@@ -47,7 +47,7 @@ export interface ToolItem extends ItemBase {
 /** A `!command` and its output (pi's own component, collapsed to a preview until expanded). */
 export interface BashItem extends ItemBase {
   kind: "bash";
-  component: BashExecutionComponent;
+  component: BashRow;
 }
 export interface OtherItem extends ItemBase {
   kind: "other";
@@ -430,7 +430,7 @@ function userItem(text: string, tui: TuiAltScreen): UserItem | BashItem {
 
 /** A finished `!command` replayed from the session. */
 function bashItem(m: BashExecutionMessage, tui: TuiAltScreen): BashItem {
-  const component = new BashExecutionComponent(m.command, tui, m.excludeFromContext === true, 1);
+  const component = new BashRow(m.command, tui, m.excludeFromContext === true, 1);
   component.appendOutput(m.output ?? "");
   component.setComplete(m.exitCode, m.cancelled === true, undefined, m.fullOutputPath);
   return { kind: "bash", component };
@@ -493,7 +493,8 @@ export function itemsFromMessages(messages: unknown[], tui: TuiAltScreen, cwd: s
         component.updateResult((binaryReadDisplay(m.toolName, call?.args, result, cwd) ?? result) as never, false);
         const toolCall: ToolCall = { name: m.toolName, args: call?.args, component, failed, done: true };
         const last = lastToolRun(items);
-        if (last) {
+        // a run is dimmed as a whole, so a call joins it only when it is on the same side of the compaction
+        if (last && Boolean(last.dimmed) === Boolean(m.outOfContext)) {
           last.component.calls.push(toolCall);
         } else {
           const run = new ToolRun();

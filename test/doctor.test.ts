@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { applyFixes, CATALOG, collectFindings, type DoctorOptions, exitCode, lineDiff, plannedFixes, previewFixes, renderDoctor, runDoctor } from "../src/doctor.ts";
+import { ANSI_STYLE, applyFixes, CATALOG, collectFindings, type DoctorOptions, exitCode, lineDiff, plannedFixes, previewFixes, renderDoctor, runDoctor } from "../src/doctor.ts";
 import { GRANTS_RULE, setup as setupIn, tempHome } from "./doctor-fixture.ts";
 
 let env: ReturnType<typeof tempHome>;
@@ -87,6 +87,35 @@ describe("doctor report", () => {
     assert.match(text, /Recommended: all 2 ok/);
     assert.doesNotMatch(text, / ok {7}/);
     assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(1 ok\)/);
+  });
+});
+
+describe("doctor report colours", () => {
+  // one setup per test: its temp directory shows in the messages, so two setups would never read the same
+  let found: ReturnType<typeof runDoctor>;
+  beforeEach(() => {
+    found = runDoctor(setup({ config: {} }).opts);
+  });
+  const checks = () => found;
+  const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
+
+  it("adds no escape codes unless asked", () => {
+    assert.doesNotMatch(renderDoctor(checks()), /\x1b/);
+  });
+
+  it("colours ok green, PROBLEM red and the problem count red, and leaves the words the same", () => {
+    const plain = renderDoctor(checks());
+    const coloured = renderDoctor(checks(), { style: ANSI_STYLE });
+    assert.equal(strip(coloured), plain);
+    assert.match(coloured, /\x1b\[32mok {5}\x1b\[39m/);
+    assert.match(coloured, /\x1b\[31mPROBLEM\x1b\[39m/);
+    assert.match(coloured, /\x1b\[31m2 problems\x1b\[39m, 2 fixable/);
+  });
+
+  it("colours the compact report too, with the passing checks' count dim", () => {
+    const coloured = renderDoctor(checks(), { compact: true, style: ANSI_STYLE });
+    assert.match(coloured, /Required\x1b\[22m: \x1b\[32mall 5 ok\x1b\[39m/);
+    assert.match(coloured, /\x1b\[2m {2}\(1 ok\)\x1b\[22m/);
   });
 });
 
