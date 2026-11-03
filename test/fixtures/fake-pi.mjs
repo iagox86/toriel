@@ -32,7 +32,7 @@ let sessionName = flag("--name");
 // let tests see how the daemon launched this child
 mkdirSync(dirname(sessionFile), { recursive: true });
 writeFileSync(`${sessionFile}.argv.json`, JSON.stringify(args));
-writeFileSync(`${sessionFile}.env.json`, JSON.stringify({ TORIEL_SESSION_ID: process.env.TORIEL_SESSION_ID ?? null, TORIEL_SOCK: process.env.TORIEL_SOCK ?? null, TORIEL_CAN_SPAWN: process.env.TORIEL_CAN_SPAWN ?? null, TORIEL_AGENT_TYPES: process.env.TORIEL_AGENT_TYPES ?? null, cwd: process.cwd() }));
+writeFileSync(`${sessionFile}.env.json`, JSON.stringify({ pid: process.pid, TORIEL_SESSION_ID: process.env.TORIEL_SESSION_ID ?? null, TORIEL_SOCK: process.env.TORIEL_SOCK ?? null, TORIEL_CAN_SPAWN: process.env.TORIEL_CAN_SPAWN ?? null, TORIEL_AGENT_TYPES: process.env.TORIEL_AGENT_TYPES ?? null, cwd: process.cwd() }));
 const messages = [];
 
 function loadMessages(file) {
@@ -142,7 +142,7 @@ async function slowRun(texts) {
       { type: "thinking", thinking: "Let me think about that..." },
       { type: "text", text: `echo: ${prompt}` },
     ],
-    usage: { totalTokens: 10, cost: { total: 0.001 } },
+    usage: { input: 6, output: 4, cacheRead: 5000, totalTokens: 5010, cost: { total: 0.001 } },
     stopReason: "stop",
   };
   persist(final);
@@ -184,6 +184,7 @@ async function slowPrompt(first) {
 }
 
 let bashStop;
+let abortSettled = false;
 
 async function handle(cmd) {
   if (!started) {
@@ -262,6 +263,15 @@ async function handle(cmd) {
       return ok(cmd.id, "abort_bash", null);
     case "abort":
       aborted = true;
+      if (process.env.FAKE_PI_ABORT_SETTLES_FIRST === "1") {
+        // like pi: the run settles (with an error message) before the abort call is answered
+        const err = { role: "assistant", content: [], stopReason: "error", errorMessage: "This operation was aborted" };
+        out({ type: "message_start", message: err });
+        out({ type: "message_end", message: err });
+        streaming = false;
+        out({ type: "agent_settled" });
+        abortSettled = true;
+      }
       return ok(cmd.id, "abort", null);
     case "get_commands":
       return ok(cmd.id, "get_commands", {
@@ -298,7 +308,7 @@ async function handle(cmd) {
         out({ type: "message_start", message: custom });
         out({ type: "message_end", message: custom });
         bridgeStatus({ kind: "injected", id: p.id });
-        const assistant = { role: "assistant", content: [{ type: "text", text: `echo: ${p.text}` }], usage: { totalTokens: 10, cost: { total: 0.001 } }, stopReason: "stop" };
+        const assistant = { role: "assistant", content: [{ type: "text", text: `echo: ${p.text}` }], usage: { input: 6, output: 4, cacheRead: 5000, totalTokens: 5010, cost: { total: 0.001 } }, stopReason: "stop" };
         out({ type: "message_start", message: assistant });
         persist(assistant);
         out({ type: "message_end", message: assistant });
@@ -357,24 +367,40 @@ async function handle(cmd) {
       aborted = false;
       const turns = Number(/\[turns (\d+)\]/.exec(cmd.message)?.[1] ?? 1);
       for (let i = 1; i < turns && !aborted; i++) {
-        const step = { role: "assistant", content: [{ type: "text", text: `step ${i}` }], usage: { totalTokens: 10, cost: { total: 0.001 } }, stopReason: "toolUse" };
+        const step = { role: "assistant", content: [{ type: "text", text: `step ${i}` }], usage: { input: 6, output: 4, cacheRead: 5000, totalTokens: 5010, cost: { total: 0.001 } }, stopReason: "toolUse" };
         out({ type: "message_start", message: step });
         persist(step);
         out({ type: "message_end", message: step });
         await sleep(30);
+      }
+      if (cmd.message.includes("[error]")) {
+        // a run that fails on its own (no abort): the provider errors after the tool turns
+        const failed = { role: "assistant", content: [], stopReason: "error", errorMessage: "provider exploded" };
+        out({ type: "message_start", message: failed });
+        out({ type: "message_end", message: failed });
+        streaming = false;
+        out({ type: "agent_settled" });
+        return;
       }
       while (cmd.message.includes("[hang]") && !aborted) {
         await sleep(20);
       }
       if (aborted) {
         streaming = false;
-        out({ type: "agent_settled" });
+        if (!abortSettled) {
+          // an abort by the user ends the run with an "aborted" assistant message
+          const stopped = { role: "assistant", content: [], stopReason: "aborted" };
+          out({ type: "message_start", message: stopped });
+          out({ type: "message_end", message: stopped });
+          out({ type: "agent_settled" });
+        }
+        abortSettled = false;
         return;
       }
       const assistant = {
         role: "assistant",
         content: [{ type: "text", text: `echo: ${cmd.message}${cmd.images?.length ? ` [${cmd.images.length} image(s): ${cmd.images.map((i) => i.mimeType).join(",")}]` : ""}` }],
-        usage: { totalTokens: 10, cost: { total: 0.001 } },
+        usage: { input: 6, output: 4, cacheRead: 5000, totalTokens: 5010, cost: { total: 0.001 } },
         stopReason: "stop",
       };
       out({ type: "message_start", message: assistant });
@@ -401,3 +427,7 @@ process.stdin.on("data", (chunk) => {
   }
 });
 process.on("SIGTERM", () => process.exit(0));
+if (process.env.FAKE_PI_STAY === "1") {
+  // outlive a closed stdin, like a pi that is not told to stop (only SIGTERM ends it)
+  setInterval(() => {}, 1000);
+}

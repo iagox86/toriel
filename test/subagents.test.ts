@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { AgentProfile } from "../src/agents.ts";
 import { subagentDepth } from "../src/lineage.ts";
-import { childBudget, DEFAULT_SUBAGENT_LIMITS, describeRecord, expiredSubagents, keepMsFrom, type SweepCandidate, limitBreach, parseHandle, refuseSpawn, resultText, SubagentBook } from "../src/subagents.ts";
+import { abnormalEnd, mayDelegate, childBudget, lastAssistantText, messageTokens, DEFAULT_SUBAGENT_LIMITS, describeRecord, expiredSubagents, keepMsFrom, type SweepCandidate, limitBreach, parseHandle, refuseSpawn, resultText, SubagentBook } from "../src/subagents.ts";
 
 const L = DEFAULT_SUBAGENT_LIMITS;
 const profile = (over: Partial<AgentProfile> = {}): AgentProfile => ({ name: "explore", description: "d", prompt: "", canSpawn: false, minimal: true, extensions: true, source: "built-in", file: "x", ...over });
@@ -67,7 +67,7 @@ describe("records", () => {
     assert.equal(a.handle, 1);
     assert.equal(book.bySession(7), a);
     assert.equal(book.byChild("c1"), a);
-    assert.match(describeRecord(a, a.startedAt + 3000), /^#1 explore: look \[running, 0 turn\(s\), 3s\]/);
+    assert.match(describeRecord(a, a.startedAt + 3000), /^#1 explore: look \[running, 0 turn\(s\), 0\/1000 tokens, 3s\]/);
   });
 
   it("words a result by how the subagent ended", () => {
@@ -126,5 +126,57 @@ describe("expiredSubagents", () => {
 describe("keepMsFrom", () => {
   it("reads a non-negative number of ms (0 included) and falls back to 30 minutes for anything else", () => {
     assert.deepEqual(["1500", "0", "-5", "abc", "", undefined].map(keepMsFrom), [1500, 0, 1_800_000, 1_800_000, 1_800_000, 1_800_000]);
+  });
+});
+
+describe("messageTokens", () => {
+  it("counts fresh input, output and cache writes but not the context a turn re-reads from the cache", () => {
+    assert.equal(messageTokens({ input: 1229, output: 40, cacheWrite: 0 }), 1269);
+    assert.equal(messageTokens({ input: 10, output: 5, cacheWrite: 100 }), 115);
+    assert.equal(messageTokens(undefined), 0);
+  });
+});
+
+describe("abnormalEnd", () => {
+  it("calls a settle on an abort stopped and one on an error failed, with the reason", () => {
+    assert.deepEqual(abnormalEnd("aborted", undefined), { state: "stopped", note: "was interrupted (aborted) before it finished" });
+    assert.deepEqual(abnormalEnd("error", "rate limited"), { state: "failed", note: "ended with an error: rate limited" });
+    assert.equal(abnormalEnd("error", undefined)?.note, "ended with an error");
+  });
+
+  it("leaves a normal finish alone", () => {
+    assert.equal(abnormalEnd("stop", undefined), undefined);
+    assert.equal(abnormalEnd("length", undefined), undefined);
+  });
+
+  it("does not take a run that settled without a final answer for done", () => {
+    assert.equal(abnormalEnd("toolUse", undefined)?.state, "failed");
+    assert.match(abnormalEnd("toolUse", undefined)?.note ?? "", /tool call, with no final answer/);
+    assert.equal(abnormalEnd(undefined, undefined)?.state, "failed");
+    assert.match(abnormalEnd(undefined, undefined)?.note ?? "", /without producing an answer/);
+  });
+});
+
+describe("lastAssistantText", () => {
+  it("finds the newest assistant text, skipping empty error messages and other roles", () => {
+    const messages = [
+      { role: "assistant", content: [{ type: "text", text: "first" }] },
+      { role: "assistant", content: [{ type: "thinking", thinking: "hm" }, { type: "text", text: "the review so far" }] },
+      { role: "toolResult", content: [{ type: "text", text: "Operation aborted" }] },
+      { role: "assistant", content: [] },
+    ];
+    assert.equal(lastAssistantText(messages), "the review so far");
+    assert.equal(lastAssistantText([{ role: "assistant", content: [] }]), undefined);
+  });
+});
+
+describe("mayDelegate", () => {
+  it("follows the limits it is given: sessions below maxDepth whose profile allows spawning", () => {
+    assert.equal(mayDelegate(undefined, 0, L), true);
+    assert.equal(mayDelegate(undefined, 1, L), false);
+    assert.equal(mayDelegate(undefined, 1, { ...L, maxDepth: 2 }), true);
+    assert.equal(mayDelegate(undefined, 2, { ...L, maxDepth: 9 }), false, "the hard cap holds");
+    assert.equal(mayDelegate(profile(), 0, L), false, "a profile without canSpawn");
+    assert.equal(mayDelegate(profile({ canSpawn: true }), 0, L), true);
   });
 });

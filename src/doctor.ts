@@ -10,6 +10,7 @@
 // carries an id the catalog does not list.
 import { accessSync, constants, copyFileSync, existsSync, readFileSync, statSync } from "node:fs";
 import { delimiter, join } from "node:path";
+import { mcpWarnings, mergeMcpServers, loadAgents } from "./agents.ts";
 import { piAgentDir } from "./pi-dir.ts";
 import { startupProblems } from "./preflight.ts";
 import { type AuditOptions, auditFindings, type Finding, type Fix, type Level, PI_RESOURCES_DIR } from "./resources.ts";
@@ -36,6 +37,7 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: "settings", level: "recommended", title: "the toriel settings file is valid" },
   { id: "permission-package", level: "recommended", title: "pi-permission-system is installed and has a usable config" },
   { id: "grants-chain", level: "feature", title: 'permission grants are switched on ("toriel-grants" in authorizerChain)', needsPermissionPackage: true },
+  { id: "mcp-git-direct", level: "feature", title: 'the git MCP server is configured with "exposure": "direct" (the code-review and git-archaeology agents need it)' },
   { id: "sleep-lock", level: "feature", title: "the machine is kept awake for scheduled runs (systemd-inhibit)" },
   { id: "clipboard", level: "feature", title: "clipboard tools for paste and copy (wl-clipboard on Wayland, xclip on X11)" },
   { id: "truecolor", level: "feature", title: "the terminal shows toriel's theme as intended (truecolor)" },
@@ -93,6 +95,19 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
   const piCli = opts.piCli ?? resolveChildConfig(loaded.settings, env).piCli;
   if (!existsSync(piCli)) {
     out.push({ id: "pi-cli", level: "required", message: `pi's cli.js is not at ${piCli}: run npm install in the toriel checkout, or set piCli in the toriel settings` });
+  }
+  // the shipped git agents (code-review, git-archaeology) name mcp__git__* tools: pi gives an agent an MCP tool only when its server is exposed directly
+  const gitAgents = loadAgents(process.cwd(), env).agents.filter((a) => a.source === "built-in" && (a.tools ?? []).some((t) => t.startsWith("mcp__git__")));
+  if (gitAgents.length > 0) {
+    const servers = mergeMcpServers([join(opts.agentDir ?? piAgentDir(env), "mcp.json")]);
+    const problems = gitAgents.flatMap((a) => mcpWarnings(a, servers));
+    if (problems.length > 0) {
+      out.push({
+        id: "mcp-git-direct",
+        level: "feature",
+        message: `the ${gitAgents.map((a) => a.name).join(" and ")} agents need an MCP server named "git" (toriel-git-mcp, started without --repository) with "exposure": "direct" in ${join(opts.agentDir ?? piAgentDir(env), "mcp.json")}; without it they have no git tool (${problems[0]})`,
+      });
+    }
   }
   const dirs = opts.pathDirs ?? (env.PATH ?? "").split(delimiter).filter(Boolean);
   if ((opts.platform ?? process.platform) === "linux" && loaded.settings.preventSleep !== false && !onPath("systemd-inhibit", dirs)) {

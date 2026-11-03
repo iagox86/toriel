@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { matchModel } from "../src/model-match.ts";
+import { matchModel, modelProblem } from "../src/model-match.ts";
 
 const models = [
   { provider: "anthropic", id: "claude-opus-5" },
@@ -32,5 +32,32 @@ describe("matchModel", () => {
   it("reports nothing for an empty or unmatched query", () => {
     assert.deepEqual(matchModel(models, "  "), { kind: "none" });
     assert.deepEqual(matchModel(models, "gpt"), { kind: "none" });
+  });
+});
+
+describe("modelProblem", () => {
+  const models = [
+    { provider: "litellm", id: "gemma4:12b" },
+    { provider: "litellm", id: "glm-5.3-flash" },
+    { provider: "zai", id: "glm-5.3-flash" },
+  ];
+
+  it("accepts only an exact provider/id", () => {
+    assert.equal(modelProblem(models, "litellm/gemma4:12b"), undefined);
+    assert.match(modelProblem(models, "gemma4:12b") ?? "", /no model "gemma4:12b"/);
+  });
+
+  it("names the closest models, matching on the id when the provider is wrong", () => {
+    assert.match(modelProblem(models, "other/glm-5.3-flash") ?? "", /did you mean litellm\/glm-5\.3-flash, zai\/glm-5\.3-flash\?/);
+    assert.match(modelProblem(models, "litellm/gemma") ?? "", /did you mean litellm\/gemma4:12b\?/);
+  });
+
+  it("suggests the model for a mistyped name", () => {
+    assert.match(modelProblem(models, "litellm/gemma4:12bb") ?? "", /did you mean litellm\/gemma4:12b\?/);
+    assert.match(modelProblem(models, "litellm/glm-5.3-flsh") ?? "", /did you mean litellm\/glm-5\.3-flash/);
+  });
+
+  it("says what pi does have when nothing is close", () => {
+    assert.match(modelProblem(models, "nonsense/zzz") ?? "", /pi has 3 models, from litellm, zai/);
   });
 });

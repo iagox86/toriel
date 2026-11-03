@@ -102,7 +102,17 @@ export interface SessionMeta {
   nextGrantExpiry?: number;
   grantsSaved?: number;
   /** A subagent this daemon run started: how it stands, and whether its parent has the result (the row greys out when it ended and was delivered). */
-  subagent?: { state: string; delivered: boolean; /** UUID of the session that started it. */ parent: string };
+  subagent?: {
+    state: string;
+    delivered: boolean;
+    /** UUID of the session that started it. */
+    parent: string;
+    /** Budget counted so far and its cap (see subagents.ts), and turns taken against the profile's cap, if it has one. */
+    tokens: number;
+    budget: number;
+    turns: number;
+    maxTurns?: number;
+  };
   /** Whether the current model takes images; undefined when pi did not say. */
   acceptsImages?: boolean;
   /** True iff THIS receiving controller holds the exclusive input attach. */

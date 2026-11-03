@@ -53,6 +53,11 @@ export interface SubagentRecord {
   deliveredAt?: number;
   /** Assistant messages so far. */
   turns: number;
+  /** Tokens counted against the budget so far (see messageTokens). */
+  tokens: number;
+  /** How the newest assistant message ended ("stop", "toolUse", "error", "aborted") and its error text. */
+  lastStop?: string;
+  lastError?: string;
   /** Token budget of this run (profile or default, capped by what the parent had left). */
   budget: number;
   maxTurns?: number;
@@ -62,8 +67,8 @@ export class SubagentBook {
   private readonly records: SubagentRecord[] = [];
   private nextHandle = 1;
 
-  add(init: Omit<SubagentRecord, "handle" | "state" | "startedAt" | "turns">, now = Date.now()): SubagentRecord {
-    const rec: SubagentRecord = { ...init, handle: this.nextHandle++, state: "running", startedAt: now, turns: 0 };
+  add(init: Omit<SubagentRecord, "handle" | "state" | "startedAt" | "turns" | "tokens">, now = Date.now()): SubagentRecord {
+    const rec: SubagentRecord = { ...init, handle: this.nextHandle++, state: "running", startedAt: now, turns: 0, tokens: 0 };
     this.records.push(rec);
     return rec;
   }
@@ -98,6 +103,11 @@ export interface SpawnContext {
   parentProfile?: AgentProfile;
   /** Subagent links above the parent. */
   parentDepth: number;
+}
+
+/** Whether a session gets the toriel_agent tools: its profile (none = a session the user started) allows spawning and it has depth left. */
+export function mayDelegate(profile: AgentProfile | undefined, depth: number, limits: SubagentLimits): boolean {
+  return (!profile || profile.canSpawn) && depth < Math.min(limits.maxDepth, HARD_MAX_DEPTH);
 }
 
 /** Why a spawn is refused, in words the calling model can act on; undefined when it may go ahead. */
@@ -153,7 +163,7 @@ export function limitBreach(c: TurnCheck): string | undefined {
 export function describeRecord(r: SubagentRecord, now = Date.now()): string {
   const secs = Math.round(((r.endedAt ?? now) - r.startedAt) / 1000);
   const note = r.note ? ` - ${r.note}` : "";
-  return `#${r.handle} ${r.agent}: ${r.description} [${r.state}${r.background ? ", background" : ""}, ${r.turns} turn(s), ${secs}s]${note}`;
+  return `#${r.handle} ${r.agent}: ${r.description} [${r.state}${r.background ? ", background" : ""}, ${r.turns}${r.maxTurns !== undefined ? `/${r.maxTurns}` : ""} turn(s), ${r.tokens}/${r.budget} tokens, ${secs}s]${note}`;
 }
 
 /** The result text a parent gets: the subagent's words, with the reason when it was cut short. */
@@ -205,4 +215,48 @@ export function expiredSubagents(cands: readonly SweepCandidate[], now: number, 
     const since = Math.max(settled, c.mtime);
     return since > 0 && now - since >= keepMs;
   });
+}
+
+/**
+ * What one assistant message adds to a subagent's budget: the input it had to process fresh, what it
+ * wrote, and cache writes. Cache reads are left out: pi's `totalTokens` counts the whole re-read context
+ * of every turn, so a run that only ever held 25k tokens of context would have "used" 150k after seven turns.
+ */
+export function messageTokens(usage: { input?: number; output?: number; cacheWrite?: number } | undefined): number {
+  return (usage?.input ?? 0) + (usage?.output ?? 0) + (usage?.cacheWrite ?? 0);
+}
+
+/** How a run that settled on its own ended, when that was not a normal finish: an error or an abort (the user's esc on its view, a provider failure). */
+export function abnormalEnd(lastStop: string | undefined, lastError: string | undefined): { state: SubagentState; note: string } | undefined {
+  if (lastStop === undefined) {
+    return { state: "failed", note: "ended without producing an answer" };
+  }
+  if (lastStop === "toolUse") {
+    return { state: "failed", note: "ended on a tool call, with no final answer" };
+  }
+  if (lastStop === "aborted") {
+    return { state: "stopped", note: "was interrupted (aborted) before it finished" };
+  }
+  if (lastStop === "error") {
+    return { state: "failed", note: `ended with an error${lastError ? `: ${lastError}` : ""}` };
+  }
+  return undefined;
+}
+
+/** The newest non-empty assistant text in a message list: what a subagent had said before it was cut off. */
+export function lastAssistantText(messages: ReadonlyArray<{ role?: string; content?: unknown }>): string | undefined {
+  for (const m of [...messages].reverse()) {
+    if (m.role !== "assistant" || !Array.isArray(m.content)) {
+      continue;
+    }
+    const text = (m.content as Array<{ type?: string; text?: string }>)
+      .filter((c) => c.type === "text" && c.text)
+      .map((c) => c.text)
+      .join("\n")
+      .trim();
+    if (text) {
+      return text;
+    }
+  }
+  return undefined;
 }

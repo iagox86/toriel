@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { detachFromParent, lineageArgs, loadLineage, recordFork } from "../src/lineage.ts";
+import { detachFromParent, lineageArgs, loadLineage, recordFork, recordSubagent } from "../src/lineage.ts";
 
 const tmp = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), "toriel-lineage-")), "lineage.json");
 const ref = (id: string, name = id) => ({ id, name, file: `/s/${id}.jsonl` });
@@ -15,6 +15,15 @@ describe("lineage", () => {
     const [flag, text] = lineageArgs("c", file);
     assert.equal(flag, "--append-system-prompt");
     assert.match(text as string, /fork of the session "Parent" \(session id p, file \/s\/p\.jsonl\)/);
+  });
+
+  it("tells a respawned subagent it is a subagent, not a fork", () => {
+    const file = tmp();
+    recordSubagent(ref("p", "Parent"), ref("c", "Worker"), file);
+    const [flag, text] = lineageArgs("c", file);
+    assert.equal(flag, "--append-system-prompt");
+    assert.match(text as string, /subagent of the session "Parent" \(session id p, file \/s\/p\.jsonl\)/);
+    assert.doesNotMatch(text as string, /fork|copy of that session/);
   });
 
   it("does not tell a parent about its forks, but still records them", () => {

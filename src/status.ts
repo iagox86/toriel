@@ -4,7 +4,8 @@ import { type DialogRequest, dialogPrompt } from "./dialogs.ts";
 import { fmtTokens } from "./format.ts";
 import { displayName, type LocalSession } from "./session-list.ts";
 import type { SessionMeta, UsageReport } from "./shared.ts";
-import { accent, attention, dim, gauge } from "./theme.ts";
+import { budgetNearCap, budgetText } from "./subagent-budget.ts";
+import { accent, attention, dim, gauge, streaming } from "./theme.ts";
 import { fmtNext } from "./when.ts";
 
 export interface FleetStats {
@@ -157,6 +158,10 @@ function sessionSegments(inp: StatusInputs): Segment[] {
   }
   if (inp.relation) {
     out.push({ text: attention(`SUBAGENT of ${inp.relation.parentName}`), drop: 0 });
+    if (meta?.subagent) {
+      const figures = { tokens: meta.subagent.tokens, budget: meta.subagent.budget, turns: meta.subagent.turns, maxTurns: meta.subagent.maxTurns };
+      out.push({ text: budgetNearCap(figures) ? streaming(budgetText(figures)) : dim(budgetText(figures)), drop: 1 });
+    }
   }
   if (meta?.agent) {
     out.push({ text: accent(`agent ${meta.agent}`), drop: 3 });

@@ -30,6 +30,7 @@ describe("doctor checks", () => {
       setup({ config: {} }).opts,
       { ...setup({}).opts, env: { WAYLAND_DISPLAY: "wayland-0" }, pathDirs: ["/nonexistent-path"], startup: [] },
       { ...setup({}).opts, tty: true, env: { TERM: "xterm-256color" }, startup: [] },
+      setup({ gitMcp: "none" }).opts,
     ];
     const seen = new Set<string>();
     for (const opts of scenarios) {
@@ -94,6 +95,17 @@ describe("doctor checks", () => {
     assert.match(f[1]?.message ?? "", /^toriel settings: scheduleDailyLimit must be a number of at least 1/);
   });
 
+  it("asks for the git MCP server to be exposed directly, since pi gives an agent no tool from a codemode server", () => {
+    const grade = (gitMcp: string) => collectFindings(setup({ gitMcp }).opts).filter((x) => x.id === "mcp-git-direct");
+    assert.deepEqual(grade("direct"), []);
+    for (const bad of ["default", "codemode", "deferred"]) {
+      const [f] = grade(bad);
+      assert.equal(f?.level, "feature", bad);
+      assert.match(f?.message ?? "", /code-review and git-archaeology agents need an MCP server named "git".*"exposure": "direct"/, bad);
+    }
+    assert.match(grade("none")[0]?.message ?? "", /MCP server "git" is not configured/);
+  });
+
   it("asks for the sleep lock only on linux, and only when preventSleep is not off", () => {
     assert.deepEqual(collectFindings(setup({ noInhibit: true }).opts).map((x) => [x.id, x.level]), [["sleep-lock", "feature"]]);
     assert.deepEqual(collectFindings({ ...setup({ noInhibit: true }).opts, platform: "darwin" }), []);
@@ -115,7 +127,7 @@ describe("doctor report", () => {
     assert.match(text, /Required: all 5 ok/);
     assert.match(text, /Recommended: all 2 ok/);
     assert.doesNotMatch(text, / ok {7}/);
-    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(3 ok\)/);
+    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(4 ok\)/);
   });
 });
 
@@ -144,7 +156,7 @@ describe("doctor report colours", () => {
   it("colours the compact report too, with the passing checks' count dim", () => {
     const coloured = renderDoctor(checks(), { compact: true, style: ANSI_STYLE });
     assert.match(coloured, /Required\x1b\[22m: \x1b\[32mall 5 ok\x1b\[39m/);
-    assert.match(coloured, /\x1b\[2m {2}\(3 ok\)\x1b\[22m/);
+    assert.match(coloured, /\x1b\[2m {2}\(4 ok\)\x1b\[22m/);
   });
 });
 

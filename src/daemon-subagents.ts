@@ -11,6 +11,7 @@ import type { Cmd, DaemonContext, Responder } from "./daemon-context.ts";
 import { removeSession } from "./daemon-handlers-lifecycle.ts";
 import { deliverToTarget } from "./daemon-handlers-messages.ts";
 import type { DaemonSession } from "./daemon-session.ts";
+import { modelProblem } from "./model-match.ts";
 import { detachFromParent, loadLineage, parentMap, recordSubagent, subagentDepth } from "./lineage.ts";
 import { log } from "./log.ts";
 import { formatReceived } from "./received.ts";
@@ -19,7 +20,10 @@ import {
   childBudget,
   describeRecord,
   expiredSubagents,
+  abnormalEnd,
+  lastAssistantText,
   limitBreach,
+  messageTokens,
   parseHandle,
   refuseSpawn,
   resultText,
@@ -44,6 +48,8 @@ export class SubagentManager {
   private readonly settling = new Map<number, () => void>();
   /** Handles being stopped, so two stops (a limit and a cancel) do not both abort. */
   private readonly stopping = new Set<number>();
+  /** The outcome a stop asked for, by handle: it wins over the settle the abort causes. */
+  private readonly forced = new Map<number, { state: SubagentState; note: string }>();
 
   /** How long a finished subagent stays in the switcher. */
   readonly keepMs: number;
@@ -120,13 +126,20 @@ export class SubagentManager {
   }
 
   /** An assistant message finished in `s`: cut the subagent off when it went over its budget or turns. */
-  onMessage(s: DaemonSession, message: { role?: string; stopReason?: string } | undefined): void {
+  onMessage(s: DaemonSession, message: { role?: string; stopReason?: string; errorMessage?: string; usage?: { input?: number; output?: number; cacheWrite?: number } } | undefined): void {
     const rec = this.book.bySession(s.id);
     if (rec?.state !== "running" || message?.role !== "assistant") {
       return;
     }
-    rec.turns++;
-    const why = limitBreach({ turns: rec.turns, maxTurns: rec.maxTurns, tokens: s.totalTokens, budget: rec.budget, continuing: message.stopReason === "toolUse" });
+    // the empty message pi ends an aborted or failed run with is not a turn of work
+    if (message.stopReason !== "error" && message.stopReason !== "aborted") {
+      rec.turns++;
+    }
+    rec.tokens += messageTokens(message.usage);
+    rec.lastStop = message.stopReason;
+    rec.lastError = message.errorMessage;
+    this.ctx().hub.broadcastSessions(); // the budget figure in the UI moves with each message
+    const why = limitBreach({ turns: rec.turns, maxTurns: rec.maxTurns, tokens: rec.tokens, budget: rec.budget, continuing: message.stopReason === "toolUse" });
     if (why) {
       void this.stop(rec, why, "limit");
     }
@@ -156,6 +169,8 @@ export class SubagentManager {
       return this.whenEnded(rec);
     }
     this.stopping.add(rec.handle);
+    // said before the abort: the run settles on its own as soon as it is aborted, and that settle must not win as a plain "done"
+    this.forced.set(rec.handle, { state, note });
     try {
       await this.ctx().registry.get(rec.session)?.child?.abort();
     } catch (err) {
@@ -169,13 +184,21 @@ export class SubagentManager {
     if (rec.state !== "running") {
       return;
     }
-    rec.state = state;
-    rec.note = note ?? rec.note;
+    // a stop in progress decides the outcome; otherwise a run that settled on an error or an abort is not a "done"
+    const forced = this.forced.get(rec.handle);
+    const abnormal = state === "done" && !forced ? abnormalEnd(rec.lastStop, rec.lastError) : undefined;
+    rec.state = forced?.state ?? abnormal?.state ?? state;
+    rec.note = forced?.note ?? abnormal?.note ?? note ?? rec.note;
     rec.endedAt = Date.now();
+    this.forced.delete(rec.handle);
     const ctx = this.ctx();
     const child = ctx.registry.get(rec.session);
     try {
       rec.result = (await child?.child?.getLastAssistantText()) ?? undefined;
+      if (!rec.result?.trim() && child?.child) {
+        // the last message was an empty error or abort: keep what it said before
+        rec.result = lastAssistantText((await child.child.getMessages()) as Array<{ role?: string; content?: unknown }>);
+      }
     } catch (err) {
       log(`subagent #${rec.handle}: could not read its last answer: ${errText(err)}`);
     }
@@ -183,12 +206,30 @@ export class SubagentManager {
     if (child?.child) {
       await ctx.children.deactivate(child);
     }
-    log(`subagent #${rec.handle} (${rec.agent}) ${state}${rec.note ? `: ${rec.note}` : ""}`);
+    log(`subagent #${rec.handle} (${rec.agent}) ${rec.state}${rec.note ? `: ${rec.note}` : ""}`);
     ctx.hub.broadcastSessions();
     for (const wake of this.ending.get(rec.handle) ?? []) {
       wake();
     }
     this.ending.delete(rec.handle);
+  }
+
+  /** Throws when `wanted` is not a model pi knows; if pi cannot be asked, the start goes ahead and pi's own error applies. */
+  private async checkModel(parent: DaemonSession, wanted: string | undefined): Promise<void> {
+    if (wanted === undefined || !parent.child) {
+      return;
+    }
+    let models: Array<{ provider: string; id: string }>;
+    try {
+      models = await parent.child.getAvailableModels();
+    } catch (err) {
+      log(`could not check the subagent's model ${wanted}: ${errText(err)}`);
+      return;
+    }
+    const problem = modelProblem(models, wanted);
+    if (problem) {
+      throw new Error(problem);
+    }
   }
 
   /** Create, launch and prompt a subagent for `parent`; the record is returned running (or already failed). */
@@ -205,6 +246,9 @@ export class SubagentManager {
     if (cmd.context === "fork" && !parent.sessionFile) {
       throw new Error("this session has no file to fork yet");
     }
+    // fail now, with the valid names, rather than after the subagent's process has started and died on it;
+    // before the limit check below, which must stay synchronous with creating the record
+    await this.checkModel(parent, cmd.context === "fork" ? undefined : (cmd.model ?? base.model));
     const refusal = refuseSpawn({
       limits: this.limits,
       book: this.book,
@@ -216,7 +260,7 @@ export class SubagentManager {
       throw new Error(refusal);
     }
     const parentRec = this.book.byChild(parentUuid);
-    const parentLeft = parentRec ? Math.max(0, parentRec.budget - parent.totalTokens) : undefined;
+    const parentLeft = parentRec ? Math.max(0, parentRec.budget - parentRec.tokens) : undefined;
     const budget = childBudget(base.budget, this.limits, parentLeft);
     const parentName = parent.sessionName ?? `session ${parentUuid.slice(0, 8)}`;
     const profile: AgentProfile = {
@@ -248,7 +292,12 @@ export class SubagentManager {
     try {
       await ctx.children.start(child, { agent: profile, name, forkPath: cmd.context === "fork" ? parent.sessionFile : undefined });
       if (rec.state !== "running") {
-        return rec; // stopped while it was starting
+        // stopped while it was starting: the process that just came up has no task and no lineage, so it goes
+        // again, and with it the registry entry (pi writes the file on the first prompt, so there is none)
+        await ctx.children.deactivate(child);
+        ctx.registry.delete(child.id);
+        ctx.hub.broadcastSessions();
+        return rec;
       }
       rec.childId = child.sessionId;
       if (child.sessionId) {
@@ -374,9 +423,14 @@ export async function handleAgentsOp(ctx: DaemonContext, cmd: Cmd<"agents_op">, 
         timer = setTimeout(() => resolve("timeout"), cmd.timeoutMs ?? DEFAULT_WAIT_MS);
       });
       // a caller that went away stops waiting; the subagents keep running
-      const gone = new Promise<"gone">((resolve) => socket.once("close", () => resolve("gone")));
+      let onClose = (): void => {};
+      const gone = new Promise<"gone">((resolve) => {
+        onClose = () => resolve("gone");
+        socket.once("close", onClose);
+      });
       const outcome = await Promise.race([Promise.all(targets.map((r) => ctx.subagents.whenEnded(r))).then(() => "ended" as const), timeout, gone]);
       clearTimeout(timer);
+      socket.off("close", onClose);
       if (outcome === "gone") {
         return;
       }

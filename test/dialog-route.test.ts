@@ -8,7 +8,7 @@ const dialog = { id: "d", method: "confirm", title: "Allow?" } as DialogRequest;
 const meta = (id: number, over: Partial<SessionMeta> = {}): SessionMeta => ({ id, sessionId: `u${id}`, ...over }) as SessionMeta;
 const keyFor = (m: SessionMeta) => `k${m.id}`;
 const route = (viewing: string | null, views: Record<string, { dialog?: DialogRequest }>, metas: SessionMeta[]) => dialogOwner(viewing, new Map(Object.entries(views)), metas, keyFor);
-const kid = (id: number, parent = "u1", over: Partial<SessionMeta> = {}) => meta(id, { pendingDialog: true, subagent: { state: "running", delivered: false, parent }, ...over });
+const kid = (id: number, parent = "u1", over: Partial<SessionMeta> = {}) => meta(id, { pendingDialog: true, subagent: { state: "running", delivered: false, parent, tokens: 0, budget: 150000, turns: 0 }, ...over });
 
 describe("dialogOwner", () => {
   it("shows a session's own dialog first", () => {
@@ -27,7 +27,7 @@ describe("dialogOwner", () => {
   });
 
   it("does not move a subagent's dialog up another level: only its own parent shows it", () => {
-    assert.equal(route("k0", { k2: { dialog } }, [meta(0), meta(1, { subagent: { state: "running", delivered: false, parent: "u0" } }), kid(2)]), undefined);
+    assert.equal(route("k0", { k2: { dialog } }, [meta(0), meta(1, { subagent: { state: "running", delivered: false, parent: "u0", tokens: 0, budget: 150000, turns: 0 } }), kid(2)]), undefined);
   });
 });
 
