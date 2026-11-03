@@ -233,3 +233,47 @@ describe("daemon: permission grants across a restart", () => {
     fs.rmSync(path.dirname(file), { recursive: true, force: true });
   });
 });
+
+describe("daemon: /fork and permission grants", () => {
+  const forkOf = async (h: Harness, c: Client, session: number, keepPermissions?: boolean) => {
+    const file = c.sessions().find((s) => s.id === session)?.sessionFile as string;
+    return (await c.request({ type: "adopt", path: file, cwd: h.dir, fork: true, keepPermissions })) as Msg;
+  };
+
+  it("gives a fork no grants by default", async () => {
+    const h = await start();
+    const { c, session } = await savedSession(h);
+    await c.request({ type: "permission_add", session, surface: "bash", pattern: "git status" });
+    const forked = await forkOf(h, c, session);
+    assert.equal(forked.grantsCopied, 0);
+    assert.deepEqual((await c.request({ type: "permission_list", session: forked.sessionId })).grants, []);
+  });
+
+  it("copies the parent's active grants into a fork that asks for them, leaving the parent's alone", async () => {
+    const h = await start();
+    const { c, session, uuid } = await savedSession(h);
+    await c.request({ type: "permission_add", session, surface: "bash", pattern: "git status", for: "1h" });
+    await c.request({ type: "permission_add", session, surface: "mcp", pattern: "exa:*" });
+    const before = (await c.request({ type: "permission_list", session })).grants as Msg[];
+    const forked = await forkOf(h, c, session, true);
+    assert.equal(forked.grantsCopied, 2);
+    const copy = (await c.request({ type: "permission_list", session: forked.sessionId })).grants as Msg[];
+    assert.deepEqual(copy.map((g) => [g.surface, g.pattern, g.expiresAt, g.dormant]), before.map((g) => [g.surface, g.pattern, g.expiresAt, false]));
+    assert.ok(copy.every((g) => g.session === forked.sessionUuid && g.session !== uuid));
+    assert.equal(((await c.request({ type: "permission_list", session })).grants as Msg[]).length, 2);
+  });
+
+  it("forks a session that is mid-turn from its last finished step", async () => {
+    const h = await start();
+    const { c, session } = await savedSession(h);
+    const file = c.sessions().find((s) => s.id === session)?.sessionFile as string;
+    // what a running turn leaves in the file: a tool call whose result has not arrived, then a line half written
+    fs.appendFileSync(file, `${JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "c1", name: "bash", arguments: {} }] } })}\n{"type":"mess`);
+    const parentCount = (await c.request({ type: "adopt", path: file, cwd: h.dir, fork: true })) as Msg;
+    assert.equal(typeof parentCount.sessionId, "number");
+    const history = await c.waitFor((m) => m.type === "history" && m.session === parentCount.sessionId);
+    const roles = (history.messages as Msg[]).map((m) => m.role);
+    assert.ok(roles.length > 0);
+    assert.ok(!JSON.stringify(history.messages).includes('"toolCall"'), "the unanswered tool call is left out of the copy");
+  });
+});

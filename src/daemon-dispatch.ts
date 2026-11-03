@@ -26,6 +26,7 @@ import {
   handleCompact,
   handleMcpStatus,
   handleModel,
+  handleCd,
   handleReload,
   handleRestoreClear,
   handleRewind,
@@ -109,6 +110,8 @@ export async function dispatch(ctx: DaemonContext, cmd: ClientCommand, socket: n
       return handleCompact(ctx, cmd, socket, res);
     case "reload":
       return handleReload(ctx, cmd, socket, res);
+    case "cd":
+      return handleCd(ctx, cmd, socket, res);
     case "clear":
       return handleClear(ctx, cmd, socket, res);
     case "restore_clear":

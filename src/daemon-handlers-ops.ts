@@ -2,6 +2,8 @@
 // clear, rewind, dialog answers.
 import * as fs from "node:fs";
 import type * as net from "node:net";
+import * as os from "node:os";
+import * as path from "node:path";
 import { compactAndWait } from "./compact-wait.ts";
 import { bangEnv } from "./child-env.ts";
 import { SOCK, TRASH_DIR } from "./config.ts";
@@ -14,6 +16,7 @@ import { log } from "./log.ts";
 import { matchModel, modelName } from "./model-match.ts";
 import { matchThinkingLevel } from "./think-match.ts";
 import { clearFile, latestClearBackup, restoreClear, rewindFile } from "./rewind.ts";
+import { setSessionFileCwd } from "./session-header.ts";
 import { encodeLine } from "./shared.ts";
 
 export async function handleAbort(
@@ -211,6 +214,51 @@ export async function handleReload(
   ctx.hub.broadcastSessions();
   await sendHistory(ctx, socket, s);
   res(true);
+}
+
+/** `dir` as an absolute path: ~ is the home directory, a relative path starts from `base`. */
+export function resolveDir(dir: string, base: string): string {
+  return path.resolve(base, dir.trim().replace(/^~(?=$|\/)/, os.homedir()));
+}
+
+export async function handleCd(
+  ctx: DaemonContext,
+  cmd: Cmd<"cd">,
+  socket: net.Socket,
+  res: Responder,
+): Promise<void> {
+  const s = ctx.registry.live(cmd.session);
+  requireIdle(s);
+  if (!s.sessionFile || !fs.existsSync(s.sessionFile)) {
+    throw new Error("nothing to move yet (the session has no file): send a message first, or start one in the right place with /new -C <dir>");
+  }
+  if (!cmd.dir?.trim()) {
+    throw new Error("cd needs a directory");
+  }
+  const dir = resolveDir(cmd.dir, s.cwd);
+  if (!(fs.existsSync(dir) && fs.statSync(dir).isDirectory())) {
+    throw new Error(`${dir} is not a directory`);
+  }
+  if (dir === s.cwd) {
+    res(true, undefined, { cwd: dir, changed: false });
+    return;
+  }
+  const before = s.cwd;
+  const previous = setSessionFileCwd(s.sessionFile, dir);
+  s.cwd = dir;
+  log(`session ${s.id} moved from ${previous ?? "(unknown)"} to ${dir}`);
+  try {
+    await ctx.children.restart(s);
+  } catch (err) {
+    // pi would not start there: put the file and the session back, so the next message starts it where it was
+    setSessionFileCwd(s.sessionFile, previous ?? before);
+    s.cwd = before;
+    ctx.hub.broadcastSessions();
+    throw err;
+  }
+  ctx.hub.broadcastSessions();
+  await sendHistory(ctx, socket, s);
+  res(true, undefined, { cwd: dir, changed: true });
 }
 
 export async function handleClear(

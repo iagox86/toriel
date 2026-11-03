@@ -8,6 +8,7 @@ import { TRASH_DIR } from "./config.ts";
 import type { Cmd, DaemonContext, Responder } from "./daemon-context.ts";
 import { sendHistory } from "./daemon-history.ts";
 import type { DaemonSession } from "./daemon-session.ts";
+import { forkSnapshot } from "./fork-snapshot.ts";
 import { forkNote, recordFork, sessionIdOfFile } from "./lineage.ts";
 import { wasHandled } from "./handled-files.ts";
 import { log } from "./log.ts";
@@ -343,9 +344,11 @@ export async function handleAdopt(
   const parentId = sessionIdOfFile(cmd.path);
   const parentFile = cmd.path;
   const parentName = cmd.parentName ?? "(unnamed)";
+  // a parent that is mid-run has a file that may end in the middle of a turn: fork from its last settled point
+  const snapshot = cmd.fork ? forkSnapshot(cmd.path) : undefined;
   try {
     const cfg = ctx.children.configFor(s);
-    const args = ["--fork", cmd.path];
+    const args = ["--fork", snapshot?.path ?? cmd.path];
     if (cmd.name) {
       args.push("--name", cmd.name);
     }
@@ -361,8 +364,9 @@ export async function handleAdopt(
       await client.setSessionName(cmd.name);
     }
     await ctx.children.refreshMeta(s);
-    log(`session ${s.id} adopted (forked from ${cmd.path})`);
+    log(`session ${s.id} adopted (forked from ${cmd.path}${snapshot && snapshot.dropped > 0 ? `, without its last ${snapshot.dropped} unfinished entries` : ""})`);
   } finally {
+    snapshot?.cleanup();
     s.spawning = false;
     ctx.hub.broadcastSessions();
   }
@@ -372,8 +376,16 @@ export async function handleAdopt(
       { id: s.sessionId, name: cmd.name ?? s.sessionName ?? "(unnamed)", file: s.sessionFile },
     );
   }
+  let grantsCopied = 0;
+  if (cmd.fork && cmd.keepPermissions && parentId && s.sessionId) {
+    grantsCopied = ctx.grants.copySession(parentId, s.sessionId).length;
+    if (grantsCopied > 0) {
+      log(`session ${s.id} took ${grantsCopied} permission grants from ${parentId}`);
+      ctx.hub.broadcastSessions();
+    }
+  }
   await sendHistory(ctx, socket, s);
-  res(true, undefined, { sessionId: s.id, sessionUuid: s.sessionId });
+  res(true, undefined, { sessionId: s.id, sessionUuid: s.sessionId, grantsCopied });
 }
 
 export function handleRestore(cmd: Cmd<"restore">, res: Responder): void {

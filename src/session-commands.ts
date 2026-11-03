@@ -84,9 +84,10 @@ export class SessionCommands {
       name: rename,
       rename,
       reload: () => this.reload(),
+      cd: (c) => this.cd(c.args.join(" ")),
       model: (c) => this.model(c.args.join(" "), c.opts.list === true),
       think: (c) => this.think(c.args.join(" "), c.opts.list === true),
-      fork: (c) => this.fork(c.opts.name as string | undefined, c.opts.switch !== false, c.args.join(" ")),
+      fork: (c) => this.fork(c.opts.name as string | undefined, c.opts.switch !== false, c.args.join(" "), c.opts.keepPermissions === true),
       feedback: (c) => runFeedback(this.h, c, this.h.viewing ?? undefined),
       why: (c) => this.why(c.opts.model as string | undefined),
       init: () => this.init(),
@@ -284,6 +285,24 @@ export class SessionCommands {
     }
   }
 
+  private async cd(dir: string): Promise<void> {
+    const key = this.h.viewing;
+    if (!dir.trim()) {
+      this.h.notify(key ? `this session runs in ${this.h.cwdFor(key)}` : "no session open");
+      return;
+    }
+    const meta = await this.liveMeta();
+    if (!meta) {
+      return;
+    }
+    try {
+      const r = (await this.h.request({ type: "cd", session: meta.id, dir })) as { cwd: string; changed: boolean };
+      this.h.notify(r.changed ? `moved to ${r.cwd} - pi restarted there; the conversation is unchanged` : `already in ${r.cwd}`);
+    } catch (err) {
+      this.fail("cd", err);
+    }
+  }
+
   private async model(query: string, list: boolean): Promise<void> {
     const meta = await this.liveMeta();
     if (!meta) {
@@ -332,17 +351,15 @@ export class SessionCommands {
     }
   }
 
-  private async fork(name: string | undefined, enter: boolean, prompt: string): Promise<void> {
+  private async fork(name: string | undefined, enter: boolean, prompt: string, keepPermissions: boolean): Promise<void> {
     const meta = this.viewedMeta();
     const key = this.h.viewing;
     if (!key?.startsWith("/")) {
       this.h.notify("nothing to fork yet - send a message first");
       return;
     }
-    if (meta?.streaming) {
-      this.h.notify("session is working; abort it first");
-      return;
-    }
+    // a busy session is forked too: the daemon copies it up to its last finished step and the original runs on
+    const busy = Boolean(meta?.streaming);
     try {
       const cwd = this.h.cwdFor(key);
       const parentName = displayName(meta, this.h.local.get(key));
@@ -353,18 +370,24 @@ export class SessionCommands {
         fork: true,
         name: this.h.uniqueSessionName(name ?? forkName(parentName)),
         parentName,
-      })) as { sessionId?: number; sessionUuid?: string };
+        keepPermissions,
+      })) as { sessionId?: number; sessionUuid?: string; grantsCopied?: number };
       if (typeof r?.sessionId !== "number") {
         throw new Error("no session id");
       }
       this.placeInSwitcher(meta?.sessionId ?? this.h.local.get(key)?.id, r.sessionUuid);
+      const extras = [
+        busy ? "copied up to the last finished step; the original keeps running" : "",
+        keepPermissions ? `${r.grantsCopied ?? 0} permission${r.grantsCopied === 1 ? "" : "s"} copied` : "",
+      ].filter(Boolean);
+      const note = extras.length > 0 ? ` (${extras.join("; ")})` : "";
       const forked = this.h.sessions.get(r.sessionId);
       if (!enter) {
         // the copy runs in the background; this view stays put
         if (prompt) {
           await this.h.request({ type: "prompt", session: r.sessionId, message: prompt });
         }
-        this.h.notify(`forked${prompt ? " and prompted" : ""} - still in the original; the copy is in the switcher`);
+        this.h.notify(`forked${prompt ? " and prompted" : ""}${note} - still in the original; the copy is in the switcher`);
         return;
       }
       if (forked) {
@@ -377,7 +400,7 @@ export class SessionCommands {
         this.h.pendingEnterId = r.sessionId;
         this.h.pendingPrompt = prompt || null;
       }
-      this.h.notify("forked - you are in the copy; the original is unchanged");
+      this.h.notify(`forked${note} - you are in the copy; the original is unchanged`);
     } catch (err) {
       this.fail("fork", err);
     }

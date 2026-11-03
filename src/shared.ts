@@ -12,7 +12,7 @@
  * older daemon or controller cannot cope with. A mismatch blocks the controller
  * (see version-check.ts); a mere code difference with the same protocol only warns.
  */
-export const PROTOCOL = 1;
+export const PROTOCOL = 2; // 2: the `cd` command and adopt's `keepPermissions`
 
 /** Which toriel code a process runs (build-id.ts). */
 export interface BuildInfo {
@@ -228,8 +228,9 @@ type ClientCommandBody =
   /** Fork an external session file into a new toriel-owned session.
    * `fork` forks even a file a live toriel session already owns (/fork).
    * `name` names the new session; `parentName` is what the parent is called
-   * (recorded in the lineage the two sessions are told about). */
-  | { type: "adopt"; id?: string; path: string; cwd: string; fork?: boolean; name?: string; parentName?: string }
+   * (recorded in the lineage the two sessions are told about).
+   * `keepPermissions` (with `fork`) gives the copy the parent's active permission grants. */
+  | { type: "adopt"; id?: string; path: string; cwd: string; fork?: boolean; name?: string; parentName?: string; keepPermissions?: boolean }
   /** Without `query`: the current model and the available ones. With it: switch to the match. */
   | { type: "model"; id?: string; session: number; query?: string }
   /** Without `level`: the current thinking level and the ones the model supports. With it: switch to the match. */
@@ -244,6 +245,9 @@ type ClientCommandBody =
   | { type: "restore_clear"; id?: string; session?: number; path?: string }
   /** Restart the child on the same file so it re-reads extensions, skills and settings. */
   | { type: "reload"; id?: string; session: number }
+  /** Move an idle session to another directory: its file's cwd is rewritten and pi restarted on it.
+   * `dir` may be relative (to the session's current directory) or start with ~. */
+  | { type: "cd"; id?: string; session: number; dir: string }
   /** Controller announce: classifies the connection as a controller (not a
    * presence heartbeat) and requests the current session list. */
   | { type: "list" }

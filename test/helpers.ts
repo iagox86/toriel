@@ -32,12 +32,24 @@ export interface Harness {
   connect(): Promise<Client>;
 }
 
+/** What a daemon hands its children; a test run from inside a toriel session inherits it and must not act on it. */
+export const SESSION_ENV = ["TORIEL_SOCK", "TORIEL_CAN_SPAWN", "TORIEL_AGENT_TYPES", "TORIEL_PROFILE", "TORIEL_SESSION_ID", "TORIEL_CHILD"] as const;
+
+/** `env` without the variables a surrounding toriel session set. */
+export function withoutSessionEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const clean = { ...env };
+  for (const k of SESSION_ENV) {
+    delete clean[k];
+  }
+  return clean;
+}
+
 export async function startDaemon(extraEnv: Record<string, string> = {}): Promise<Harness> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-test-"));
   const sock = path.join(dir, "toriel.sock");
   const sessionsDir = path.join(dir, "sessions");
   const env = {
-    ...process.env,
+    ...withoutSessionEnv(process.env),
     // the daemon's RpcClient spawns plain `node` from PATH
     PATH: `${path.dirname(process.execPath)}:${process.env.PATH ?? ""}`,
     TORIEL_SOCK: sock,

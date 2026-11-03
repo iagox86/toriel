@@ -68,6 +68,29 @@ describe("deleting a group", () => {
     assert.ok(!loadGroups().groups.includes("Empty"));
   });
 
+  it("forgets the first ctrl-x after a second, and takes the confirm hint down", (t) => {
+    t.mock.timers.enable({ apis: ["Date", "setTimeout"] });
+    const { sw, actions, goTo } = setup();
+    goTo("Empty");
+    actions.keys(CTRL_X);
+    t.mock.timers.tick(1100);
+    assert.doesNotMatch(sw.hint, /again/);
+    actions.keys(CTRL_X);
+    assert.ok(loadGroups().groups.includes("Empty"), "the late second press only arms again");
+    assert.match(sw.hint, /ctrl-x again to delete this group/);
+  });
+
+  it("forgets the first ctrl-x when any other key comes between", () => {
+    const { sw, actions, goTo } = setup();
+    goTo("Empty");
+    actions.keys(CTRL_X);
+    actions.keys("\x1b[A");
+    goTo("Empty");
+    actions.keys(CTRL_X);
+    assert.ok(loadGroups().groups.includes("Empty"));
+    assert.match(sw.hint, /ctrl-x again/);
+  });
+
   it("explains why a group with sessions cannot be deleted, without arming it", () => {
     const { sw, actions, goTo } = setup();
     goTo("Full");
@@ -136,5 +159,43 @@ describe("/init in the switcher", () => {
     await actions.runCommand("/init -C /nonexistent/dir", undefined);
     assert.equal(requests.length, 0);
     assert.match(sw.hint, /init: \/nonexistent\/dir is not a directory/);
+  });
+});
+
+describe("/cd in the switcher", () => {
+  const spawning = () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const harness = setup(async (cmd) => {
+      requests.push(cmd);
+      return { sessionId: 5 };
+    });
+    return { ...harness, requests };
+  };
+
+  it("changes the directory new sessions start in, and /new -C still overrides it", async () => {
+    const { sw, actions, requests } = spawning();
+    await actions.runCommand(`/cd ${dir}`, undefined);
+    assert.match(sw.hint, new RegExp(`new sessions now start in ${dir}`));
+    await actions.runCommand("/new", undefined);
+    assert.equal(requests[0]?.cwd, dir);
+    await actions.runCommand("/new -C /tmp", undefined);
+    assert.equal(requests[1]?.cwd, "/tmp");
+  });
+
+  it("starts a typed first message there too", async () => {
+    const { actions, requests } = spawning();
+    await actions.runCommand(`/cd ${dir}`, undefined);
+    await actions.newSession("hello");
+    assert.equal(requests[0]?.cwd, dir);
+  });
+
+  it("shows the current default with no argument and refuses a directory that does not exist", async () => {
+    const { sw, actions } = spawning();
+    await actions.runCommand("/cd", undefined);
+    assert.match(sw.hint, new RegExp(`new sessions start in ${process.cwd()}`));
+    await actions.runCommand("/cd /nonexistent/dir", undefined);
+    assert.match(sw.hint, /cd: \/nonexistent\/dir is not a directory/);
+    await actions.runCommand("/cd", undefined);
+    assert.match(sw.hint, new RegExp(`new sessions start in ${process.cwd()}`));
   });
 });

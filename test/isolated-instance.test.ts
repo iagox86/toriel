@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 import { applyIsolated } from "../src/preflight.ts";
+import { withoutSessionEnv } from "./helpers.ts";
 
 const ROOT = path.join(import.meta.dirname, "..");
 
@@ -93,7 +94,7 @@ describe("a real isolated daemon", () => {
   it("says it is isolated in its hello, and writes its log and pidfile inside the private directory only", async () => {
     const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-iso-"));
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-home-"));
-    const env = { ...process.env, XDG_RUNTIME_DIR: runtime, HOME: home, TORIEL_PROFILE: "t", TORIEL_NO_INHIBIT: "1", XDG_DATA_HOME: path.join(home, "share"), XDG_STATE_HOME: path.join(home, "state") };
+    const env = { ...withoutSessionEnv(process.env), XDG_RUNTIME_DIR: runtime, HOME: home, TORIEL_PROFILE: "t", TORIEL_NO_INHIBIT: "1", XDG_DATA_HOME: path.join(home, "share"), XDG_STATE_HOME: path.join(home, "state") };
     const proc = spawn(process.execPath, [path.join(ROOT, "src", "daemon.ts")], { env, stdio: "ignore" });
     const sock = path.join(runtime, "toriel-t", "toriel.sock");
     try {
