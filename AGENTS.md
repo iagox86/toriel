@@ -24,6 +24,16 @@ Use node v26 (`~/.nvm/versions/node/v26.12.0/bin`); the default node is too old.
 - `npm run lint` - biome, lint only (the formatter is disabled; formatting is not enforced)
 - `toriel doctor` - the setup report (`/doctor` inside toriel); run it after changing anything a user has to set up
 
+Run it with `bin/toriel` (the launcher picks the right node) or `npm start`.
+
+A single test file or pattern (node v26 is not the default node; in fish):
+
+```fish
+set -x PATH ~/.nvm/versions/node/v26.12.0/bin $PATH
+node --test test/commands.test.ts
+node --test --test-name-pattern="some behavior" test/daemon.test.ts
+```
+
 Run all three before calling work done. Restarting the real daemon is fine,
 but never kill other live pi sessions.
 
@@ -42,7 +52,7 @@ but never kill other live pi sessions.
 - 2-space indent, no tabs (see `.editorconfig`). Block statements always (`if (x) { ... }`, never one-line).
 - Pure logic goes in small modules with a unit test beside it in `test/`; classes take their collaborators explicitly. No module-level mutable state in the daemon (handlers get a `DaemonContext`).
 - A /command is declared once in `src/commands.ts` (name, description, commander `build`, optional `complete`); parsing, `--help` and autocomplete derive from it, and a handler table keyed by name must cover it (tsc enforces that). Give commands likely options, tab completion and help: every option and argument needs a description, and every command a `help:` text (what it does, examples), which `--help` prints after the options; `test/commands.test.ts` fails when one is missing.
-- The daemon<->controller protocol is typed in `src/shared.ts` (JSONL over a unix socket, LF-only framing - never readline). `daemon-dispatch.ts` switches exhaustively over `ClientCommand`, so a new message type is a compile error until both ends handle it. Read `docs/design.md` "Protocol gotchas" before changing protocol or lifecycle behavior.
+- The daemon<->controller protocol is typed in `src/shared.ts` (JSONL over a unix socket, LF-only framing - never readline, which also splits on U+2028/U+2029, legal inside JSON strings). Spawn requests carry an explicit cwd; never rely on the daemon's inherited cwd. `daemon-dispatch.ts` switches exhaustively over `ClientCommand`, so a new message type is a compile error until both ends handle it. Read `docs/design.md` "Protocol gotchas" before changing protocol or lifecycle behavior.
 - A session command that needs a running pi child (anything that calls the daemon about the session: model, compact, clear, mcp list, `!command`) must start a sleeping session first with `await this.liveMeta()` in `session-commands.ts` (it returns undefined after telling the user why it could not), never fail with "send a message first". Commands that only read the file, edit toriel's own state, or send a prompt (the prompt path wakes the session itself) do not wake it. State which kind a new command is in its handler's doc comment.
 - One daemon per state directory: it holds `daemon.pid` (`src/daemon-lock.ts`) and a second refuses to start. Tests isolate with `XDG_DATA_HOME` (the harness does), so a test daemon never meets the real one. To run a branch by hand without touching the real instance use `toriel --isolated` (docs/reference.md "Developing toriel"). Change `PROTOCOL` in `src/shared.ts` when a message shape changes so that an old daemon or controller would misbehave; the controller blocks on a mismatch.
 - Shared helpers live in `src/util.ts` (`errText`, atomic writes, `readJsonOr`, `rotateLog`); use them instead of copying `err instanceof Error ? ...` or the tmp-file-and-rename dance.
