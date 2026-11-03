@@ -33,7 +33,8 @@ import { DEFAULT_GRANT_LIMITS, GrantStore } from "./permissions.ts";
 import { Presence } from "./presence.ts";
 import { DEFAULT_LIMITS, Scheduler } from "./scheduler.ts";
 import { SubagentManager } from "./daemon-subagents.ts";
-import { DEFAULT_SUBAGENT_LIMITS } from "./subagents.ts";
+import { PollBackoff } from "./poll-backoff.ts";
+import { DEFAULT_SUBAGENT_LIMITS, keepMsFrom } from "./subagents.ts";
 import { needsAwake, SleepInhibitor } from "./sleep-inhibit.ts";
 import { collectFindings } from "./doctor.ts";
 import { loadSettings } from "./settings.ts";
@@ -45,7 +46,7 @@ function createContext(shutdown: () => void): DaemonContext {
   const registry = new SessionRegistry();
   const presence = new Presence();
   const usage = new Map<string, UsageReport>();
-  const hub = new ClientHub((socket) => sessionMetas(registry, presence, usage, socket, ctx.scheduler, ctx.grants), {
+  const hub = new ClientHub((socket) => sessionMetas(registry, presence, usage, socket, ctx.scheduler, ctx.grants, ctx.subagents.book), {
     type: "hello",
     protocol: PROTOCOL,
     build: buildInfo(),
@@ -57,7 +58,7 @@ function createContext(shutdown: () => void): DaemonContext {
   const children = new ChildManager(hub, usage, bridges);
   // the scheduler's host reads the context lazily, so it can be built inside it
   const grants = new GrantStore(PERMISSIONS_FILE, Date.now, { perSession: loadSettings().settings.permissionGrantLimit ?? DEFAULT_GRANT_LIMITS.perSession });
-  const ctx: DaemonContext = { registry, hub, children, presence, bridges, scheduler: new Scheduler(schedulerHost(() => ctx, usage), SCHEDULES_FILE, { ...DEFAULT_LIMITS, dailyFires: loadSettings().settings.scheduleDailyLimit ?? DEFAULT_LIMITS.dailyFires }), grants, subagents: new SubagentManager(() => ctx, DEFAULT_SUBAGENT_LIMITS), shutdown };
+  const ctx: DaemonContext = { registry, hub, children, presence, bridges, scheduler: new Scheduler(schedulerHost(() => ctx, usage), SCHEDULES_FILE, { ...DEFAULT_LIMITS, dailyFires: loadSettings().settings.scheduleDailyLimit ?? DEFAULT_LIMITS.dailyFires }), grants, subagents: new SubagentManager(() => ctx, DEFAULT_SUBAGENT_LIMITS, keepMsFrom(process.env.TORIEL_SUBAGENT_KEEP_MS)), shutdown };
   // a session going idle is what a waiting schedule is looking for, and what starts a gap loop's countdown
   children.onSettled = (s) => {
     ctx.subagents.onSettled(s);
@@ -135,6 +136,13 @@ async function main(): Promise<void> {
   // timed grants lapse by themselves (the store never matches an expired one); this only says so
   const grantKeeper = setInterval(() => announceExpired(ctx, ctx.grants.sweep()), 30_000);
   grantKeeper.unref();
+  // finished subagents leave the switcher after a grace window; the sweep reads lineage and file times, so it needs no state of its own
+  const sweepSubagents = (): void => {
+    ctx.subagents.sweep().catch((err: unknown) => log(`subagent sweep failed: ${errText(err)}`));
+  };
+  const subagentKeeper = setInterval(sweepSubagents, Math.max(100, Math.min(30_000, ctx.subagents.keepMs / 2)));
+  subagentKeeper.unref();
+  sweepSubagents();
   const awakeKeeper = setInterval(keepAwake, 5_000);
   awakeKeeper.unref();
   // the start-up self-check: every finding is logged, the controller's notice line shows the ones that matter most
@@ -164,6 +172,7 @@ async function main(): Promise<void> {
   // Liveness poll: refresh metadata, notice crashed children. Also detect
   // orphaning: if our socket file is deleted (rm -rf of the runtime dir),
   // no controller can ever reach us again, so exit instead of haunting.
+  const pollBackoff = new PollBackoff();
   const poller = setInterval(() => {
     if (!fs.existsSync(SOCK)) {
       log("socket file removed - orphaned daemon exiting");
@@ -171,8 +180,13 @@ async function main(): Promise<void> {
       return;
     }
     for (const s of ctx.registry.all()) {
-      if (s.child) {
-        void ctx.children.refreshMeta(s).then(() => ctx.hub.broadcastSessions());
+      if (!s.child) {
+        pollBackoff.forget(s.id);
+      } else if (pollBackoff.due(s.id)) {
+        void ctx.children.refreshMeta(s).then(() => {
+          pollBackoff.result(s.id, s.dead);
+          ctx.hub.broadcastSessions();
+        });
       }
     }
   }, 15_000);

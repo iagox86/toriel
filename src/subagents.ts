@@ -19,6 +19,15 @@ export const HARD_MAX_DEPTH = 2;
 
 export const DEFAULT_SUBAGENT_LIMITS: SubagentLimits = { maxDepth: 1, maxConcurrent: 3, maxSpawnsPerParent: 20, budget: 150_000 };
 
+/** How long a finished subagent stays in the switcher before it is deleted (the trash keeps its file). */
+export const DEFAULT_KEEP_MS = 30 * 60_000;
+
+/** The grace window from `TORIEL_SUBAGENT_KEEP_MS`: a whole number of ms, 0 allowed; anything else (unset, negative, not a number) means the default. */
+export function keepMsFrom(raw: string | undefined): number {
+  const n = raw === undefined || raw.trim() === "" ? Number.NaN : Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : DEFAULT_KEEP_MS;
+}
+
 export type SubagentState = "running" | "done" | "stopped" | "limit" | "failed";
 
 export interface SubagentRecord {
@@ -40,6 +49,8 @@ export interface SubagentRecord {
   result?: string;
   /** Why it ended early, or anything else the parent should know. */
   note?: string;
+  /** When the parent had the result: the tool call answered (foreground) or the message delivered (background). */
+  deliveredAt?: number;
   /** Assistant messages so far. */
   turns: number;
   /** Token budget of this run (profile or default, capped by what the parent had left). */
@@ -164,4 +175,34 @@ export function resultText(r: SubagentRecord): string {
 export function parseHandle(ref: string | undefined): number | undefined {
   const m = /^#?(\d+)$/.exec((ref ?? "").trim());
   return m ? Number(m[1]) : undefined;
+}
+
+/** A subagent session as the sweep sees it. */
+export interface SweepCandidate {
+  uuid: string;
+  /** Its session file, when known. */
+  file?: string;
+  /** Last change to the file (ms), 0 when unknown. */
+  mtime: number;
+  /** A pi process is running for it (someone reopened it, or it is still working). */
+  live: boolean;
+  /** The in-memory record, when this daemon run started it. */
+  record?: Pick<SubagentRecord, "state" | "endedAt" | "deliveredAt">;
+}
+
+/**
+ * The subagents whose grace window has ended. The window starts when the parent had the result
+ * (background: delivery; foreground: the answered call), or at the last change to the file if that
+ * is later, so a subagent someone kept talking to is not swept; with no record (a daemon restart
+ * since) the file alone dates it. Anything live or still running stays.
+ */
+export function expiredSubagents(cands: readonly SweepCandidate[], now: number, keepMs: number): SweepCandidate[] {
+  return cands.filter((c) => {
+    if (c.live || c.record?.state === "running") {
+      return false;
+    }
+    const settled = c.record ? (c.record.deliveredAt ?? c.record.endedAt ?? 0) : 0;
+    const since = Math.max(settled, c.mtime);
+    return since > 0 && now - since >= keepMs;
+  });
 }

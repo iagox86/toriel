@@ -1045,3 +1045,16 @@ describe("daemon: sessions open in an external pi", () => {
     );
   });
 });
+
+describe("daemon: resuming a file that is gone", () => {
+  it("starts a fresh session instead of passing pi both --session and --session-id", async () => {
+    harness = await startDaemon();
+    const c = await harness.connect();
+    const gone = path.join(harness.dir, "gone.jsonl");
+    const { sessionId } = await c.request({ type: "spawn", cwd: harness.dir, sessionFile: gone, ready: true });
+    const file = c.sessions().find((x) => x.id === sessionId)?.sessionFile as string;
+    const argv = JSON.parse(fs.readFileSync(`${file}.argv.json`, "utf8")) as string[];
+    assert.equal(argv.includes("--session"), false);
+    assert.equal(argv.includes("--session-id"), true);
+  });
+});

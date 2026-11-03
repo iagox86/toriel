@@ -136,7 +136,7 @@ entries under `~/.pi/agent/extensions` and `skills`), start `toriel`, and `/relo
 `toriel` (nothing is merged; if both exist you get a warning). Every `RONPI_*`
 environment variable is now `TORIEL_*` with the same suffix, with no fallback
 to the old names. The daemon log moved to `~/.local/state/toriel/daemon.log`.
-The agent tools are `toriel_message`, `toriel_agent`/`toriel_agents` (delegate a task to a subagent session, in the foreground or background, limited in depth, number and tokens; see `docs/reference.md` "Subagents"), `toriel_usage` and `toriel_job` (with `bash`'s new `run_in_background`, an agent can start a long command and be told when it exits);
+The agent tools are `toriel_message`, `toriel_agent`/`toriel_agents` (delegate a task to a subagent session, in the foreground or background, limited in depth, number and tokens; see `docs/reference.md` "Subagents"; a finished subagent greys out in the switcher and is deleted to the trash 30 minutes later, and a permission question it asks appears in its parent's view), `toriel_usage` and `toriel_job` (with `bash`'s new `run_in_background`, an agent can start a long command and be told when it exits);
 sessions recorded before the rename still display their injected messages.
 
 ## Development

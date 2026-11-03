@@ -4,6 +4,9 @@
 import type { Lineage } from "./lineage.ts";
 import type { SwitcherSession } from "./switcher.ts";
 
+/** The row note a session blocked on a dialog gets (session-list.ts). */
+export const WAITING_NOTE = "waiting on permission";
+
 /** What the tree adds to a row. */
 export interface TreeFields {
   /** Nesting level; 0 for a top-level session. */
@@ -16,6 +19,8 @@ export interface TreeFields {
   descendantsWorking: number;
   /** Of those, how many were parked (hidden unless a filter is on). */
   descendantsParked: number;
+  /** Of those, how many are blocked on a permission dialog. */
+  descendantsWaiting: number;
 }
 
 /**
@@ -73,6 +78,7 @@ export function arrangeTree(list: SwitcherSession[], parentOf: ReadonlyMap<strin
     s.descendants = below.length;
     s.descendantsWorking = below.filter((x) => x.state === "streaming" || x.state === "compacting").length;
     s.descendantsParked = below.filter((x) => x.parked).length;
+    s.descendantsWaiting = below.filter((x) => x.note === WAITING_NOTE).length;
   };
   for (const r of roots) {
     visit(r, 0, r);
@@ -92,6 +98,9 @@ export function childNote(s: SwitcherSession): string {
   }
   if (s.descendantsParked) {
     parts.push(`${s.descendantsParked} parked`);
+  }
+  if (s.descendantsWaiting) {
+    parts.push(`${s.descendantsWaiting} waiting on permission`);
   }
   return parts.join(", ");
 }
@@ -163,4 +172,17 @@ export function childCost(lineage: Lineage, uuid: string | undefined, costOf: (i
 /** The banner line shown above the chat box while viewing a child. */
 export function bannerText(rel: Relation, parentName: string): string {
   return `SUBAGENT of ${parentName}  -  /parent jumps to the parent, /detach cuts the link, left goes back`;
+}
+
+/**
+ * Rows of subagents that are not running now (no process, and the daemon holds no record of them,
+ * e.g. after a restart) count as finished: a subagent only exists while it works, so one that is
+ * stopped on disk is over. Rows the daemon already described keep what it said.
+ */
+export function markFinishedSubagents(list: SwitcherSession[], parentOf: ReadonlyMap<string, string>): void {
+  for (const s of list) {
+    if (s.finished === undefined && s.state === "inactive" && s.sessionId && parentOf.has(s.sessionId)) {
+      s.finished = true;
+    }
+  }
 }

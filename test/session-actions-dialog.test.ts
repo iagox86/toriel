@@ -115,3 +115,37 @@ describe("permission prompt: toriel's grant rows", () => {
     assert.ok(t.view.dialog, "the prompt stays open");
   });
 });
+
+describe("a subagent's dialog shown in its parent's view", () => {
+  const PARENT = "/tmp/fake/parent.jsonl";
+  const forwarded = () => {
+    const t = setup();
+    const host = (t.sa as unknown as { h: { viewing: string; metaForPath(k: string): unknown } }).h;
+    host.viewing = PARENT;
+    host.metaForPath = (k: string) => (k === KEY ? { id: 4, attachedToYou: false } : { id: 1, attachedToYou: true });
+    return t;
+  };
+
+  it("answers the subagent's session, not the parent's, without the subagent being attached", async () => {
+    const t = forwarded();
+    assert.equal(t.sa.dialogKeys(t.view, "1", KEY), true);
+    await settle();
+    assert.deepEqual(t.sent, [{ type: "ui_response", session: 4, response: { type: "extension_ui_response", id: "g1", value: "Yes" } }]);
+    assert.equal(t.view.dialog, undefined);
+  });
+
+  it("stores a picked grant row for the subagent's session", async () => {
+    const t = forwarded();
+    t.sa.dialogKeys(t.view, "5", KEY);
+    await settle();
+    assert.equal(t.requests[0]?.session, 4);
+    assert.equal(t.requests[0]?.surface, "bash");
+  });
+
+  it("still refuses a session's own dialog when this controller does not hold its attach", () => {
+    const t = setup();
+    (t.sa as unknown as { h: { metaForPath(k: string): unknown } }).h.metaForPath = () => ({ id: 4, attachedToYou: false });
+    assert.equal(t.sa.dialogKeys(t.view, "1"), false);
+    assert.deepEqual(t.sent, []);
+  });
+});

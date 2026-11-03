@@ -35,6 +35,10 @@ export async function handlePrompt(
       throw new Error("session is live in another pi process - /adopt to fork it into toriel");
     }
     s = ctx.registry.byFile(cmd.sessionFile);
+    if (!s && !fs.existsSync(cmd.sessionFile)) {
+      // a controller still showing a session that was deleted meanwhile (a finished subagent swept, a /delete elsewhere)
+      throw new Error("that session was deleted (its file is gone) - /restore brings it back from the trash");
+    }
     if (!s) {
       // A file this daemon has never handled may be open in an external,
       // presence-less pi process - undetectable directly, but a very recent
@@ -148,21 +152,17 @@ export async function handleSpawn(
   res(true, undefined, { sessionId: s.id });
 }
 
-export async function handleDelete(
-  ctx: DaemonContext,
-  cmd: Cmd<"delete">,
-  res: Responder,
-): Promise<void> {
-  const s = ctx.registry.find(cmd);
-  const file = s?.sessionFile ?? cmd.path;
-  if (!file) {
-    throw new Error("delete requires a session or path");
-  }
+/**
+ * Delete a session the way /delete does: stop its process, drop its schedules and grants, forget
+ * it and move its file to the trash. Returns where the file went (undefined for a session that
+ * never had one). Throws for a bare path with nothing behind it.
+ */
+export async function removeSession(ctx: DaemonContext, s: DaemonSession | undefined, file: string | undefined): Promise<string | undefined> {
   if (s?.child) {
     await ctx.children.deactivate(s);
   }
   // a deleted session takes its schedules and permission grants with it (a stopped one keeps them and is woken when they fire)
-  const uuid = s?.sessionId ?? /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.exec(file)?.[0];
+  const uuid = s?.sessionId ?? (file ? /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.exec(file)?.[0] : undefined);
   if (uuid) {
     const gone = ctx.scheduler.removeSession(uuid);
     if (gone.length > 0) {
@@ -179,12 +179,26 @@ export async function handleDelete(
   // A never-prompted session has no file on disk - dropping the entry is
   // the whole delete. Only a bare path with nothing behind it is an error.
   let trashedTo: string | undefined;
-  if (fs.existsSync(file)) {
+  if (file && fs.existsSync(file)) {
     trashedTo = trashSessionFile(file, TRASH_DIR);
     log(`trashed ${file} -> ${trashedTo}`);
   } else if (!s) {
     throw new Error(`session file does not exist: ${file}`);
   }
+  return trashedTo;
+}
+
+export async function handleDelete(
+  ctx: DaemonContext,
+  cmd: Cmd<"delete">,
+  res: Responder,
+): Promise<void> {
+  const s = ctx.registry.find(cmd);
+  const file = s?.sessionFile ?? cmd.path;
+  if (!file) {
+    throw new Error("delete requires a session or path");
+  }
+  const trashedTo = await removeSession(ctx, s, file);
   ctx.hub.broadcastSessions();
   res(true, undefined, { trashedTo });
 }

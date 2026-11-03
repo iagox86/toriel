@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
-import { errText, readJsonOr, rotateLog, writeFileAtomic, writeJsonAtomic } from "../src/util.ts";
+import { errText, moveFile, readJsonOr, rotateLog, writeFileAtomic, writeJsonAtomic } from "../src/util.ts";
 
 const tmp = (): string => fs.mkdtempSync(path.join(os.tmpdir(), "toriel-util-"));
 
@@ -67,5 +67,35 @@ describe("rotateLog", () => {
 
   it("does nothing when there is no log yet", () => {
     assert.equal(rotateLog(path.join(tmp(), "none.log")), false);
+  });
+});
+
+describe("moveFile", () => {
+  const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "toriel-move-"));
+
+  it("moves a file with a plain rename", () => {
+    const dir = tmp();
+    fs.writeFileSync(path.join(dir, "a"), "x");
+    moveFile(path.join(dir, "a"), path.join(dir, "b"));
+    assert.equal(fs.readFileSync(path.join(dir, "b"), "utf8"), "x");
+    assert.equal(fs.existsSync(path.join(dir, "a")), false);
+  });
+
+  it("copies and deletes when the rename crosses filesystems (EXDEV)", () => {
+    const dir = tmp();
+    fs.writeFileSync(path.join(dir, "a"), "session");
+    const exdev = () => {
+      throw Object.assign(new Error("EXDEV: cross-device link not permitted"), { code: "EXDEV" });
+    };
+    moveFile(path.join(dir, "a"), path.join(dir, "b"), exdev);
+    assert.equal(fs.readFileSync(path.join(dir, "b"), "utf8"), "session");
+    assert.equal(fs.existsSync(path.join(dir, "a")), false);
+  });
+
+  it("does not hide any other failure", () => {
+    const denied = () => {
+      throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+    };
+    assert.throws(() => moveFile("/nonexistent-a", "/nonexistent-b", denied), /EACCES/);
   });
 });

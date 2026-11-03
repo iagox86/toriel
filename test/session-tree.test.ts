@@ -4,7 +4,7 @@ import type { GroupsFile } from "../src/groups.ts";
 import { pruneStale } from "../src/groups.ts";
 import { type Lineage, parentMap } from "../src/lineage.ts";
 import { moveSession } from "../src/session-list.ts";
-import { arrangeTree, bannerText, childCost, childNote, descendantIds, relationOf, visibleRows } from "../src/session-tree.ts";
+import { arrangeTree, bannerText, markFinishedSubagents, childCost, childNote, descendantIds, relationOf, visibleRows } from "../src/session-tree.ts";
 import { buildStatusLine } from "../src/status.ts";
 import { Switcher, type SwitcherSession } from "../src/switcher.ts";
 
@@ -182,5 +182,42 @@ describe("status line for a child", () => {
     );
     assert.match(line, /SUBAGENT of Boss/);
     assert.match(line, /\+\$0\.25 children/);
+  });
+});
+
+describe("markFinishedSubagents", () => {
+  it("treats a stopped subagent the daemon knows nothing about as finished, and leaves the rest alone", () => {
+    const list = [row("p"), row("sleeping", { state: "inactive" }), row("working", { state: "streaming" }), row("told", { state: "inactive", finished: false }), row("plain", { state: "inactive" })];
+    markFinishedSubagents(list, new Map([["sleeping", "p"], ["working", "p"], ["told", "p"]]));
+    assert.deepEqual(list.map((s) => s.finished), [undefined, true, undefined, false, undefined]);
+  });
+
+  it("greys a finished row's name and age instead of colouring them by age", () => {
+    const sw = new Switcher();
+    sw.sessions = [row("done", { finished: true }), row("live")];
+    sw.selectedKey = "live";
+    sw.refresh();
+    const lines = sw.render(100);
+    const done = lines.find((l) => strip(l).includes("done")) ?? "";
+    const live = lines.find((l) => strip(l).includes("live")) ?? "";
+    assert.notEqual(done.replace(/done/g, "x"), live.replace(/live/g, "x"), "a finished row is drawn differently from a live one of the same age");
+  });
+});
+
+describe("subagents waiting on a dialog", () => {
+  it("counts them on the parent's row and says so in its note", () => {
+    const list = [row("a"), row("k1", { note: "waiting on permission" }), row("k2"), row("k3", { note: "waiting on permission" })];
+    const [a] = arrangeTree(list, new Map([["k1", "a"], ["k2", "a"], ["k3", "a"]]));
+    assert.equal(a?.descendantsWaiting, 2);
+    assert.equal(childNote(a as SwitcherSession), "3 children, 2 waiting on permission");
+  });
+
+  it("marks a folded parent's row with the attention marker so the wait is not hidden", () => {
+    const sw = new Switcher();
+    sw.sessions = arrangeTree([row("parent"), row("kid", { note: "waiting on permission" })], new Map([["kid", "parent"]]));
+    sw.collapsed = new Set(["parent"]);
+    sw.refresh();
+    const line = sw.render(100).map(strip).find((l) => l.includes("parent")) ?? "";
+    assert.match(line, /^\s*!\s+/);
   });
 });

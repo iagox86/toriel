@@ -579,15 +579,17 @@ Near-term (post-budget-reset), rough order = dependency + value:
    under the parent, agent types as markdown files (Claude-style), limits
    enforced by the daemon; pi-subagents is NOT used. Full proposal and the
    decisions are in the job board ticket "Big feature - subagents" (Ron's
-   notes folder, Issues/). BUILT so far (tickets 1-5 of 7): agent profiles
+   notes folder, Issues/). BUILT so far (tickets 1-6 of 7): agent profiles
    (`agents/`, `/new -a`, `/agents`; profile saved per session UUID), session
    identity (UUIDs chosen at spawn via --session-id, `resolve`, unique names),
    the parent/child tree for agent-started sessions (`kind: "subagent"` in
    lineage.json: nesting, folds, banner, /parent, /detach), session
-   messaging (`toriel_message` tool, daemon `message`), and the spawn tool with
+   messaging (`toriel_message` tool, daemon `message`), the spawn tool with
    limits (`toriel_agent`/`toriel_agents`, `agent_spawn`/`agents_op`; see
-   docs/reference.md "Subagents"). NOT built: permission trickle-up (6),
-   delegation skill and shipped types (7). Spawn decisions: records live in
+   docs/reference.md "Subagents"), and the lifecycle around it: finished
+   subagents dim then auto-delete (#108, #109) and their permission dialogs
+   show in the parent (ticket 6). NOT built: delegation skill and shipped
+   types (7). Spawn decisions: records live in
    daemon memory only (a restart loses handles and spawn counts and ends
    running subagents; lineage and files stay); limits are the constants in
    `subagents.ts`, not settings yet; the foreground call is one long request
