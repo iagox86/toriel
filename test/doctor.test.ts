@@ -31,6 +31,7 @@ describe("doctor checks", () => {
       { ...setup({}).opts, env: { WAYLAND_DISPLAY: "wayland-0" }, pathDirs: ["/nonexistent-path"], startup: [] },
       { ...setup({}).opts, tty: true, env: { TERM: "xterm-256color" }, startup: [] },
       setup({ gitMcp: "none" }).opts,
+      setup({ gdbMcp: "none", ghidraMcp: "codemode" }).opts,
     ];
     const seen = new Set<string>();
     for (const opts of scenarios) {
@@ -101,9 +102,28 @@ describe("doctor checks", () => {
     for (const bad of ["default", "codemode", "deferred"]) {
       const [f] = grade(bad);
       assert.equal(f?.level, "feature", bad);
-      assert.match(f?.message ?? "", /code-review and git-archaeology agents need an MCP server named "git".*"exposure": "direct"/, bad);
+      assert.match(f?.message ?? "", /advisory-diff, code-review and git-archaeology agents need an MCP server named "git".*"exposure": "direct"/, bad);
     }
     assert.match(grade("none")[0]?.message ?? "", /MCP server "git" is not configured/);
+  });
+
+  it("asks for pi-web-access when it is missing from pi's packages, since the research-web agent has no web tools without it", () => {
+    assert.deepEqual(collectFindings(setup({}).opts).filter((x) => x.id === "web-package"), []);
+    const [f] = collectFindings(setup({ noWeb: true }).opts).filter((x) => x.id === "web-package");
+    assert.equal(f?.level, "feature");
+    assert.match(f?.message ?? "", /advisory-diff and research-web agents need pi-web-access in the packages of .*settings\.json \(pi install npm:pi-web-access\)/);
+    assert.equal(f?.fix, undefined);
+  });
+
+  it("asks for the gdb and ghidra MCP servers the same way, one check per server", () => {
+    const grade = (id: string, over: object) => collectFindings(setup(over).opts).filter((x) => x.id === id);
+    assert.deepEqual(grade("mcp-gdb-direct", {}), []);
+    assert.deepEqual(grade("mcp-ghidra-direct", {}), []);
+    const [gdb] = grade("mcp-gdb-direct", { gdbMcp: "codemode" });
+    assert.equal(gdb?.level, "feature");
+    assert.match(gdb?.message ?? "", /crash-analysis and debug agents need an MCP server named "gdb".*"exposure": "direct"/);
+    assert.match(grade("mcp-ghidra-direct", { ghidraMcp: "none" })[0]?.message ?? "", /binary-diff, re-explain, re-find and re-trace agents need an MCP server named "ghidra".*MCP server "ghidra" is not configured/);
+    assert.deepEqual(grade("mcp-git-direct", { gdbMcp: "codemode", ghidraMcp: "none" }), [], "one server's problem is not another's");
   });
 
   it("asks for the sleep lock only on linux, and only when preventSleep is not off", () => {
@@ -127,7 +147,7 @@ describe("doctor report", () => {
     assert.match(text, /Required: all 5 ok/);
     assert.match(text, /Recommended: all 2 ok/);
     assert.doesNotMatch(text, / ok {7}/);
-    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(4 ok\)/);
+    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(7 ok\)/);
   });
 });
 
@@ -156,7 +176,7 @@ describe("doctor report colours", () => {
   it("colours the compact report too, with the passing checks' count dim", () => {
     const coloured = renderDoctor(checks(), { compact: true, style: ANSI_STYLE });
     assert.match(coloured, /Required\x1b\[22m: \x1b\[32mall 5 ok\x1b\[39m/);
-    assert.match(coloured, /\x1b\[2m {2}\(4 ok\)\x1b\[22m/);
+    assert.match(coloured, /\x1b\[2m {2}\(7 ok\)\x1b\[22m/);
   });
 });
 

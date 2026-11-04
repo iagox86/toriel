@@ -13,9 +13,22 @@ import { delimiter, join } from "node:path";
 import { mcpWarnings, mergeMcpServers, loadAgents } from "./agents.ts";
 import { piAgentDir } from "./pi-dir.ts";
 import { startupProblems } from "./preflight.ts";
-import { type AuditOptions, auditFindings, type Finding, type Fix, type Level, PI_RESOURCES_DIR } from "./resources.ts";
+import { type AuditOptions, auditFindings, type Finding, type Fix, type Level, PI_RESOURCES_DIR, piPackageListed } from "./resources.ts";
 import { loadSettings, resolveChildConfig } from "./settings.ts";
 import { writeFileAtomic } from "./util.ts";
+
+const WEB_PACKAGE = "pi-web-access";
+/** "a", "a and b", "a, b and c". */
+function nameList(names: readonly string[]): string {
+  return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/** MCP servers the shipped agent profiles use, with how to set each up (one doctor check per server). */
+const MCP_AGENT_SERVERS: ReadonlyArray<{ name: string; hint: string }> = [
+  { name: "git", hint: "toriel-git-mcp, started without --repository" },
+  { name: "gdb", hint: "gdb-mcp, e.g. uv run gdb-mcp" },
+  { name: "ghidra", hint: "a Ghidra MCP server" },
+];
 
 export interface CatalogEntry {
   /** The id findings carry. */
@@ -37,7 +50,10 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: "settings", level: "recommended", title: "the toriel settings file is valid" },
   { id: "permission-package", level: "recommended", title: "pi-permission-system is installed and has a usable config" },
   { id: "grants-chain", level: "feature", title: 'permission grants are switched on ("toriel-grants" in authorizerChain)', needsPermissionPackage: true },
-  { id: "mcp-git-direct", level: "feature", title: 'the git MCP server is configured with "exposure": "direct" (the code-review and git-archaeology agents need it)' },
+  { id: "mcp-git-direct", level: "feature", title: 'the git MCP server is configured with "exposure": "direct" (the code-review, git-archaeology and advisory-diff agents need it)' },
+  { id: "web-package", level: "feature", title: "pi-web-access is installed (the research-web and advisory-diff agents need its web tools)" },
+  { id: "mcp-gdb-direct", level: "feature", title: 'the gdb MCP server is configured with "exposure": "direct" (the debug and crash-analysis agents need it)' },
+  { id: "mcp-ghidra-direct", level: "feature", title: 'the ghidra MCP server is configured with "exposure": "direct" (the re-explain, re-find, re-trace and binary-diff agents need it)' },
   { id: "sleep-lock", level: "feature", title: "the machine is kept awake for scheduled runs (systemd-inhibit)" },
   { id: "clipboard", level: "feature", title: "clipboard tools for paste and copy (wl-clipboard on Wayland, xclip on X11)" },
   { id: "truecolor", level: "feature", title: "the terminal shows toriel's theme as intended (truecolor)" },
@@ -96,18 +112,29 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
   if (!existsSync(piCli)) {
     out.push({ id: "pi-cli", level: "required", message: `pi's cli.js is not at ${piCli}: run npm install in the toriel checkout, or set piCli in the toriel settings` });
   }
-  // the shipped git agents (code-review, git-archaeology) name mcp__git__* tools: pi gives an agent an MCP tool only when its server is exposed directly
-  const gitAgents = loadAgents(process.cwd(), env).agents.filter((a) => a.source === "built-in" && (a.tools ?? []).some((t) => t.startsWith("mcp__git__")));
-  if (gitAgents.length > 0) {
-    const servers = mergeMcpServers([join(opts.agentDir ?? piAgentDir(env), "mcp.json")]);
-    const problems = gitAgents.flatMap((a) => mcpWarnings(a, servers));
-    if (problems.length > 0) {
+  // shipped agents that name mcp__<server>__* tools: pi gives an agent an MCP tool only when its server is exposed directly
+  const shipped = loadAgents(process.cwd(), env).agents.filter((a) => a.source === "built-in");
+  const mcpFile = join(opts.agentDir ?? piAgentDir(env), "mcp.json");
+  const servers = mergeMcpServers([mcpFile]);
+  for (const server of MCP_AGENT_SERVERS) {
+    const users = shipped.filter((a) => (a.tools ?? []).some((t) => t.startsWith(`mcp__${server.name}__`)));
+    const problems = users.flatMap((a) => mcpWarnings(a, servers));
+    if (users.length > 0 && problems.length > 0) {
       out.push({
-        id: "mcp-git-direct",
+        id: `mcp-${server.name}-direct`,
         level: "feature",
-        message: `the ${gitAgents.map((a) => a.name).join(" and ")} agents need an MCP server named "git" (toriel-git-mcp, started without --repository) with "exposure": "direct" in ${join(opts.agentDir ?? piAgentDir(env), "mcp.json")}; without it they have no git tool (${problems[0]})`,
+        message: `the ${nameList(users.map((a) => a.name))} ${users.length > 1 ? "agents need" : "agent needs"} an MCP server named "${server.name}" (${server.hint}) with "exposure": "direct" in ${mcpFile}; without it ${users.length > 1 ? "they have" : "it has"} no ${server.name} tool (${problems[0]})`,
       });
     }
+  }
+  // the shipped research-web agent names pi-web-access's tools; without the package it has nothing to search with
+  const webAgents = shipped.filter((a) => (a.tools ?? []).some((t) => t === "web_search" || t === "fetch_content"));
+  if (webAgents.length > 0 && piPackageListed(opts.agentDir ?? piAgentDir(env), WEB_PACKAGE) === false) {
+    out.push({
+      id: "web-package",
+      level: "feature",
+      message: `the ${nameList(webAgents.map((a) => a.name))} ${webAgents.length > 1 ? "agents need" : "agent needs"} ${WEB_PACKAGE} in the packages of ${join(opts.agentDir ?? piAgentDir(env), "settings.json")} (pi install npm:${WEB_PACKAGE}) and a search provider set up for it; without it the agent has no web tools`,
+    });
   }
   const dirs = opts.pathDirs ?? (env.PATH ?? "").split(delimiter).filter(Boolean);
   if ((opts.platform ?? process.platform) === "linux" && loaded.settings.preventSleep !== false && !onPath("systemd-inhibit", dirs)) {

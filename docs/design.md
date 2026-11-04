@@ -590,10 +590,11 @@ Near-term (post-budget-reset), rough order = dependency + value:
    subagents dim then auto-delete (#108, #109) and their permission dialogs
    show in the parent (ticket 6). The delegation skill and the first wave of
    shipped types (ticket 7: explore, summarize, code-review, plan,
-   git-archaeology, test-runner) are built; the web, writing and MCP-backed
-   types (research-web, edit-writing, docs-writer, triage; reverse-engineer,
-   debug, vuln-hunt, design) wait for trials on a small model and for their
-   MCP servers. `research-code` was dropped (explore covers it). Spawn decisions: records live in
+   git-archaeology, test-runner), wave B (research-web, edit-writing,
+   docs-writer, triage; ticket 7b) and wave C (debug, crash-analysis, binary-diff, advisory-diff, re-explain, re-find,
+   re-trace, vuln-hunt, design; ticket 7c) are built, with hand trials still to
+   do; the Ghidra types need a Ghidra MCP server (IDA or Binary Ninja servers
+   could follow, as further `mcp__<server>__*` profiles). `research-code` was dropped (explore covers it). Spawn decisions: records live in
    daemon memory only (a restart loses handles and spawn counts and ends
    running subagents; lineage and files stay); limits are the constants in
    `subagents.ts`, not settings yet; the foreground call is one long request
