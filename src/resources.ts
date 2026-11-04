@@ -139,23 +139,32 @@ function piSetupProblem(agentDir: string): string | undefined {
 
 const PERMISSION_PACKAGE = "pi-permission-system";
 
+/** Whether pi's settings.json `packages` lists a package whose entry mentions `name`; undefined when settings.json is unreadable. */
+export function piPackageListed(agentDir: string, name: string): boolean | undefined {
+  const file = join(agentDir, "settings.json");
+  if (!existsSync(file)) {
+    return false;
+  }
+  try {
+    const settings = JSON.parse(readFileSync(file, "utf8")) as { packages?: unknown };
+    const packages = Array.isArray(settings.packages) ? settings.packages : [];
+    return packages.some((p) => JSON.stringify(p).includes(name));
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * pi-permission-system gates the tools its rules mark `ask`, and toriel shows its dialogs, but
  * it is the user's own pi package (settings.json `packages`), not something toriel ships. Without
  * it nothing asks; with it but without a readable config, it asks about everything.
  */
 function permissionSystemProblem(agentDir: string): string | undefined {
-  let packages: unknown[] = [];
-  const file = join(agentDir, "settings.json");
-  if (existsSync(file)) {
-    try {
-      const settings = JSON.parse(readFileSync(file, "utf8")) as { packages?: unknown };
-      packages = Array.isArray(settings.packages) ? settings.packages : [];
-    } catch {
-      return undefined; // unreadable: piSetupProblem says so
-    }
+  const installed = piPackageListed(agentDir, PERMISSION_PACKAGE);
+  if (installed === undefined) {
+    return undefined; // unreadable: piSetupProblem says so
   }
-  if (!packages.some((p) => JSON.stringify(p).includes(PERMISSION_PACKAGE))) {
+  if (!installed) {
     return `${PERMISSION_PACKAGE} is not in pi's packages (settings.json): sessions run without permission prompts`;
   }
   const config = join(agentDir, "extensions", PERMISSION_PACKAGE, "config.json");

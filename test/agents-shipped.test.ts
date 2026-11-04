@@ -14,13 +14,15 @@ const profiles: Array<{ file: string; agent: AgentProfile }> = files.map((file) 
   agent: parseAgent(fs.readFileSync(path.join(DIR, file), "utf8"), "built-in", path.join(DIR, file)),
 }));
 
-const BUILT_IN_TOOLS = new Set(["read", "grep", "find", "ls", "bash", "edit", "write", "web_search", "web_fetch"]);
+const BUILT_IN_TOOLS = new Set(["read", "grep", "find", "ls", "bash", "edit", "write", "web_search", "fetch_content"]);
+/** The first-wave profiles were written to the tighter 1500-character bar; later ones (tool-heavy, for a 27b model) may use 2500. */
+const COMPACT = new Set(["explore", "summarize", "code-review", "plan", "test-runner", "git-archaeology"]);
 /** Tools that change files or run commands: only the permission system (an extension) stands between them and the disk. */
 const GATED = new Set(["bash", "edit", "write"]);
 
 describe("shipped agent profiles", () => {
   it("has the profiles the delegation skill relies on", () => {
-    for (const name of ["explore", "summarize", "code-review", "plan", "test-runner", "git-archaeology"]) {
+    for (const name of ["explore", "summarize", "code-review", "plan", "test-runner", "git-archaeology", "research-web", "edit-writing", "docs-writer", "triage", "advisory-diff", "binary-diff", "debug", "crash-analysis", "re-explain", "re-find", "re-trace", "vuln-hunt", "design"]) {
       assert.ok(profiles.some((p) => p.agent.name === name), `agents/${name}.md is missing`);
     }
   });
@@ -34,7 +36,8 @@ describe("shipped agent profiles", () => {
       });
 
       it("keeps the system prompt short", () => {
-        assert.ok(agent.prompt.length <= 1500, `prompt is ${agent.prompt.length} characters (limit 1500)`);
+        const limit = COMPACT.has(agent.name) ? 1500 : 2500;
+        assert.ok(agent.prompt.length <= limit, `prompt is ${agent.prompt.length} characters (limit ${limit})`);
         assert.ok(agent.prompt.trim().length > 0);
       });
 
@@ -49,6 +52,12 @@ describe("shipped agent profiles", () => {
 
       it("keeps extensions on when it names MCP tools: pi's MCP support is an extension", () => {
         if ((agent.tools ?? []).some((t) => t.startsWith("mcp__"))) {
+          assert.equal(agent.extensions, true);
+        }
+      });
+
+      it("keeps extensions on when it names web tools: pi-web-access is a pi package", () => {
+        if ((agent.tools ?? []).some((t) => t === "web_search" || t === "fetch_content")) {
           assert.equal(agent.extensions, true);
         }
       });

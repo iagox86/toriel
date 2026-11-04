@@ -35,6 +35,11 @@ export interface Over {
   noInhibit?: boolean;
   /** The git MCP server in mcp.json: "direct" (default, healthy), another exposure, or "none" for no mcp.json at all. */
   gitMcp?: string;
+  /** Leave pi-web-access out of pi's packages. */
+  noWeb?: boolean;
+  /** Same for the gdb and ghidra servers (the debug and re-* agents). */
+  gdbMcp?: string;
+  ghidraMcp?: string;
 }
 
 export function setup(home: string, over: Over = {}) {
@@ -42,7 +47,7 @@ export function setup(home: string, over: Over = {}) {
   const agentDir = path.join(base, "agent");
   if (!over.noPiDir) {
     mk(path.join(agentDir, "extensions", "pi-permission-system"));
-    fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ packages: over.noPackage ? [] : ["npm:@gotgenes/pi-permission-system"] }));
+    fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ packages: [...(over.noPackage ? [] : ["npm:@gotgenes/pi-permission-system"]), ...(over.noWeb ? [] : ["npm:pi-web-access"])] }));
     if (!over.noPackage) {
       fs.writeFileSync(path.join(agentDir, "extensions", "pi-permission-system", "config.json"), typeof over.config === "string" ? over.config : JSON.stringify(over.config ?? GOOD_CONFIG));
     }
@@ -53,7 +58,14 @@ export function setup(home: string, over: Over = {}) {
   }
   if (over.gitMcp !== "none" && !over.noPiDir) {
     mk(agentDir);
-    fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { git: { command: "node", args: ["x"], ...(over.gitMcp === "default" ? {} : { exposure: over.gitMcp ?? "direct" }) } } }));
+    const server = (exposure: string | undefined) => ({ command: "node", args: ["x"], ...(exposure === "default" ? {} : { exposure: exposure ?? "direct" }) });
+    const mcpServers: Record<string, unknown> = { git: server(over.gitMcp) };
+    for (const [name, exposure] of [["gdb", over.gdbMcp], ["ghidra", over.ghidraMcp]] as const) {
+      if (exposure !== "none") {
+        mcpServers[name] = server(exposure);
+      }
+    }
+    fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers }));
   }
   const root = path.join(base, "pi");
   if (!over.noResources) {

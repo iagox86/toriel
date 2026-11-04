@@ -53,7 +53,7 @@ const KEYS = new Set(["name", "description", "tools", "model", "thinking", "maxt
 const THINKING = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
 /** Claude-style capitalized tool names mapped to pi's lowercase ones. */
-const TOOL_ALIASES: Record<string, string> = { glob: "find", webfetch: "web_fetch", websearch: "web_search" };
+const TOOL_ALIASES: Record<string, string> = { glob: "find", webfetch: "fetch_content", websearch: "web_search" };
 
 export function normalizeTool(t: string): string {
   const name = t.trim();
