@@ -69,4 +69,10 @@ export interface Host {
   dispose(): void;
   /** /mouse: "on", "off", "toggle", or "" (just report the state); says what happened. */
   setMouse(arg: string): void;
+  /**
+   * Open `report` as a new top-level session in `cwd` named `name`: the report
+   * becomes the session's opening context, and it starts ASLEEP (nothing is
+   * prompted into it). Resolves to the name actually used.
+   */
+  openReviewSession(cwd: string, name: string, report: string): Promise<string>;
 }
