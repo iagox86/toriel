@@ -8,8 +8,10 @@ Everything else (keys, env, code layout, design, backlog): `docs/`.
 
 ## Job board
 
-Work is tracked on the Vikunja board (projects "Toriel - base" and
-"Toriel - Subagents"), not in this repo's issues. When assigned a ticket: work it
+Work is tracked on the Vikunja board (projects "Toriel - base",
+"Toriel - Subagents", and "Toriel - Sandboxing" for the file-handling /
+scoped-agent work tracked in docs/file-handling-proposal.md), not in this
+repo's issues. When assigned a ticket: work it
 per this file, then leave the task open with the `needs verification` label and
 a `Done (agent, <date>)` comment with validation steps - only Ron marks tasks
 done. Full workflow: the `toriel-job-board-workflow` skill; API details: the
