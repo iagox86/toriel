@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { AgentProfile } from "../src/agents.ts";
 import { subagentDepth } from "../src/lineage.ts";
-import { abnormalEnd, mayDelegate, childBudget, lastAssistantText, messageTokens, DEFAULT_SUBAGENT_LIMITS, describeRecord, expiredSubagents, keepMsFrom, type SweepCandidate, limitBreach, parseHandle, refuseSpawn, resultText, SubagentBook } from "../src/subagents.ts";
+import { abnormalEnd, INJECT_TYPES, mayDelegate, childBudget, lastAssistantText, subagentResultText, messageTokens, DEFAULT_SUBAGENT_LIMITS, describeRecord, expiredSubagents, keepMsFrom, type SweepCandidate, limitBreach, parseHandle, refuseSpawn, resultText, SubagentBook } from "../src/subagents.ts";
+import { isInjectType } from "../src/transcript.ts";
 
 const L = DEFAULT_SUBAGENT_LIMITS;
 const profile = (over: Partial<AgentProfile> = {}): AgentProfile => ({ name: "explore", description: "d", prompt: "", canSpawn: false, minimal: true, extensions: true, source: "built-in", file: "x", ...over });
@@ -167,6 +168,92 @@ describe("lastAssistantText", () => {
     ];
     assert.equal(lastAssistantText(messages), "the review so far");
     assert.equal(lastAssistantText([{ role: "assistant", content: [] }]), undefined);
+  });
+});
+
+describe("subagentResultText", () => {
+  const report = "x".repeat(2000);
+  const ack = "That is the same npm test run already reported above. Nothing new to add.";
+  const mid = "y".repeat(1200);
+  const notice = (customType: string) => ({ role: "custom", customType, content: [] });
+
+  it("returns the report when a job notice sits between it and a short acknowledgment", () => {
+    const messages = [
+      { role: "assistant", content: [{ type: "text", text: report }] },
+      notice("toriel-job"),
+      { role: "assistant", content: [{ type: "text", text: ack }] },
+    ];
+    assert.equal(subagentResultText(messages), report);
+  });
+
+  it("returns the newest text when a notice sits between but the previous is not twice as long", () => {
+    const messages = [
+      { role: "assistant", content: [{ type: "text", text: mid }] },
+      notice("toriel-inject"),
+      { role: "assistant", content: [{ type: "text", text: "z".repeat(1000) }] },
+    ];
+    assert.equal(subagentResultText(messages), "z".repeat(1000));
+  });
+
+  it("returns the newest text when a terse answer follows a long text with no notice between", () => {
+    const messages = [
+      { role: "assistant", content: [{ type: "text", text: report }] },
+      { role: "assistant", content: [{ type: "text", text: "src/foo.ts:42" }] },
+    ];
+    assert.equal(subagentResultText(messages), "src/foo.ts:42");
+  });
+
+  it("returns the long previous text when a notice-triggered terse answer follows it (the original bug)", () => {
+    const messages = [
+      { role: "assistant", content: [{ type: "text", text: report }] },
+      notice("ronpi-inject"),
+      { role: "assistant", content: [{ type: "text", text: "src/foo.ts:42" }] },
+    ];
+    assert.equal(subagentResultText(messages), report);
+  });
+
+  it("prefers the previous text at exactly twice the length when a notice sits between", () => {
+    const messages = [
+      { role: "assistant", content: [{ type: "text", text: "a".repeat(200) }] },
+      notice("toriel-job"),
+      { role: "assistant", content: [{ type: "text", text: "b".repeat(100) }] },
+    ];
+    assert.equal(subagentResultText(messages), "a".repeat(200));
+  });
+
+  it("returns the terse final answer when the previous text is short, notice or not", () => {
+    const messages = [
+      { role: "assistant", content: [{ type: "text", text: "some short note" }] },
+      notice("toriel-job"),
+      { role: "assistant", content: [{ type: "text", text: "src/foo.ts:42" }] },
+    ];
+    assert.equal(subagentResultText(messages), "src/foo.ts:42");
+  });
+
+  it("skips empty and whitespace-only texts, ignores non-assistant roles and non-array content", () => {
+    const messages = [
+      { role: "assistant", content: [{ type: "text", text: report }] },
+      { role: "assistant", content: [{ type: "text", text: "   " }] },
+      { role: "user", content: [{ type: "text", text: "hello" }] },
+      { role: "assistant", content: "not an array" },
+      notice("toriel-job"),
+      { role: "assistant", content: [{ type: "text", text: ack }] },
+    ];
+    assert.equal(subagentResultText(messages), report);
+  });
+
+  it("returns undefined when there are no assistant texts", () => {
+    const messages = [
+      { role: "assistant", content: [] },
+      { role: "user", content: [{ type: "text", text: "hi" }] },
+    ];
+    assert.equal(subagentResultText(messages), undefined);
+  });
+
+  it("knows every inject type the transcript classifier knows (the copied set must not drift)", () => {
+    for (const type of INJECT_TYPES) {
+      assert.equal(isInjectType(type), true, `${type} is an inject type in transcript.ts too`);
+    }
   });
 });
 
