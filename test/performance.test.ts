@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { describe, it } from "node:test";
 import { parseCommandLine } from "../src/cli.ts";
 import { SESSION_COMMANDS } from "../src/commands.ts";
-import { capTranscript, clipEntryLine, performanceDir, performancePrompt, runPerformance, savePerformance, TRANSCRIPT_CAP_BYTES } from "../src/performance.ts";
+import { capTranscript, clipEntryLine, performanceDir, performancePrompt, runPerformance, savePerformance, TRANSCRIPT_TAIL_BYTES } from "../src/performance.ts";
 
 const HEADER = '{"type":"session","id":"abcd","cwd":"/tmp"}';
 
@@ -55,7 +55,7 @@ describe("capTranscript", () => {
     assert.equal(truncated, true);
     const lines = capped.split("\n");
     assert.equal(lines[0], HEADER, "the session header comes first");
-    assert.match(lines[1], /^\[toriel: \d+ earlier entries omitted to fit the .* MiB transcript cap\]$/, "the omission note follows the header");
+    assert.match(lines[1], /^\[toriel: \d+ earlier entries omitted to fit the \d+-byte tail excerpt\]$/, "the omission note follows the header");
     assert.equal(lines.at(-1), lineOf(2, 29), "the newest entry is kept");
     assert.ok(!capped.includes(lineOf(2, 0)), "the oldest entries are dropped");
     assert.ok(Buffer.byteLength(capped) <= 16 * 1024 + 200, `capped length ${Buffer.byteLength(capped)}`);
@@ -139,20 +139,67 @@ describe("runPerformance", () => {
           allJson,
           isPerf: prompt.includes("performance review"),
           omissionInPrompt: prompt.includes("earliest entries were dropped"),
+          framingInPrompt: prompt.includes("Mechanical stats from the full transcript follow"),
+          statsInPrompt: prompt.includes("## Transcript stats"),
         }));
       `);
       const r = await runPerformance({ piCli: cli, file: session, capBytes: 10_000 });
       assert.equal(r.truncated, true);
-      const seen = JSON.parse(r.answer) as { noTools: boolean; header: string; note: string; kept: number; oldest: number; newest: number; allJson: boolean; isPerf: boolean; omissionInPrompt: boolean };
+      const seen = JSON.parse(r.answer) as { noTools: boolean; header: string; note: string; kept: number; oldest: number; newest: number; allJson: boolean; isPerf: boolean; omissionInPrompt: boolean; framingInPrompt: boolean; statsInPrompt: boolean };
       assert.equal(seen.noTools, true);
       assert.equal(seen.isPerf, true);
       assert.equal(seen.header, HEADER, "pi received the session header first");
-      assert.match(seen.note, /^\[toriel: \d+ earlier entries omitted to fit the .* transcript cap\]$/, "the omission note follows the header");
+      assert.match(seen.note, /^\[toriel: \d+ earlier entries omitted to fit the \d+-byte tail excerpt\]$/, "the omission note follows the header");
       assert.equal(seen.allJson, true, "every entry pi received is valid JSON");
       assert.equal(seen.newest, 99, "the newest entry is kept");
       assert.equal(seen.oldest, seen.newest - seen.kept + 1, "the kept entries are the most recent ones");
       assert.equal(seen.omissionInPrompt, true, "the prompt carries the omission");
+      assert.equal(seen.framingInPrompt, true, "the prompt carries the framing line");
+      assert.equal(seen.statsInPrompt, true, "the prompt carries the stats block");
       assert.equal(fs.readFileSync(session, "utf8"), big);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("sends pi the 256 KiB tail excerpt by default, while the stats still come from the whole transcript", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "perf-test-"));
+    try {
+      const session = path.join(dir, "s.jsonl");
+      // ~750 entries of ~400 bytes: well over the 256 KiB tail, with a repeated
+      // command only in the prefix so the test proves the stats span the whole file
+      const entry = (n: number, command?: string) =>
+        JSON.stringify({ type: "message", n, message: { role: "assistant", provider: "p", model: "m", content: command ? [{ type: "toolCall", id: `c${n}`, name: "bash", arguments: { command } }] : [] }, pad: command ? "" : "x".repeat(360) });
+      const lines = [HEADER, ...Array.from({ length: 750 }, (_, i) => entry(i, i < 2 ? "npm run only-early" : undefined))];
+      const big = `${lines.join("\n")}\n`;
+      fs.writeFileSync(session, big);
+      const cli = stubPi(dir, `
+        import fs from "node:fs";
+        const f = process.argv[process.argv.indexOf("--session") + 1];
+        const text = fs.readFileSync(f, "utf8");
+        const kept = text.split("\\n").filter((l) => l).length;
+        const prompt = process.argv.at(-1) ?? "";
+        console.log(JSON.stringify({
+          copyBytes: Buffer.byteLength(text),
+          kept,
+          hasEarlyEntry: text.includes('"n":0'),
+          promptHasFraming: prompt.includes("Mechanical stats from the full transcript follow"),
+          promptHasStats: prompt.includes("## Transcript stats"),
+          statsEntryCountLine: prompt.includes("across 751 entries"),
+          statsMentionEarlyCommand: prompt.includes("npm run only-early"),
+        }));
+      `);
+      const r = await runPerformance({ piCli: cli, file: session });
+      assert.equal(r.truncated, true, "the copy was cut to the tail");
+      const seen = JSON.parse(r.answer) as { copyBytes: number; kept: number; hasEarlyEntry: boolean; promptHasFraming: boolean; promptHasStats: boolean; statsEntryCountLine: boolean; statsMentionEarlyCommand: boolean };
+      assert.ok(seen.copyBytes <= TRANSCRIPT_TAIL_BYTES + 512, `copy is ${seen.copyBytes} bytes`);
+      assert.equal(seen.hasEarlyEntry, false, "the oldest entries are not in the copy");
+      assert.ok(seen.kept > 1 && seen.kept < 751, `pi received ${seen.kept} lines of the 751-line file`);
+      assert.equal(seen.promptHasFraming, true, "the prompt carries the framing line");
+      assert.equal(seen.promptHasStats, true, "the prompt carries the stats block");
+      assert.equal(seen.statsEntryCountLine, true, "the stats counted all 751 entries, not just the tail");
+      assert.equal(seen.statsMentionEarlyCommand, true, "the stats profiled the dropped prefix too");
+      assert.equal(fs.readFileSync(session, "utf8"), big, "the original session file is untouched");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -168,7 +215,7 @@ describe("runPerformance", () => {
         const f = process.argv[process.argv.indexOf("--session") + 1];
         console.log("lines=" + fs.readFileSync(f, "utf8").split("\\n").filter((l) => l).length + " omission=" + (process.argv.at(-1) ?? "").includes("dropped"));
       `);
-      const r = await runPerformance({ piCli: cli, file: session, capBytes: TRANSCRIPT_CAP_BYTES });
+      const r = await runPerformance({ piCli: cli, file: session, capBytes: TRANSCRIPT_TAIL_BYTES });
       assert.equal(r.truncated, false);
       assert.equal(r.answer, "lines=1 omission=false");
     } finally {

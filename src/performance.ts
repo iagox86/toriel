@@ -6,9 +6,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { saveBtw, sideRun } from "./btw.ts";
+import { profileTranscript, renderProfilerStats } from "./performance-profiler.ts";
 
-/** Transcripts longer than this (in bytes) are cut to the session header plus the most recent whole entries before the run. */
-export const TRANSCRIPT_CAP_BYTES = 2 * 1024 * 1024;
+/** The transcript tail handed to pi (in bytes): the session header plus the most recent whole lines that fit. The full transcript still gets profiled; only the copy shrinks. */
+export const TRANSCRIPT_TAIL_BYTES = 256 * 1024;
 
 /** A JSONL line bigger than this (one huge tool output, say) is clipped before fitting. */
 export const TRANSCRIPT_CLIP_LINE_BYTES = 64 * 1024;
@@ -28,7 +29,7 @@ export const PERFORMANCE_TIMEOUT_MS = 5 * 60_000;
  * line, so the prompt carries the omission too, and `truncated` says whether
  * entries were dropped.
  */
-export function capTranscript(text: string, capBytes = TRANSCRIPT_CAP_BYTES): { text: string; truncated: boolean } {
+export function capTranscript(text: string, capBytes = TRANSCRIPT_TAIL_BYTES): { text: string; truncated: boolean } {
   if (Buffer.byteLength(text) <= capBytes) {
     return { text, truncated: false };
   }
@@ -45,8 +46,7 @@ export function capTranscript(text: string, capBytes = TRANSCRIPT_CAP_BYTES): { 
     kept.unshift(lines[i]);
   }
   const dropped = lines.length - 1 - kept.length;
-  const mib = capBytes / (1024 * 1024);
-  const note = dropped > 0 ? `[toriel: ${dropped} earlier entries omitted to fit the ${Number.isInteger(mib) ? mib : mib.toFixed(1)} MiB transcript cap]` : "";
+  const note = dropped > 0 ? `[toriel: ${dropped} earlier entries omitted to fit the ${capBytes}-byte tail excerpt]` : "";
   return { text: [header, note, ...kept].filter(Boolean).join("\n"), truncated: dropped > 0 };
 }
 
@@ -84,7 +84,7 @@ export function performancePrompt(truncated: boolean): string {
     "change anything, and the user cannot reply to this answer, so report in one go: no questions, no offers to do more.",
   ];
   if (truncated) {
-    lines.push("The transcript's earliest entries were dropped to fit the transcript cap; judge only what is there, and do not guess at what came before.");
+    lines.push("The transcript's earliest entries were dropped to fit the tail excerpt; judge only what is there, and do not guess at what came before.");
   }
   lines.push(
     "",
@@ -102,6 +102,9 @@ export function performancePrompt(truncated: boolean): string {
   return lines.join("\n");
 }
 
+/** One framing line between the review prompt and the mechanical stats. */
+const STATS_FRAMING = "Mechanical stats from the full transcript follow; the raw session tail excerpt above them is for qualitative color.";
+
 export interface PerformanceOptions {
   piCli: string;
   /** The session's jsonl file; only read. */
@@ -109,17 +112,21 @@ export interface PerformanceOptions {
   model?: string;
   cwd?: string;
   timeoutMs?: number;
+  /** Tail-excerpt cap for the copy pi receives; the stats are always profiled from the whole file. */
   capBytes?: number;
 }
 
 export async function runPerformance(opts: PerformanceOptions): Promise<{ answer: string; truncated: boolean }> {
-  const cap = opts.capBytes ?? TRANSCRIPT_CAP_BYTES;
+  const text = fs.readFileSync(opts.file, "utf8");
+  // the stats come from the full transcript; only the copy pi reads is capped
+  const stats = profileTranscript(text);
   // one capping pass decides both what pi receives and whether entries were dropped
-  const capped = capTranscript(fs.readFileSync(opts.file, "utf8"), cap);
+  const capped = capTranscript(text, opts.capBytes ?? TRANSCRIPT_TAIL_BYTES);
+  const prompt = [performancePrompt(capped.truncated), STATS_FRAMING, renderProfilerStats(stats)].join("\n\n");
   const answer = await sideRun({
     piCli: opts.piCli,
     file: opts.file,
-    prompt: performancePrompt(capped.truncated),
+    prompt,
     model: opts.model,
     cwd: opts.cwd,
     timeoutMs: opts.timeoutMs ?? PERFORMANCE_TIMEOUT_MS,

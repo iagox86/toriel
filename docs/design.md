@@ -1279,12 +1279,12 @@ with a fixed review prompt and shows the report in the info panel. Built on the 
 `btw.ts` gained a `sideRun` (the temp-copy + print-run that `askBtw` now calls; the copy goes
 through an optional `prepare` transform), and `performance.ts` holds the prompt, the cap and the
 save. Decisions: the handler does not call `liveMeta()` (it only reads the session file and spawns
-pi itself, like /btw; a sleeping session stays asleep); the cap is 2 MiB as the session header plus
-the most recent whole lines (see the addendum below for why the tail cut is safe, and the prompt
-names the gap); timeout is
+pi itself, like /btw; a sleeping session stays asleep); only a tail excerpt of the transcript (the
+session header plus the most recent whole lines) is sent as raw context - see the addenda below
+for how the excerpt was sized and why the tail cut is safe; timeout is
 5 minutes, SIGKILL; results save under `$XDG_DATA_HOME/toriel/performance/` like /btw's.
 
-Addendum (ticket 147, 2026-11-05): the cap became 2 MiB of tail plus header. The prefix cut
+Addendum (ticket 147, 2026-11-05): the cap became a tail plus header. The prefix cut
 reviewed a session's beginning, not its current state, so `capTranscript` now keeps the session
 header (first line) plus the most recent whole lines that fit, with `[toriel: N earlier entries
 omitted ...]` between them. This is safe because of how pi loads a session file
@@ -1298,6 +1298,21 @@ tail lost. Before fitting, a line over 64 KiB has every string value over 8000 c
 output survives instead of being dropped whole. `truncated` now means entries were dropped (not
 "file over cap": clipping alone can bring a file under the cap), and the prompt - not just the
 file note - says the earliest entries were dropped, because skipped lines never reach the model.
+
+Addendum (ticket 149, 2026-11-05): the cap is now `TRANSCRIPT_TAIL_BYTES` (256 KiB) and the
+prompt carries a mechanical stats block. The profiler exists so the model interprets measured
+numbers instead of eyeballing a raw transcript: `performance-profiler.ts` (pure, no fs) makes one
+pass over the full transcript text - malformed lines skipped exactly like pi's
+`parseSessionEntries` - and yields span/entry count, per-model usage and cost plus the
+cacheRead-vs-(input+cacheWrite) ratio, per-tool calls/errors/duration/output bytes, the five
+biggest single tool outputs, repeated file paths, exact `bash` command repeats (plus a
+normalized repeat count when collapsing digit runs and quoted strings finds more), the three
+longest tool durations, the three biggest gaps between consecutive assistant messages, and
+compaction count with the last `tokensBefore`. `runPerformance` profiles the whole file, caps
+the copy to header + the most recent whole lines within 256 KiB (the omission note and the
+prompt's dropped-entries line now say "tail excerpt"), and the prompt is the review prompt,
+one framing line, then `renderProfilerStats` - every list capped at five so the block stays
+around 1-3 KB even for a big session. The raw tail excerpt is still sent for qualitative color.
 
 Parked (out of this ticket):
 - `/performance --keep`: leave the analysis run in the switcher as a real session for follow-ups.
