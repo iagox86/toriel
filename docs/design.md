@@ -1318,3 +1318,40 @@ Parked (out of this ticket):
 - ~~`/performance --keep`: leave the analysis run in the switcher as a real session for follow-ups.~~ Delivered by ticket 158 (2026-11-06): the report opens as a seeded review session (`performance review <date>`, starts asleep).
 - Filing the findings as Vikunja tickets.
 - Analyzing lineage (forks/subagents) instead of one transcript.
+
+## Directory-scoped sessions: 148 phase 1 (probed 2026-11-06; board 6)
+
+The sandboxing program (docs/file-handling-proposal.md, "Toriel - Sandboxing" board) ran its
+verification-first phase: pi-permission-system 42.0.0 source is unpacked at
+`~/projects/pi-permission-system-src` (npm tarball; raw TS, no dist, pi loads it via jiti). Probes
+live in worktree `~/projects/toriel-worktrees/phase1-scope-probes` @ `eb434f5`
+(`FINDINGS-148-phase1.md` + `probes/` scripts and outputs); findings also in
+`~/projects/toriel-worktrees/SPEC-148-phase1.md`/`SPEC-148-scope.md`.
+
+Findings that shape everything downstream:
+- The guard is ask-path only: a config ALLOW on the covered surfaces short-circuits the authorizer
+  chain before the link (P4), so the doctor must flag operator allows on
+  path/path_write/external_directory_write/write/edit for scoped sessions (ticket 165).
+- The matcher's `matchValues()` is lexical ∪ canonical, so a `W/**` allow matches a symlink that
+  points out (P2 symlink-alias bypass). The link must decide on canonical `boundaryValue`, never
+  the pattern text. Rule precedence is last-match-wins (`rule.ts:107`), so `"*": deny` must come
+  BEFORE the `W/**` allow.
+- Bash side effects go through a tree-sitter parser (21/24 corpus caught); misses: `dd of=`,
+  var-expanded redirect, command-substitution redirect, `eval` not fail-closed (tickets 168-171).
+  Program-side effects (interpreters, make) remain residue until the phase-5 sandbox (166).
+- Read jail deferred (167): expressible but needs a link-side allowlist whose failure mode is a
+  silent hard-deny of a needed read.
+- Headless deny never hangs; a throwing link blocks with a generic reason (links must not throw).
+- Agent audit: no shipped profile needs shell git or `git_write`/`git_net`; scoped `implement`
+  prompts must keep git out (the manager commits) - ticket 164.
+
+Follow-ups filed: 163 (T1 scope deny link via TORIEL_SCOPE_ROOT in child env), 164 (T2 profile
+`scope` field, default-on), 165 (T3 doctor), 166 (T6 sandbox spike), 167 (T7 read jail), 168-171
+(T4a-d parser gaps). T1 is the keystone: 165 and 166 are blocked on it.
+
+Session wrap-up 2026-11-06 (unpushed): main `69817c3` (docs) <- `2b6474f` (AGENTS.md board line)
+<- `97ad4c2` (qwen defaults for implement/explore/summarize/test-runner/triage; implement
+maxTurns 120). `/performance` flow final shape: review session opens at command time, report
+delivered into it as a message (f1ca255, ticket 158 closed). Delegation rule of record: briefs
+never teach permission bypasses; scripts spawn gated binaries only when execution is the test
+subject; workers' own repo ops go through the MCP git verbs.
