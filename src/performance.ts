@@ -7,39 +7,84 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { saveBtw, sideRun } from "./btw.ts";
 
-/** Transcripts longer than this (in bytes) are cut to their first whole lines before the run. */
-export const TRANSCRIPT_CAP_BYTES = 1_048_576;
+/** Transcripts longer than this (in bytes) are cut to the session header plus the most recent whole entries before the run. */
+export const TRANSCRIPT_CAP_BYTES = 2 * 1024 * 1024;
+
+/** A JSONL line bigger than this (one huge tool output, say) is clipped before fitting. */
+export const TRANSCRIPT_CLIP_LINE_BYTES = 64 * 1024;
+
+/** Strings inside a clipped entry keep this many characters, then a marker says what was cut. */
+export const TRANSCRIPT_CLIP_CHARS = 8_000;
 
 /** The analysis reads a whole transcript; longer than a /btw answer. */
 export const PERFORMANCE_TIMEOUT_MS = 5 * 60_000;
 
-/** Keeps the first whole lines within the byte budget; the result is always a valid prefix of the transcript. */
+/**
+ * Keeps the transcript within the byte budget as the session header (first
+ * line, which pi needs) plus the most recent whole entries that fit. A line
+ * over TRANSCRIPT_CLIP_LINE_BYTES has its long string values clipped first, so
+ * one huge tool output survives with a marker instead of being lost. When
+ * entries were dropped, an omission note follows the header; pi skips that
+ * line, so the prompt carries the omission too, and `truncated` says whether
+ * entries were dropped.
+ */
 export function capTranscript(text: string, capBytes = TRANSCRIPT_CAP_BYTES): { text: string; truncated: boolean } {
   if (Buffer.byteLength(text) <= capBytes) {
     return { text, truncated: false };
   }
-  let kept = "";
-  let used = 0;
-  for (const line of text.split("\n")) {
-    const size = Buffer.byteLength(line) + 1; // the line plus its newline
+  const lines = text.split("\n").map((line) => (Buffer.byteLength(line) > TRANSCRIPT_CLIP_LINE_BYTES ? clipEntryLine(line) : line));
+  const header = lines[0] ?? "";
+  const kept: string[] = [];
+  let used = header ? Buffer.byteLength(header) + 1 : 0;
+  for (let i = lines.length - 1; i >= 1; i--) {
+    const size = Buffer.byteLength(lines[i]) + 1; // the line plus its newline
     if (used + size > capBytes) {
       break;
     }
-    kept += `${line}\n`;
     used += size;
+    kept.unshift(lines[i]);
   }
-  return { text: kept, truncated: true };
+  const dropped = lines.length - 1 - kept.length;
+  const mib = capBytes / (1024 * 1024);
+  const note = dropped > 0 ? `[toriel: ${dropped} earlier entries omitted to fit the ${Number.isInteger(mib) ? mib : mib.toFixed(1)} MiB transcript cap]` : "";
+  return { text: [header, note, ...kept].filter(Boolean).join("\n"), truncated: dropped > 0 };
+}
+
+/**
+ * Clip an oversized JSONL line so it stays valid JSON: every string value over
+ * `maxChars` characters is cut with a marker saying how much followed. A line
+ * that is not JSON is returned as-is (pi skips malformed lines anyway).
+ */
+export function clipEntryLine(line: string, maxChars = TRANSCRIPT_CLIP_CHARS): string {
+  try {
+    return JSON.stringify(clipStrings(JSON.parse(line) as unknown, maxChars));
+  } catch {
+    return line;
+  }
+}
+
+function clipStrings(value: unknown, maxChars: number): unknown {
+  if (typeof value === "string") {
+    return value.length > maxChars ? `${value.slice(0, maxChars)}...[${value.length - maxChars} characters cut]` : value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((v) => clipStrings(v, maxChars));
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, clipStrings(v, maxChars)]));
+  }
+  return value;
 }
 
 /** The fixed review prompt; tells the model it is one-shot and toolless, and what to cover. */
-export function performancePrompt(truncated: boolean, capBytes = TRANSCRIPT_CAP_BYTES): string {
+export function performancePrompt(truncated: boolean): string {
   const lines = [
     "[performance review of this session - report from the conversation you have]",
     "You are reviewing the transcript of a coding-agent session to find what is slowing it down or costing more than it should. You have no tools here and cannot run, read or",
     "change anything, and the user cannot reply to this answer, so report in one go: no questions, no offers to do more.",
   ];
   if (truncated) {
-    lines.push(`The transcript was truncated to its first ${capBytes} bytes; say where that matters and do not guess at what came after.`);
+    lines.push("The transcript's earliest entries were dropped to fit the transcript cap; judge only what is there, and do not guess at what came before.");
   }
   lines.push(
     "",
@@ -69,19 +114,18 @@ export interface PerformanceOptions {
 
 export async function runPerformance(opts: PerformanceOptions): Promise<{ answer: string; truncated: boolean }> {
   const cap = opts.capBytes ?? TRANSCRIPT_CAP_BYTES;
-  // the utf8 byte size of the text is the file's byte size, so the stat decides
-  const truncated = fs.statSync(opts.file).size > cap;
+  // one capping pass decides both what pi receives and whether entries were dropped
+  const capped = capTranscript(fs.readFileSync(opts.file, "utf8"), cap);
   const answer = await sideRun({
     piCli: opts.piCli,
     file: opts.file,
-    prompt: performancePrompt(truncated, cap),
+    prompt: performancePrompt(capped.truncated),
     model: opts.model,
     cwd: opts.cwd,
     timeoutMs: opts.timeoutMs ?? PERFORMANCE_TIMEOUT_MS,
-    // below the cap this is the identity
-    prepare: (text) => capTranscript(text, cap).text,
+    prepare: () => capped.text,
   });
-  return { answer, truncated };
+  return { answer, truncated: capped.truncated };
 }
 
 /** Where /performance reports are saved: one markdown file per report, like /btw's answers. */
