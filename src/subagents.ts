@@ -243,9 +243,22 @@ export function abnormalEnd(lastStop: string | undefined, lastError: string | un
   return undefined;
 }
 
-/** The newest non-empty assistant text in a message list: what a subagent had said before it was cut off. */
-export function lastAssistantText(messages: ReadonlyArray<{ role?: string; content?: unknown }>): string | undefined {
-  for (const m of [...messages].reverse()) {
+/** The custom message types that mark an injection or a background-job exit notice - keep in sync with isInjectType in src/transcript.ts (a drift test pins this). */
+export const INJECT_TYPES = new Set(["toriel-inject", "ronpi-inject", "toriel-job"]);
+
+/** The newest `count` non-empty assistant texts in a message list, newest first, plus whether a custom injection or job notice sits between the newest two. */
+function assistantTexts(messages: ReadonlyArray<{ role?: string; content?: unknown; customType?: string }>, count: number): { texts: string[]; injectBetween: boolean } {
+  const found: string[] = [];
+  let injectBetween = false;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role === "custom" && typeof m.customType === "string" && INJECT_TYPES.has(m.customType)) {
+      // an inject encountered after the newest kept text sits between two kept texts
+      if (found.length >= 1) {
+        injectBetween = true;
+      }
+      continue;
+    }
     if (m.role !== "assistant" || !Array.isArray(m.content)) {
       continue;
     }
@@ -255,8 +268,37 @@ export function lastAssistantText(messages: ReadonlyArray<{ role?: string; conte
       .join("\n")
       .trim();
     if (text) {
-      return text;
+      found.push(text);
+      if (found.length >= count) {
+        break;
+      }
     }
   }
-  return undefined;
+  return { texts: found, injectBetween };
+}
+
+/** The newest non-empty assistant text in a message list: what a subagent had said before it was cut off. */
+export function lastAssistantText(messages: ReadonlyArray<{ role?: string; content?: unknown; customType?: string }>): string | undefined {
+  return assistantTexts(messages, 1).texts[0];
+}
+
+/**
+ * The result text a finished subagent's parent gets: the newest non-empty assistant text - unless a
+ * custom injection or job notice sits between it and a previous text at least twice as long. That
+ * is the signature of a worker that posted its report and then answered a late notice with a short
+ * acknowledgment: the acknowledgment would bury the report, so the report is delivered instead. A
+ * notice-triggered reply that is a real answer (not much shorter than what came before) still wins,
+ * and without an inject in between the newest text always wins, so plain follow-up answers keep
+ * working.
+ */
+export function subagentResultText(messages: ReadonlyArray<{ role?: string; content?: unknown; customType?: string }>): string | undefined {
+  const { texts, injectBetween } = assistantTexts(messages, 2);
+  const [last, prev] = texts;
+  if (last === undefined) {
+    return undefined;
+  }
+  if (injectBetween && prev !== undefined && prev.length >= 2 * last.length) {
+    return prev;
+  }
+  return last;
 }

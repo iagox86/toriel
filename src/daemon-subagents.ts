@@ -21,8 +21,8 @@ import {
   describeRecord,
   expiredSubagents,
   abnormalEnd,
-  lastAssistantText,
   limitBreach,
+  subagentResultText,
   messageTokens,
   parseHandle,
   refuseSpawn,
@@ -194,10 +194,8 @@ export class SubagentManager {
     const ctx = this.ctx();
     const child = ctx.registry.get(rec.session);
     try {
-      rec.result = (await child?.child?.getLastAssistantText()) ?? undefined;
-      if (!rec.result?.trim() && child?.child) {
-        // the last message was an empty error or abort: keep what it said before
-        rec.result = lastAssistantText((await child.child.getMessages()) as Array<{ role?: string; content?: unknown }>);
+      if (child?.child) {
+        rec.result = subagentResultText((await child.child.getMessages()) as Array<{ role?: string; content?: unknown }>);
       }
     } catch (err) {
       log(`subagent #${rec.handle}: could not read its last answer: ${errText(err)}`);
