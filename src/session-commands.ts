@@ -17,7 +17,7 @@ import type { Host } from "./host.ts";
 import { displayName } from "./session-list.ts";
 import { runFeedback } from "./feedback-command.ts";
 import { askBtw, saveBtw } from "./btw.ts";
-import { runPerformance, savePerformance, TRANSCRIPT_CAP_BYTES } from "./performance.ts";
+import { runPerformance, savePerformance, TRANSCRIPT_TAIL_BYTES } from "./performance.ts";
 import { loadSettings, resolveChildConfig } from "./settings.ts";
 import { explainLastThinking } from "./why.ts";
 import { newView } from "./transcript.ts";
@@ -484,7 +484,7 @@ export class SessionCommands {
       this.h.notify("performance: analyzing the transcript...");
       const r = await runPerformance({ piCli: resolveChildConfig(loadSettings().settings).piCli, file: key, model: asked, cwd: meta?.cwd });
       this.h.notify("");
-      const head = `performance: analysis of this session${r.truncated ? ` (truncated to its most recent ${TRANSCRIPT_CAP_BYTES} bytes)` : ""}`;
+      const head = `performance: analysis of this session${r.truncated ? ` (tail excerpt capped to its most recent ${TRANSCRIPT_TAIL_BYTES} bytes)` : ""}`;
       this.h.infoPanel.show(`${head}\n\n${r.answer}`, [
         { key: "c", label: "copies", run: () => void this.h.copyText(r.answer).then((res) => this.h.notify(res === true ? "performance: report copied" : `performance: copy failed (${res})`)) },
         { key: "s", label: "saves to a file", run: () => this.h.notify(`performance: saved to ${savePerformance(r.answer)}`) },
