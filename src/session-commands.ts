@@ -484,10 +484,11 @@ export class SessionCommands {
       this.h.notify("performance: analyzing the transcript...");
       const r = await runPerformance({ piCli: resolveChildConfig(loadSettings().settings).piCli, file: key, model: asked, cwd: meta?.cwd });
       this.h.notify("");
-      const head = `performance: analysis of this session${r.truncated ? ` (tail excerpt capped to its most recent ${TRANSCRIPT_TAIL_BYTES} bytes)` : ""}`;
+      // Auto-save: the report outlives the panel (which closes on any key).
+      const saved = savePerformance(r.answer);
+      const head = `performance: analysis of this session (saved to ${saved})${r.truncated ? ` (tail excerpt capped to its most recent ${TRANSCRIPT_TAIL_BYTES} bytes)` : ""}`;
       this.h.infoPanel.show(`${head}\n\n${r.answer}`, [
         { key: "c", label: "copies", run: () => void this.h.copyText(r.answer).then((res) => this.h.notify(res === true ? "performance: report copied" : `performance: copy failed (${res})`)) },
-        { key: "s", label: "saves to a file", run: () => this.h.notify(`performance: saved to ${savePerformance(r.answer)}`) },
       ]);
       this.h.tui.requestRender();
     } catch (err) {
