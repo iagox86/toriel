@@ -1,6 +1,6 @@
 ---
 name: delegating
-description: Hand a self-contained task to a subagent with the toriel_agent tool. Use it for read-only research, reviews and test runs that would bloat your context, or for independent jobs that can run in parallel - not for steps whose answer you need to think with.
+description: Hand a self-contained task to a subagent with the toriel_agent tool. Use it for read-only research, reviews and test runs that would bloat your context, for implementing an approved change, or for independent jobs that can run in parallel - not for steps whose answer you need to think with.
 ---
 
 # Delegating to subagents
@@ -9,6 +9,7 @@ description: Hand a self-contained task to a subagent with the toriel_agent tool
 
 When to delegate:
 - The job is a search, a review, a summary or a test run, and you only need its conclusion. The subagent reads the files, so your context does not fill with them.
+- The job is implementing a change the user asked for: hand it to `implement` once it is triaged or planned, with the task, the files involved and the acceptance check in the brief.
 - Several jobs do not depend on each other. Start them in the same turn and they run in parallel.
 
 When not to:
@@ -16,7 +17,7 @@ When not to:
 - You would have to explain half the conversation to brief it. Either fork (`context: "fork"` copies this conversation, and costs tokens), or do it yourself.
 - The user is following your reasoning step by step.
 
-Delegating never widens what you may do. A subagent that edits files asks for permission like you would, and you should only start one that edits when the user asked for that change.
+Delegating never widens what you may do. A subagent that edits files asks for permission like you would, and you should only start one that edits (`implement` and `docs-writer` are the shipped ones) when the user asked for that change.
 
 Write the task as a complete brief. The subagent sees nothing else:
 - the goal, and what you already know or ruled out;

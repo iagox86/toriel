@@ -22,7 +22,7 @@ const GATED = new Set(["bash", "edit", "write"]);
 
 describe("shipped agent profiles", () => {
   it("has the profiles the delegation skill relies on", () => {
-    for (const name of ["explore", "summarize", "code-review", "plan", "test-runner", "git-archaeology", "research-web", "edit-writing", "docs-writer", "triage", "advisory-diff", "binary-diff", "debug", "crash-analysis", "re-explain", "re-find", "re-trace", "vuln-hunt", "design"]) {
+    for (const name of ["explore", "summarize", "code-review", "plan", "test-runner", "git-archaeology", "research-web", "edit-writing", "docs-writer", "implement", "triage", "advisory-diff", "binary-diff", "debug", "crash-analysis", "re-explain", "re-find", "re-trace", "vuln-hunt", "design"]) {
       assert.ok(profiles.some((p) => p.agent.name === name), `agents/${name}.md is missing`);
     }
   });

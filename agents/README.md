@@ -15,6 +15,7 @@ A profile is a markdown file: frontmatter that decides how a session launches, t
 | `research-web` | look something up on the web, report sources with URLs | web_search, fetch_content (extensions on: they come from the pi-web-access package) |
 | `edit-writing` | edit prose: cut AI-isms and passive voice, flag inconsistencies and claims to check | read, grep, find, ls |
 | `docs-writer` | write or update docs from the code (**edits files**: start it only when asked) | read, grep, find, ls, edit, write (extensions on, so the permission system guards the edits) |
+| `implement` | code a triaged change: smallest diff plus tests, then run the project's checks (**edits files and runs commands**: start it only for a task the user approved) | read, grep, find, ls, edit, write, bash, toriel_job (extensions on, so the permission system guards the edits and commands; minimal off, so it reads AGENTS.md) |
 | `triage` | sort failures or logs into causes with evidence and next steps | read, grep, find, ls |
 | `debug` | debug a program or core dump with gdb: breakpoints, stepping, state, the cause of a crash | read, grep, find, ls, `mcp__gdb__*` (extensions on) |
 | `crash-analysis` | analyze a crash (core dump, or binary plus crashing input) with gdb: root cause and exploitability | read, grep, find, ls, `mcp__gdb__*` (extensions on) |
