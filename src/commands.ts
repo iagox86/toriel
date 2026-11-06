@@ -237,6 +237,14 @@ export const SESSION_COMMANDS = [
     },
   },
   {
+    name: "performance",
+    description: "one-off analysis of this session's transcript: what is bloating it and how to run it cheaper",
+    help: "Runs a throwaway analysis over a copy of this session's transcript (no tools; the session never sees it and a sleeping session stays asleep) and reports concrete suggestions: what is bloating context and where it grew, compaction timing, missed skill/agent/MCP opportunities, repetitive shell commands (skill or script candidates), user corrections (memory candidates), model fit (a big model doing small work) and permission-prompt friction. A transcript longer than 1 MB (1,048,576 bytes) is cut to its first whole lines first, and the report says so. The report opens in a panel: c copies it, s saves it to a file under ~/.local/share/toriel/performance/, any other key closes. Uses the session's model unless -m is given. Takes up to 5 minutes, then it is killed and the failure is reported.\n\nExamples:\n  /performance\n  /performance -m anthropic/claude-opus-4-1",
+    build: (cmd) => {
+      cmd.option("-m, --model <model>", "model to analyze with, provider/id (default: this session's model)");
+    },
+  },
+  {
     name: "comment",
     description: "keep a note to yourself about this session (hidden, but found by the switcher filter)",
     help: "Stores a longer note about why the session exists and where it stands. It is not drawn in the list; the switcher's /filter and ctrl-f search it. With no text the current comment is shown; /comment -c removes it.\n\nExamples:\n  /comment waiting on the vendor, retry the import after friday\n  /comment -c",
