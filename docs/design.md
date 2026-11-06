@@ -1271,3 +1271,19 @@ daemon, and a branch controller's new request got 30 s of silence. Two parts.
 - Not done: a per-session "child predates the daemon's build" marker (ticket item 5): children do not
   outlive the daemon today. Per-request refusal of unknown types (from #8) stays as the second line of
   defence for a daemon that is new enough to answer.
+
+## /performance: throwaway transcript analysis (ticket 143, 2026-11-05)
+
+A session command that runs a toolless `pi --print` over a capped copy of the session's transcript
+with a fixed review prompt and shows the report in the info panel. Built on the /btw machinery:
+`btw.ts` gained a `sideRun` (the temp-copy + print-run that `askBtw` now calls; the copy goes
+through an optional `prepare` transform), and `performance.ts` holds the prompt, the cap and the
+save. Decisions: the handler does not call `liveMeta()` (it only reads the session file and spawns
+pi itself, like /btw; a sleeping session stays asleep); the cap is 1,048,576 bytes of first whole
+lines (the copy stays a valid prefix of the transcript, and the prompt names the gap); timeout is
+5 minutes, SIGKILL; results save under `$XDG_DATA_HOME/toriel/performance/` like /btw's.
+
+Parked (out of this ticket):
+- `/performance --keep`: leave the analysis run in the switcher as a real session for follow-ups.
+- Filing the findings as Vikunja tickets.
+- Analyzing lineage (forks/subagents) instead of one transcript.

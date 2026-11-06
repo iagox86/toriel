@@ -17,6 +17,7 @@ import type { Host } from "./host.ts";
 import { displayName } from "./session-list.ts";
 import { runFeedback } from "./feedback-command.ts";
 import { askBtw, saveBtw } from "./btw.ts";
+import { runPerformance, savePerformance, TRANSCRIPT_CAP_BYTES } from "./performance.ts";
 import { loadSettings, resolveChildConfig } from "./settings.ts";
 import { explainLastThinking } from "./why.ts";
 import { newView } from "./transcript.ts";
@@ -72,6 +73,7 @@ export class SessionCommands {
       quit: () => this.h.switching.open(),
       park: () => this.park(),
       btw: (c) => this.btw(c.args.join(" "), c.opts.model as string | undefined),
+      performance: (c) => this.performance(c.opts.model as string | undefined),
       comment: (c) => this.comment(c.args.join(" "), c.opts.clear === true),
       help: () => {
         this.h.infoPanel.show(listing(SESSION_COMMANDS));
@@ -462,6 +464,34 @@ export class SessionCommands {
       this.h.tui.requestRender();
     } catch (err) {
       this.fail("btw", err);
+    }
+  }
+
+  /**
+   * /performance: a throwaway analysis of this session's transcript. Like /btw it
+   * only reads the session file and spawns pi itself, so it needs no liveMeta() and
+   * a sleeping session stays asleep.
+   */
+  private async performance(model: string | undefined): Promise<void> {
+    const key = this.h.viewing;
+    if (!key?.startsWith("/")) {
+      this.h.notify("nothing to analyze yet - send a message first");
+      return;
+    }
+    const meta = this.viewedMeta();
+    const asked = model ?? (meta?.model.includes("/") ? meta.model : undefined);
+    try {
+      this.h.notify("performance: analyzing the transcript...");
+      const r = await runPerformance({ piCli: resolveChildConfig(loadSettings().settings).piCli, file: key, model: asked, cwd: meta?.cwd });
+      this.h.notify("");
+      const head = `performance: analysis of this session${r.truncated ? ` (truncated to its first ${TRANSCRIPT_CAP_BYTES} bytes)` : ""}`;
+      this.h.infoPanel.show(`${head}\n\n${r.answer}`, [
+        { key: "c", label: "copies", run: () => void this.h.copyText(r.answer).then((res) => this.h.notify(res === true ? "performance: report copied" : `performance: copy failed (${res})`)) },
+        { key: "s", label: "saves to a file", run: () => this.h.notify(`performance: saved to ${savePerformance(r.answer)}`) },
+      ]);
+      this.h.tui.requestRender();
+    } catch (err) {
+      this.fail("performance", err);
     }
   }
 

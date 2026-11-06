@@ -43,17 +43,45 @@ export interface BtwOptions {
 }
 
 export async function askBtw(opts: BtwOptions): Promise<string> {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-btw-"));
+  return sideRun({ ...opts, prompt: btwPrompt(opts.question) });
+}
+
+export interface SideRunOptions {
+  piCli: string;
+  /** The session's jsonl file; only read. */
+  file: string;
+  /** The full prompt for the side run. */
+  prompt: string;
+  model?: string;
+  cwd?: string;
+  timeoutMs?: number;
+  /** Transforms the session text before it is copied out (e.g. capping a long transcript). */
+  prepare?: (text: string) => string;
+}
+
+/**
+ * One pi print run over a throwaway copy of a session file, with no tools and
+ * nothing else loaded; the copy is deleted afterwards, so the original is never
+ * touched. Shared by /btw and /performance. Without `prepare` the file is
+ * copied byte for byte (as /btw always did); with it, the text is transformed
+ * (transcript capping) on the way to the copy.
+ */
+export async function sideRun(opts: SideRunOptions): Promise<string> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-side-"));
   const copy = path.join(dir, path.basename(opts.file));
   try {
-    fs.copyFileSync(opts.file, copy);
-    return await run(btwArgs(opts.piCli, copy, btwPrompt(opts.question), opts.model), opts);
+    if (opts.prepare) {
+      fs.writeFileSync(copy, opts.prepare(fs.readFileSync(opts.file, "utf8")));
+    } else {
+      fs.copyFileSync(opts.file, copy);
+    }
+    return await run(btwArgs(opts.piCli, copy, opts.prompt, opts.model), opts);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
 
-function run(args: string[], opts: BtwOptions): Promise<string> {
+function run(args: string[], opts: { cwd?: string; timeoutMs?: number }): Promise<string> {
   const limit = opts.timeoutMs ?? BTW_TIMEOUT_MS;
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, args, {
@@ -96,10 +124,10 @@ export function btwDir(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(data, "toriel", "btw");
 }
 
-export function saveBtw(question: string, answer: string, dir = btwDir(), now = new Date()): string {
+export function saveBtw(question: string, answer: string, dir = btwDir(), now = new Date(), prefix = "btw"): string {
   fs.mkdirSync(dir, { recursive: true });
   const stamp = now.toISOString().replace(/[:.]/g, "-");
-  const file = path.join(dir, `btw-${stamp}.md`);
+  const file = path.join(dir, `${prefix}-${stamp}.md`);
   fs.writeFileSync(file, `# ${question}\n\n${answer}\n`);
   return file;
 }
