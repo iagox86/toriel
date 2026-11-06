@@ -28,6 +28,7 @@ import { loadAgents } from "./agents.ts";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { buildInfo } from "./build-id.ts";
 import { explainMcpFailure } from "./mcp.ts";
+import { performanceReviewSeed } from "./session-commands.ts";
 import { DIALOG_METHODS, HISTORY_FILE, KEY_LOG, PROFILE } from "./config.ts";
 import { DaemonLink } from "./daemon-link.ts";
 import { buildLayouts } from "./layout.ts";
@@ -556,6 +557,32 @@ class Controller {
     } catch (err) {
       console.error(`listAll failed: ${err}`);
     }
+  }
+
+  /**
+   * Host.openReviewSession: seed a session file whose opening exchange is the
+   * report, then spawn a session on that file. The report lands as a past
+   * message, so the session starts ASLEEP holding it as context; nothing is
+   * prompted into it.
+   */
+  async openReviewSession(cwd: string, name: string, report: string): Promise<string> {
+    const mgr = SessionManager.create(cwd);
+    mgr.appendMessage({ role: "user", content: performanceReviewSeed(report), timestamp: Date.now() });
+    const file = mgr.getSessionFile();
+    if (!file || !fs.existsSync(file)) {
+      throw new Error("could not create the review session's file");
+    }
+    const unique = this.uniqueSessionName(name);
+    // ready: only report success once the child is actually up (startViewed waits the same way)
+    try {
+      await this.request({ type: "spawn", cwd, sessionFile: file, name: unique, ready: true });
+    } catch (err) {
+      // No child means no session: remove the seeded file or it lingers in pi's
+      // session dir as an unnamed ghost in the switcher list.
+      fs.rmSync(file, { force: true });
+      throw err;
+    }
+    return unique;
   }
 
   // ---------------- switcher ----------------

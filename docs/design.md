@@ -1282,7 +1282,7 @@ save. Decisions: the handler does not call `liveMeta()` (it only reads the sessi
 pi itself, like /btw; a sleeping session stays asleep); only a tail excerpt of the transcript (the
 session header plus the most recent whole lines) is sent as raw context - see the addenda below
 for how the excerpt was sized and why the tail cut is safe; timeout is
-5 minutes, SIGKILL; results save under `$XDG_DATA_HOME/toriel/performance/` like /btw's.
+5 minutes, SIGKILL; results auto-save under `$XDG_DATA_HOME/toriel/performance/`.
 
 Addendum (ticket 147, 2026-11-05): the cap became a tail plus header. The prefix cut
 reviewed a session's beginning, not its current state, so `capTranscript` now keeps the session
@@ -1315,6 +1315,6 @@ one framing line, then `renderProfilerStats` - every list capped at five so the 
 around 1-3 KB even for a big session. The raw tail excerpt is still sent for qualitative color.
 
 Parked (out of this ticket):
-- `/performance --keep`: leave the analysis run in the switcher as a real session for follow-ups.
+- ~~`/performance --keep`: leave the analysis run in the switcher as a real session for follow-ups.~~ Delivered by ticket 158 (2026-11-06): the report opens as a seeded review session (`performance review <date>`, starts asleep).
 - Filing the findings as Vikunja tickets.
 - Analyzing lineage (forks/subagents) instead of one transcript.

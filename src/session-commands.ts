@@ -30,11 +30,30 @@ import { errText } from "./util.ts";
 
 const COMPACT_TIMEOUT_MS = 10 * 60_000;
 
+/** The name of the review session /performance opens: `performance review <YYYY-MM-DD HH:MM>`, local time. */
+export function performanceReviewName(now: Date = new Date()): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `performance review ${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())} ${p(now.getHours())}:${p(now.getMinutes())}`;
+}
+
+/**
+ * The opening exchange of the review session /performance opens: the report as a
+ * past message, so the agent holds it as context without being prompted to act.
+ * Lives here (not controller.ts) so tests can import it - controller.ts runs
+ * main() on import and cannot be loaded by a test.
+ */
+export function performanceReviewSeed(report: string): string {
+  return `Performance review of a toriel session (created by /performance). Treat the report below as the starting context of this session: when you act on it, work from these findings rather than re-running the analysis.\n\n${report}`;
+}
+
 export class SessionCommands {
   private readonly h: Host;
+  /** The throwaway analysis run; injectable so tests do not spawn pi. */
+  private readonly runPerf: typeof runPerformance;
 
-  constructor(host: Host) {
+  constructor(host: Host, runPerf: typeof runPerformance = runPerformance) {
     this.h = host;
+    this.runPerf = runPerf;
   }
 
   /** Run a "/name args" line; false when it is not one of ours (send it to pi). */
@@ -470,7 +489,8 @@ export class SessionCommands {
   /**
    * /performance: a throwaway analysis of this session's transcript. Like /btw it
    * only reads the session file and spawns pi itself, so it needs no liveMeta() and
-   * a sleeping session stays asleep.
+   * a sleeping session stays asleep. On completion the report also opens as a new
+   * top-level review session (its opening context; it starts asleep).
    */
   private async performance(model: string | undefined): Promise<void> {
     const key = this.h.viewing;
@@ -482,10 +502,18 @@ export class SessionCommands {
     const asked = model ?? (meta?.model.includes("/") ? meta.model : undefined);
     try {
       this.h.notify("performance: analyzing the transcript...");
-      const r = await runPerformance({ piCli: resolveChildConfig(loadSettings().settings).piCli, file: key, model: asked, cwd: meta?.cwd });
+      const r = await this.runPerf({ piCli: resolveChildConfig(loadSettings().settings).piCli, file: key, model: asked, cwd: meta?.cwd });
       this.h.notify("");
       // Auto-save: the report outlives the panel (which closes on any key).
       const saved = savePerformance(r.answer);
+      // The report also opens as a review session in the analyzed session's cwd;
+      // a failure there must not lose the report, which is already saved.
+      try {
+        const name = await this.h.openReviewSession(this.h.cwdFor(key), performanceReviewName(), r.answer);
+        this.h.notify(`performance: review session created - ${name}`);
+      } catch (err) {
+        this.h.notify(`performance: review session not created: ${errText(err)} (the report is saved to ${saved})`);
+      }
       const head = `performance: analysis of this session (saved to ${saved})${r.truncated ? ` (tail excerpt capped to its most recent ${TRANSCRIPT_TAIL_BYTES} bytes)` : ""}`;
       this.h.infoPanel.show(`${head}\n\n${r.answer}`, [
         { key: "c", label: "copies", run: () => void this.h.copyText(r.answer).then((res) => this.h.notify(res === true ? "performance: report copied" : `performance: copy failed (${res})`)) },
