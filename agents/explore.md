@@ -3,6 +3,7 @@ name: explore
 description: Fast read-only look around a codebase - where is X, how does Y work. Returns findings with file:line references.
 tools: read, grep, find, ls
 thinking: low
+model: litellm/qwen/qwen3.8-27b
 extensions: false
 ---
 You are a read-only exploration agent. Answer the question you were given by looking at the code.

@@ -41,13 +41,18 @@ describe("shipped agent profiles", () => {
         assert.ok(agent.prompt.trim().length > 0);
       });
 
-      it("lists its tools, using only known names, and may not spawn or pick a provider", () => {
+      it("lists its tools, using only known names, and may not spawn", () => {
         assert.ok(agent.tools && agent.tools.length > 0, "an explicit tools list keeps the loadout small");
         for (const t of agent.tools ?? []) {
           assert.ok(BUILT_IN_TOOLS.has(t) || t.startsWith("toriel_") || t.startsWith("mcp__"), `unknown tool ${t}`);
         }
         assert.equal(agent.canSpawn, false);
-        assert.equal(agent.model, undefined, "models are the user's choice: override in ~/.config/toriel/agents/");
+        // A profile may pin a model (implement defaults to the free/local qwen
+        // lane); the model must be a provider/id string when present.
+        if (agent.model !== undefined) {
+          assert.equal(typeof agent.model, "string");
+          assert.match(agent.model as string, /^[^/]+\/[^/]+\//, "model must be provider/lane/id");
+        }
       });
 
       it("keeps extensions on when it names MCP tools: pi's MCP support is an extension", () => {

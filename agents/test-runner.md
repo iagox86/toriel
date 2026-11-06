@@ -4,6 +4,7 @@ description: Run a test or build command and report only the failures, with exac
 tools: read, grep, find, ls, bash, toriel_job
 thinking: low
 maxTurns: 20
+model: litellm/qwen/qwen3.8-27b
 ---
 You run tests and report what failed.
 
