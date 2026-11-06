@@ -347,16 +347,14 @@ export async function handleAdopt(
   // a parent that is mid-run has a file that may end in the middle of a turn: fork from its last settled point
   const snapshot = cmd.fork ? forkSnapshot(cmd.path) : undefined;
   try {
-    const cfg = ctx.children.configFor(s);
-    const args = ["--fork", snapshot?.path ?? cmd.path];
-    if (cmd.name) {
-      args.push("--name", cmd.name);
-    }
+    // the same arguments as any other start (extensions, tools, profile): a fork built by hand
+    // loaded none of toriel's extensions, so the inherited toriel_* tools were dropped
     // the fork learns its parent now; its own id is not known until it starts
-    if (parentId) {
-      const note = forkNote({ id: parentId, name: parentName, file: parentFile });
-      args.push("--append-system-prompt", note);
-    }
+    const { args, cfg } = ctx.children.startArgs(s, {
+      forkPath: snapshot?.path ?? cmd.path,
+      name: cmd.name,
+      appendSystemPrompt: parentId ? forkNote({ id: parentId, name: parentName, file: parentFile }) : undefined,
+    });
     const client = await ctx.children.launch(s, args, cfg);
     s.child = client;
     s.dead = false;

@@ -30,6 +30,8 @@ export interface StartOptions {
   sessionFile?: string;
   forkPath?: string;
   name?: string;
+  /** Text for pi's `--append-system-prompt` (a fork's note about its parent). */
+  appendSystemPrompt?: string;
   /** Launch a new session as this agent profile (a respawn finds its profile on its own). */
   agent?: AgentProfile;
 }
@@ -130,7 +132,7 @@ export class ChildManager {
    * The pi arguments for starting `s` from a file, a fork source or fresh. Also settles
    * the session's id and profile, which the child's environment and later respawns need.
    */
-  private startArgs(s: DaemonSession, opts: StartOptions): { args: string[]; cfg: ChildConfig } {
+  startArgs(s: DaemonSession, opts: StartOptions): { args: string[]; cfg: ChildConfig } {
     // a file that is gone (deleted, swept) is not resumed: pi refuses --session with --session-id, so it counts as a fresh session
     const wanted = opts.forkPath ? undefined : (opts.sessionFile ?? s.sessionFile);
     const useFile = wanted && fs.existsSync(wanted) ? wanted : undefined;
@@ -142,6 +144,9 @@ export class ChildManager {
     }
     if (opts.name) {
       args.push("--name", opts.name);
+    }
+    if (opts.appendSystemPrompt) {
+      args.push("--append-system-prompt", opts.appendSystemPrompt);
     }
     args.push(...lineageArgs(useFile ? sessionIdOfFile(useFile) : undefined));
     const cfg = this.configFor(s);

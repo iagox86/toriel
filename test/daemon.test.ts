@@ -717,6 +717,11 @@ describe("daemon: lifecycle", () => {
     const notes = (f: string | undefined): string =>
       (JSON.parse(fs.readFileSync(`${f}.argv.json`, "utf8")) as string[]).join("\n");
     assert.match(notes(fork?.sessionFile), /fork of the session "Parent" \(session id [^,]+, file /);
+    // a fork starts like any other session: toriel's extensions and tool loadout, or the inherited toriel_* tools are dropped
+    const forkArgs = notes(fork?.sessionFile);
+    assert.match(forkArgs, /--fork/);
+    assert.match(forkArgs, /toriel-agents\.ts/);
+    assert.match(forkArgs, /\+toriel_message/);
     // the parent is left alone: same child, no restart, no note about the fork
     const after = c.sessions().find((s) => s.id === sessionId);
     assert.equal(after?.sessionFile, file);
