@@ -17,7 +17,7 @@ import type { Host } from "./host.ts";
 import { displayName } from "./session-list.ts";
 import { runFeedback } from "./feedback-command.ts";
 import { askBtw, saveBtw } from "./btw.ts";
-import { runPerformance, savePerformance, TRANSCRIPT_TAIL_BYTES } from "./performance.ts";
+import { runPerformance, savePerformance } from "./performance.ts";
 import { loadSettings, resolveChildConfig } from "./settings.ts";
 import { explainLastThinking } from "./why.ts";
 import { newView } from "./transcript.ts";
@@ -37,13 +37,14 @@ export function performanceReviewName(now: Date = new Date()): string {
 }
 
 /**
- * The opening exchange of the review session /performance opens: the report as a
- * past message, so the agent holds it as context without being prompted to act.
+ * The opening message of the review session /performance opens. The report
+ * itself follows as a delivered message once the analysis completes, so the
+ * seed only frames the session and asks for a brief hold.
  * Lives here (not controller.ts) so tests can import it - controller.ts runs
  * main() on import and cannot be loaded by a test.
  */
-export function performanceReviewSeed(report: string): string {
-  return `Performance review of a toriel session (created by /performance). Treat the report below as the starting context of this session: when you act on it, work from these findings rather than re-running the analysis.\n\n${report}`;
+export function performanceReviewSeed(): string {
+  return `Performance review of a toriel session (created by /performance). The analysis is running; the report will be delivered to this session as a message when it completes. Treat it as this session's starting context: when you act on it, work from the findings rather than re-running the analysis. Until it arrives, just acknowledge briefly that you are waiting for it.`;
 }
 
 export class SessionCommands {
@@ -500,25 +501,36 @@ export class SessionCommands {
     }
     const meta = this.viewedMeta();
     const asked = model ?? (meta?.model.includes("/") ? meta.model : undefined);
+    // Open the review session FIRST: the view switches at command time (never
+    // abruptly mid-work later), and the session sits visible while the
+    // analysis runs. The report is delivered into it when it completes.
+    let target: { name: string; uuid?: string } | undefined;
+    try {
+      target = await this.h.openReviewSession(this.h.cwdFor(key), performanceReviewName());
+      this.h.notify(`performance: review session - ${target.name}; the report lands in it when the analysis completes`);
+    } catch (err) {
+      this.h.notify(`performance: review session not created: ${errText(err)} - analyzing anyway`);
+    }
     try {
       this.h.notify("performance: analyzing the transcript...");
       const r = await this.runPerf({ piCli: resolveChildConfig(loadSettings().settings).piCli, file: key, model: asked, cwd: meta?.cwd });
       this.h.notify("");
-      // Auto-save: the report outlives the panel (which closes on any key).
+      // Auto-save: the report outlives the transient notify (and the analysis).
       const saved = savePerformance(r.answer);
-      // The report also opens as a review session in the analyzed session's cwd;
-      // a failure there must not lose the report, which is already saved.
-      try {
-        const name = await this.h.openReviewSession(this.h.cwdFor(key), performanceReviewName(), r.answer);
-        this.h.notify(`performance: review session created - ${name}`);
-      } catch (err) {
-        this.h.notify(`performance: review session not created: ${errText(err)} (the report is saved to ${saved})`);
+      if (target) {
+        try {
+          await this.h.request({
+            type: "message",
+            to: target.uuid ?? target.name,
+            text: `The performance report (saved to ${saved}${r.truncated ? ", tail excerpt capped" : ""}):\n\n${r.answer}`,
+          });
+          this.h.notify(`performance: report delivered to ${target.name} (also saved to ${saved})`);
+        } catch (err) {
+          this.h.notify(`performance: report not delivered: ${errText(err)} (saved to ${saved})`);
+        }
+      } else {
+        this.h.notify(`performance: report saved to ${saved}`);
       }
-      const head = `performance: analysis of this session (saved to ${saved})${r.truncated ? ` (tail excerpt capped to its most recent ${TRANSCRIPT_TAIL_BYTES} bytes)` : ""}`;
-      this.h.infoPanel.show(`${head}\n\n${r.answer}`, [
-        { key: "c", label: "copies", run: () => void this.h.copyText(r.answer).then((res) => this.h.notify(res === true ? "performance: report copied" : `performance: copy failed (${res})`)) },
-      ]);
-      this.h.tui.requestRender();
     } catch (err) {
       this.fail("performance", err);
     }

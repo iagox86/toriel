@@ -560,29 +560,42 @@ class Controller {
   }
 
   /**
-   * Host.openReviewSession: seed a session file whose opening exchange is the
-   * report, then spawn a session on that file. The report lands as a past
-   * message, so the session starts ASLEEP holding it as context; nothing is
-   * prompted into it.
+   * Host.openReviewSession: seed a session file whose opening message frames
+   * the session, then spawn a session on it. The report follows later as a
+   * delivered message (the seed asks the session to wait for it), so the view
+   * can enter the session immediately - the switch happens at command time,
+   * not after the analysis.
    */
-  async openReviewSession(cwd: string, name: string, report: string): Promise<string> {
+  async openReviewSession(cwd: string, name: string): Promise<{ name: string; uuid?: string }> {
     const mgr = SessionManager.create(cwd);
-    mgr.appendMessage({ role: "user", content: performanceReviewSeed(report), timestamp: Date.now() });
+    mgr.appendMessage({ role: "user", content: performanceReviewSeed(), timestamp: Date.now() });
     const file = mgr.getSessionFile();
     if (!file || !fs.existsSync(file)) {
       throw new Error("could not create the review session's file");
     }
     const unique = this.uniqueSessionName(name);
     // ready: only report success once the child is actually up (startViewed waits the same way)
+    let uuid: string | undefined;
     try {
-      await this.request({ type: "spawn", cwd, sessionFile: file, name: unique, ready: true });
+      const r = (await this.request({ type: "spawn", cwd, sessionFile: file, name: unique, ready: true })) as { sessionId?: number; sessionUuid?: string };
+      uuid = r?.sessionUuid;
+      // Enter the session right away (the /fork flow): switch now when the
+      // child's meta is loaded, otherwise the next sessions message enters it.
+      const id = r?.sessionId;
+      const meta = typeof id === "number" ? this.sessions.get(id) : undefined;
+      if (meta) {
+        this.viewing = this.keyFor(meta);
+        this.rebuildChat();
+      } else if (typeof id === "number") {
+        this.pendingEnterId = id;
+      }
     } catch (err) {
       // No child means no session: remove the seeded file or it lingers in pi's
       // session dir as an unnamed ghost in the switcher list.
       fs.rmSync(file, { force: true });
       throw err;
     }
-    return unique;
+    return { name: unique, uuid };
   }
 
   // ---------------- switcher ----------------

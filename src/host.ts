@@ -70,9 +70,10 @@ export interface Host {
   /** /mouse: "on", "off", "toggle", or "" (just report the state); says what happened. */
   setMouse(arg: string): void;
   /**
-   * Open `report` as a new top-level session in `cwd` named `name`: the report
-   * becomes the session's opening context, and it starts ASLEEP (nothing is
-   * prompted into it). Resolves to the name actually used.
+   * Open a new top-level review session in `cwd` named `name`, seeded so it
+   * waits for the report to be delivered as a message. The view enters it
+   * right away (switch now, or on the next sessions message). Resolves to the
+   * name actually used plus the child's UUID (for the later delivery).
    */
-  openReviewSession(cwd: string, name: string, report: string): Promise<string>;
+  openReviewSession(cwd: string, name: string): Promise<{ name: string; uuid?: string }>;
 }

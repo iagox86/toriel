@@ -15,10 +15,13 @@ process.env.XDG_DATA_HOME = dataHome;
 
 const KEY = "/tmp/fake/session.jsonl";
 const REPORT = "finding one\nfinding two";
+const reportDir = () => path.join(dataHome, "toriel", "performance");
+const clearReports = () => fs.rmSync(reportDir(), { recursive: true, force: true });
 
-function fakeHost(open: (cwd: string, name: string, report: string) => Promise<string>) {
+function fakeHost(open: (cwd: string, name: string) => Promise<{ name: string; uuid?: string }>) {
   const notices: string[] = [];
   const panels: string[] = [];
+  const sent: Array<{ type: string; to?: string; text?: string }> = [];
   const host = {
     viewing: KEY,
     editor: { setText: () => {} },
@@ -29,8 +32,12 @@ function fakeHost(open: (cwd: string, name: string, report: string) => Promise<s
     infoPanel: { show: (text: string) => void panels.push(text) },
     copyText: async () => true,
     openReviewSession: open,
+    request: async (cmd: { type: string; to?: string; text?: string }) => {
+      sent.push(cmd);
+      return {};
+    },
   };
-  return { host: host as unknown as Host, notices, panels };
+  return { host: host as unknown as Host, notices, panels, sent };
 }
 
 const fakeRunPerf = async () => ({ answer: REPORT, truncated: false });
@@ -43,39 +50,46 @@ describe("performanceReviewName", () => {
 });
 
 describe("performanceReviewSeed", () => {
-  it("carries the full report and frames it as starting context", () => {
-    const seed = performanceReviewSeed(REPORT);
-    assert.ok(seed.includes(REPORT), "the report must survive verbatim");
+  it("frames the session as waiting for the report", () => {
+    const seed = performanceReviewSeed();
     assert.match(seed, /Performance review/);
     assert.match(seed, /starting context/);
+    assert.match(seed, /will be delivered to this session as a message/);
   });
 });
 
 describe("/performance review session", () => {
-  it("opens the report as a review session in the session's cwd and keeps the panel", async () => {
-    const calls: Array<{ cwd: string; name: string; report: string }> = [];
-    const { host, notices, panels } = fakeHost(async (cwd, name, report) => {
-      calls.push({ cwd, name, report });
-      return name;
+  it("opens the review session BEFORE the analysis and delivers the report to it as a message", async () => {
+    clearReports();
+    const calls: Array<{ cwd: string; name: string }> = [];
+    const { host, notices, panels, sent } = fakeHost(async (cwd, name) => {
+      calls.push({ cwd, name });
+      return { name, uuid: "uuid-1" };
     });
     new SessionCommands(host, fakeRunPerf).run("/performance");
     await settle();
 
+    // the session opens at command time (no waiting for the analysis)
     assert.equal(calls.length, 1);
-    assert.deepEqual([calls[0]?.cwd, calls[0]?.report], ["/work", REPORT]);
+    assert.equal(calls[0]?.cwd, "/work");
     assert.match(calls[0]?.name ?? "", /^performance review \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
-    assert.ok(notices.includes(`performance: review session created - ${calls[0]?.name ?? ""}`), `notices: ${JSON.stringify(notices)}`);
-    // the panel is still shown, and the report is auto-saved to a file it names
-    assert.equal(panels.length, 1);
-    assert.match(panels[0] ?? "", /^performance: analysis of this session \(saved to .+performance-.+\.md\)/);
-    assert.ok((panels[0] ?? "").includes(REPORT));
-    const dir = path.join(dataHome, "toriel", "performance");
+    assert.ok(notices.some((n) => n.startsWith(`performance: review session - ${calls[0]?.name}`)), `notices: ${JSON.stringify(notices)}`);
+    // the report reaches the session as a message, and is auto-saved either way
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0]?.type, "message");
+    assert.equal(sent[0]?.to, "uuid-1");
+    assert.ok(sent[0]?.text?.includes(REPORT), "the report must survive verbatim in the delivery");
+    assert.ok(notices.some((n) => n.includes("saved to")), `notices: ${JSON.stringify(notices)}`);
+    // no panel: the review session is the report's home
+    assert.equal(panels.length, 0);
+    const dir = reportDir();
     assert.equal(fs.readdirSync(dir).length, 1);
-    assert.match(fs.readFileSync(path.join(dir, fs.readdirSync(dir)[0] ?? ""), "utf8"), new RegExp(`^# performance review\\n\\n${REPORT.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}\\n$`));
+    assert.match(fs.readFileSync(path.join(dir, fs.readdirSync(dir)[0] ?? ""), "utf8"), new RegExp(`^# performance review\\n\\n${REPORT.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}$`, "m"));
   });
 
-  it("keeps the report (panel + auto-save) when opening the review session fails", async () => {
-    const { host, notices, panels } = fakeHost(async () => {
+  it("still analyzes and saves when opening the review session fails", async () => {
+    clearReports();
+    const { host, notices, panels, sent } = fakeHost(async () => {
       throw new Error("no daemon");
     });
     new SessionCommands(host, fakeRunPerf).run("/performance");
@@ -83,8 +97,24 @@ describe("/performance review session", () => {
 
     const creation = notices.find((n) => n.startsWith("performance: review session"));
     assert.match(creation ?? "", /review session not created: no daemon/);
-    assert.ok(creation?.includes("saved to") ?? false, "the notice must point at the saved report");
-    assert.equal(panels.length, 1);
-    assert.ok((panels[0] ?? "").includes(REPORT));
+    assert.ok(notices.some((n) => n.includes("saved to") && n.includes("report")), `notices: ${JSON.stringify(notices)}`);
+    assert.equal(sent.length, 0, "nothing is delivered when no session exists");
+    assert.equal(panels.length, 0);
+    assert.equal(fs.readdirSync(reportDir()).length, 1);
+  });
+
+  it("falls back to the saved file when delivery fails", async () => {
+    clearReports();
+    const { host: broken, notices } = fakeHost(async (_cwd, name) => ({ name, uuid: "uuid-2" }));
+    // request() rejects: simulate the review session dying before delivery
+    (broken as unknown as { request: () => Promise<never> }).request = async () => {
+      throw new Error("session gone");
+    };
+    new SessionCommands(broken, fakeRunPerf).run("/performance");
+    await settle();
+
+    const delivery = notices.find((n) => n.includes("not delivered"));
+    assert.match(delivery ?? "", /session gone/);
+    assert.ok(delivery?.includes("saved to") ?? false, "the notice must point at the saved report");
   });
 });
