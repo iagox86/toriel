@@ -1279,9 +1279,25 @@ with a fixed review prompt and shows the report in the info panel. Built on the 
 `btw.ts` gained a `sideRun` (the temp-copy + print-run that `askBtw` now calls; the copy goes
 through an optional `prepare` transform), and `performance.ts` holds the prompt, the cap and the
 save. Decisions: the handler does not call `liveMeta()` (it only reads the session file and spawns
-pi itself, like /btw; a sleeping session stays asleep); the cap is 1,048,576 bytes of first whole
-lines (the copy stays a valid prefix of the transcript, and the prompt names the gap); timeout is
+pi itself, like /btw; a sleeping session stays asleep); the cap is 2 MiB as the session header plus
+the most recent whole lines (see the addendum below for why the tail cut is safe, and the prompt
+names the gap); timeout is
 5 minutes, SIGKILL; results save under `$XDG_DATA_HOME/toriel/performance/` like /btw's.
+
+Addendum (ticket 147, 2026-11-05): the cap became 2 MiB of tail plus header. The prefix cut
+reviewed a session's beginning, not its current state, so `capTranscript` now keeps the session
+header (first line) plus the most recent whole lines that fit, with `[toriel: N earlier entries
+omitted ...]` between them. This is safe because of how pi loads a session file
+(`pi-coding-agent/dist/core/session-manager.js`): `parseSessionEntries` (:90-103) JSON-parses each
+line and silently skips malformed lines, so the note line never reaches the model; `_loadEntries`
+(~:727) only looks for the `type: "session"` header line and starts fresh without one, so the kept
+header is enough; `buildSessionPath` (:124-145) walks `parentId` up and a missing parent just ends
+the walk, so dropping middle entries leaves exactly the kept tail chain - no crash, nothing of the
+tail lost. Before fitting, a line over 64 KiB has every string value over 8000 characters cut to a
+`...[N characters cut]` marker (`clipEntryLine`), keeping the line valid JSON, so one huge tool
+output survives instead of being dropped whole. `truncated` now means entries were dropped (not
+"file over cap": clipping alone can bring a file under the cap), and the prompt - not just the
+file note - says the earliest entries were dropped, because skipped lines never reach the model.
 
 Parked (out of this ticket):
 - `/performance --keep`: leave the analysis run in the switcher as a real session for follow-ups.
