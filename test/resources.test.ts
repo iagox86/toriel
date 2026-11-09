@@ -33,7 +33,7 @@ describe("shipped resources", () => {
 
   it("covers every extension file in pi/extensions except presence, which is only for plain pi", () => {
     const shipped = RESOURCES.filter((r) => r.kind === "extension").map((r) => path.basename(r.path));
-    const onDisk = fs.readdirSync(path.join(PI_RESOURCES_DIR, "extensions")).filter((n) => n !== "toriel-presence.ts");
+    const onDisk = fs.readdirSync(path.join(PI_RESOURCES_DIR, "extensions"), { withFileTypes: true }).filter((e) => e.isFile() && e.name !== "toriel-presence.ts").map((e) => e.name);
     assert.deepEqual([...shipped].sort(), onDisk.sort());
   });
 });

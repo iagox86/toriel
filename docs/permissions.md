@@ -81,6 +81,13 @@ its source and docs:
    timeout also cancels the pending socket callback; and `permissions:ready` may fire
    more than once per session while registering a duplicate name throws, so
    registration is guarded and idempotent.
+   Since ticket 163 the link also holds the scope guard for directory-scoped sessions:
+   when the daemon set `TORIEL_SCOPE_ROOT` in the child's environment, covered write
+   asks whose canonical target is outside it are denied (with a reason naming the path
+   and the root) before the grants check ever runs. That half fails closed - an invalid
+   env denies every covered write, it does not defer - but it still never throws; and
+   when the env is absent the guard is off and the link behaves exactly as before.
+   Details and limits: `docs/reference.md` "Env" under `TORIEL_SCOPE_ROOT`.
 3. The operator opts in once by adding `"authorizerChain": ["toriel-grants"]` to
    pi-permission-system's config.json. toriel never edits that file. The resources
    audit warns, with the exact line, when the extension is loaded but the chain does

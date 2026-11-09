@@ -4,6 +4,7 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
+import { readScope } from "../pi/extensions/lib/scope-root.ts";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-grantsext-"));
 const sock = path.join(dir, "d.sock");
@@ -103,6 +104,142 @@ describe("authorize", () => {
   });
 });
 
+describe("scope link", () => {
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "toriel-scope-")));
+  fs.mkdirSync(path.join(base, "W"));
+  const W = fs.realpathSync(path.join(base, "W"));
+  const root = { kind: "root" as const, root: W };
+  const off = { kind: "off" as const };
+
+  function writeAsk(surface: string, boundaryValue: unknown, extra: Record<string, unknown> = {}) {
+    return { surface, accessIntent: { surface, matchValues: [boundaryValue ?? "no-boundary"], boundaryValue }, sessionApproval: { grants: [{ surface, pattern: `${surface}:*` }] }, payload: { request: { value: `${surface} ${boundaryValue ?? ""}` } }, ...extra };
+  }
+
+  it("denies a write whose canonical target escapes W, naming the path and the root, without asking the daemon", async () => {
+    const outside = path.join(base, "outside.txt");
+    const v = ext.scopeVerdict(root, writeAsk("path_write", outside));
+    assert.equal(v.kind, "deny");
+    if (v.kind === "deny") {
+      assert.match(v.reason, new RegExp(outside), "reason names the offending canonical path");
+      assert.match(v.reason, new RegExp(W), "reason names the scope root");
+    }
+    const d = await fakeDaemon(() => ({ ok: true, data: { allow: true } }));
+    try {
+      assert.equal((await ext.authorize(sock, "u", writeAsk("path_write", outside), () => { throw new Error("must not be called"); }, root)).kind, "deny");
+      assert.equal(d.seen.filter((c) => c.type === "permission_check").length, 0, "a scope deny never reaches the daemon");
+    } finally {
+      d.close();
+    }
+  });
+
+  it("denies a symlink-out write even though the lexical path is inside W", () => {
+    const main = path.join(base, "main");
+    fs.mkdirSync(main);
+    const realMain = fs.realpathSync(main);
+    const boundary = path.join(realMain, "f.txt");
+    const ask = writeAsk("external_directory_write", boundary, { accessIntent: { surface: "external_directory_write", matchValues: [path.join(W, "link-out", "f.txt"), boundary], boundaryValue: boundary } });
+    const v = ext.scopeVerdict(root, ask);
+    assert.equal(v.kind, "deny", "matchValues carries a lexical path inside W; only the canonical boundary decides");
+    if (v.kind === "deny") {
+      assert.match(v.reason, /f\.txt/);
+      assert.match(v.reason, new RegExp(W));
+    }
+  });
+
+  it("defers writes inside W and denies the sibling-prefix trap", () => {
+    assert.deepEqual(ext.scopeVerdict(root, writeAsk("path_write", W)), { kind: "defer" }, "W itself is inside W");
+    assert.deepEqual(ext.scopeVerdict(root, writeAsk("path_write", path.join(W, "sub", "x"))), { kind: "defer" }, "a child of W defers");
+    const sibling = path.join(base, "W-evil", "x");
+    const v = ext.scopeVerdict(root, writeAsk("path_write", sibling));
+    assert.equal(v.kind, "deny", `${sibling} is not inside ${W}`);
+    if (v.kind === "deny") {
+      assert.match(v.reason, /W-evil/);
+      assert.match(v.reason, new RegExp(W));
+    }
+  });
+
+  it("stays total: hostile details and a throwing send resolve to a verdict, never a rejection", async () => {
+    const throwing = { get accessIntent() { throw new Error("boom"); } };
+    assert.doesNotThrow(() => assert.equal(ext.scopeVerdict(root, throwing as never).kind, "deny"), "covered check under a root scope fails closed");
+    assert.doesNotThrow(() => assert.equal(ext.scopeVerdict(off, throwing as never).kind, "defer"), "off never touches details");
+    assert.deepEqual(await ext.authorize(sock, "u", null as never, () => { throw new Error("boom"); }, off), { kind: "defer" });
+    assert.equal((await ext.authorize(sock, "u", throwing as never, () => { throw new Error("boom"); }, root)).kind, "deny");
+  });
+
+  it("denies every covered write while the env is present but invalid (naming the env), and defers uncovered surfaces", async () => {
+    const file = path.join(base, "a-file");
+    fs.writeFileSync(file, "x");
+    const link = path.join(base, "link-to-W");
+    fs.symlinkSync(W, link);
+    const bad = ["", "  ", "relative", path.join(base, "missing"), file, "/", link, `${W}/`].map((v) => readScope({ TORIEL_SCOPE_ROOT: v }));
+    for (const s of bad) {
+      assert.equal(s.kind, "invalid", "readScope rejects this value");
+      const w = writeAsk("path_write", path.join(W, "x"));
+      const dv = ext.scopeVerdict(s, w);
+      assert.equal(dv.kind, "deny", "a covered write under an invalid scope denies, never defers");
+      if (dv.kind === "deny") {
+        assert.match(dv.reason, /TORIEL_SCOPE_ROOT/);
+      }
+      for (const surf of ["path_read", "bash", "mcp"]) {
+        assert.deepEqual(ext.scopeVerdict(s, writeAsk(surf, path.join(W, "x"))), { kind: "defer" }, `uncovered surface ${surf} defers even when invalid`);
+      }
+    }
+    const first = readScope({ TORIEL_SCOPE_ROOT: "" });
+    const d = await fakeDaemon(() => ({ ok: true, data: { allow: true } }));
+    try {
+      assert.equal((await ext.authorize(sock, "u", writeAsk("path_write", path.join(W, "x")), () => { throw new Error("must not be called"); }, first)).kind, "deny");
+      assert.equal(d.seen.length, 0, "a scope deny never reaches the daemon");
+    } finally {
+      d.close();
+    }
+  });
+
+  it("defers everything when the scope is absent (off, or readScope of an empty env)", () => {
+    const outside = path.join(base, "outside6.txt");
+    assert.deepEqual(ext.scopeVerdict(off, writeAsk("path_write", outside)), { kind: "defer" });
+    assert.deepEqual(readScope({}), { kind: "off" });
+    assert.deepEqual(ext.scopeVerdict(readScope({}), writeAsk("external_directory_write", outside)), { kind: "defer" });
+  });
+
+  it("denies the folded write families outside W and defers the read families", () => {
+    // write/edit fold into path_read+path_write asks (pi-permission-system src/policy/permission-resolver.ts:96-118)
+    const outside = path.join(base, "folded.txt");
+    assert.equal(ext.scopeVerdict(root, writeAsk("path_write", outside, { surface: "write" })).kind, "deny", "details.surface is the tool's display surface; accessIntent.decides");
+    assert.equal(ext.scopeVerdict(root, writeAsk("path_write", outside)).kind, "deny", "bare-path origin ask");
+    assert.deepEqual(ext.scopeVerdict(root, writeAsk("path_read", outside)), { kind: "defer" }, "reads are not jailed (T7)");
+    assert.deepEqual(ext.scopeVerdict(root, writeAsk("external_directory_read", outside)), { kind: "defer" });
+  });
+
+  it("denies a covered write with a missing or non-string canonical target", () => {
+    for (const b of [null, "", 42]) {
+      const v = ext.scopeVerdict(root, writeAsk("external_directory", b));
+      assert.equal(v.kind, "deny", `boundary ${String(b)}`);
+      if (v.kind === "deny") {
+        assert.match(v.reason, /cannot resolve a canonical target/);
+        assert.match(v.reason, new RegExp(W));
+      }
+    }
+  });
+
+  it("runs before the grants round-trip: deny wins over a daemon allow, inside-W still honors the daemon", async () => {
+    const outside = path.join(base, "outside9.txt");
+    const d = await fakeDaemon(() => ({ ok: true, data: { allow: true } }));
+    try {
+      assert.equal((await ext.authorize(sock, "u", writeAsk("external_directory_write", outside), () => { throw new Error("must not be called"); }, root)).kind, "deny");
+      assert.equal(d.seen.filter((c) => c.type === "permission_check").length, 0, "the daemon allow is never consulted");
+    } finally {
+      d.close();
+    }
+    const d2 = await fakeDaemon(() => ({ ok: true, data: { allow: true } }));
+    try {
+      assert.deepEqual(await ext.authorize(sock, "u", writeAsk("path_write", path.join(W, "in.txt")), undefined, root), { kind: "allow" });
+      assert.equal(d2.seen.filter((c) => c.type === "permission_check").length, 1, "inside-W writes still go through the grants path");
+    } finally {
+      d2.close();
+    }
+  });
+});
+
 describe("registration", () => {
   function fakePi() {
     const handlers = new Map<string, (data: unknown) => void>();
@@ -166,5 +303,23 @@ describe("registration", () => {
     } finally {
       process.env.TORIEL_CHILD = saved;
     }
+  });
+
+  it("keeps a registered closure total: hostile details resolve to a verdict, not a rejection", async () => {
+    const scopeDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "toriel-scopereg-")));
+    const registered: Array<{ name: string; authorize: (d: unknown) => Promise<unknown>; disposed: boolean }> = [];
+    publish("s3", registered);
+    const f = fakePi();
+    process.env.TORIEL_SCOPE_ROOT = scopeDir;
+    try {
+      ext.default(f.pi as never);
+      f.handlers.get("permissions:ready")?.({ sessionId: "s3" });
+    } finally {
+      delete process.env.TORIEL_SCOPE_ROOT;
+    }
+    assert.equal(registered.length, 1);
+    const v = (await registered[0].authorize({ get accessIntent() { throw new Error("boom"); } } as never)) as { kind: string; reason?: string };
+    assert.equal(v.kind, "deny", "scope root from the env fails closed on a throwing getter");
+    assert.match(v.reason ?? "", /denying/);
   });
 });

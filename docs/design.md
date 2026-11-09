@@ -1349,6 +1349,14 @@ Follow-ups filed: 163 (T1 scope deny link via TORIEL_SCOPE_ROOT in child env), 1
 `scope` field, default-on), 165 (T3 doctor), 166 (T6 sandbox spike), 167 (T7 read jail), 168-171
 (T4a-d parser gaps). T1 is the keystone: 165 and 166 are blocked on it.
 
+Addendum (2026-11-07): T1 is implemented on branch `phase1-scope-deny` (spec: `SPEC-163-T1.md`
+in the worktree, built from a step-0 probe of the real gate stack). The link's COVERED set is
+`external_directory_write`, bare `external_directory` (the edit-tool family fold - discovered by
+the probe: an edit outside the cwd surfaces as the bare family, not a directional surface) and
+`path_write` defensively; in-cwd asks carry bare `write`/`bash`/`read` surfaces and defer. The
+phase-1 rollout is deliberately narrow: only a profile session whose cwd is a linked-worktree
+root is scoped (`scopeRootFor`), T2/T8 own the broader default-on.
+
 Session wrap-up 2026-11-06 (unpushed): main `69817c3` (docs) <- `2b6474f` (AGENTS.md board line)
 <- `97ad4c2` (qwen defaults for implement/explore/summarize/test-runner/triage; implement
 maxTurns 120). `/performance` flow final shape: review session opens at command time, report
