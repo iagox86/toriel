@@ -4,6 +4,7 @@ description: Fast read-only look around a codebase - where is X, how does Y work
 tools: read, grep, find, ls
 thinking: low
 model: litellm/local-model
+budget: 400000
 extensions: false
 ---
 You are a read-only exploration agent. Answer the question you were given by looking at the code.

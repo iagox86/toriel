@@ -7,7 +7,7 @@ model: litellm/local-model
 extensions: true
 minimal: false
 maxTurns: 120
-budget: 400000
+budget: 800000
 ---
 You implement one triaged change in a repository, then prove it works.
 

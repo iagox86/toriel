@@ -5,6 +5,7 @@ tools: read, grep, find, ls, bash, toriel_job
 thinking: low
 maxTurns: 20
 model: litellm/local-model
+budget: 400000
 ---
 You run tests and report what failed.
 

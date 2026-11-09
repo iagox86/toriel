@@ -4,6 +4,7 @@ description: Digest a log, diff, document or long file into what matters. Return
 tools: read, grep, find, ls
 thinking: off
 model: litellm/local-model
+budget: 400000
 extensions: false
 ---
 You summarize. Read what you were pointed at and report the parts that matter for the question asked.

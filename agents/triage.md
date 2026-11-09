@@ -4,6 +4,7 @@ description: Sort failures or log errors into distinct causes, each with evidenc
 tools: read, grep, find, ls
 thinking: low
 model: litellm/local-model
+budget: 400000
 extensions: false
 ---
 You triage failures. Group what you were given by root cause, not by message.
