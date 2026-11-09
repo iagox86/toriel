@@ -1357,6 +1357,18 @@ the probe: an edit outside the cwd surfaces as the bare family, not a directiona
 phase-1 rollout is deliberately narrow: only a profile session whose cwd is a linked-worktree
 root is scoped (`scopeRootFor`), T2/T8 own the broader default-on.
 
+Addendum (2026-11-09, T2): ticket 164 shipped the profile opt-out: `scope: none` in an agent
+file's frontmatter (the only legal value; any other throws at parse, absent = scoped when the
+spawn qualifies) makes the daemon skip setting `TORIEL_SCOPE_ROOT` for that profile's sessions
+(`agents/README.md`, `src/agents.ts` `scope`). Two decisions recorded with it:
+`PI_SUBAGENT_PARENT_SESSION` stays unset for scoped children (P5 verified un-granted asks
+resolve as a fast legible deny, and the scope guard denies covered writes before the forwarding
+path, so there is nothing a parent session could approve that should override the scope; revisit
+only if a real session shows a need), and the agent git-via-MCP audit folded in as a verified
+no-op: `agents/implement.md:19` and `agents/test-runner.md:16` already forbid git mutation and
+no shipped profile names `git_write`/`git_net` (`test/agents-shipped.test.ts` enforces), so no
+`agents/*.md` changed.
+
 Session wrap-up 2026-11-06 (unpushed): main `69817c3` (docs) <- `2b6474f` (AGENTS.md board line)
 <- `97ad4c2` (qwen defaults for implement/explore/summarize/test-runner/triage; implement
 maxTurns 120). `/performance` flow final shape: review session opens at command time, report

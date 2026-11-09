@@ -25,6 +25,8 @@ export interface AgentProfile {
   tools?: string[];
   /** provider/id; unset = whatever the settings say. */
   model?: string;
+  /** Opt out of the daemon's directory scoping for worktree spawns; unset = scoped when the spawn qualifies. */
+  scope?: "none";
   thinking?: string;
   /** Appended to pi's system prompt. */
   prompt: string;
@@ -49,7 +51,7 @@ export interface LoadedAgents {
   problems: string[];
 }
 
-const KEYS = new Set(["name", "description", "tools", "model", "thinking", "maxturns", "budget", "canspawn", "minimal", "extensions"]);
+const KEYS = new Set(["name", "description", "tools", "model", "scope", "thinking", "maxturns", "budget", "canspawn", "minimal", "extensions"]);
 const THINKING = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
 /** Claude-style capitalized tool names mapped to pi's lowercase ones. */
@@ -147,6 +149,9 @@ export function parseAgent(text: string, source: string, file: string): AgentPro
   if (fm.model !== undefined && !fm.model.includes("/")) {
     throw new Error("model must be provider/id");
   }
+  if (fm.scope !== undefined && fm.scope !== "none") {
+    throw new Error('scope must be "none"');
+  }
   const tools = fm.tools === undefined ? undefined : fm.tools.split(",").map(normalizeTool).filter(Boolean);
   if (tools !== undefined && tools.length === 0) {
     throw new Error("tools is empty (leave it out for pi's defaults)");
@@ -161,6 +166,7 @@ export function parseAgent(text: string, source: string, file: string): AgentPro
     description: fm.description,
     tools,
     model: fm.model,
+    scope: fm.scope === "none" ? "none" : undefined,
     thinking: fm.thinking,
     prompt: (m[2] ?? "").trim(),
     maxTurns: asCount("maxTurns", fm.maxturns),
