@@ -49,6 +49,16 @@ describe("parseAgent", () => {
     assert.throws(() => parse("---\nname: a\ndescription: d\nmaxTurns: -1\n---\n"), /positive whole number/);
     assert.throws(() => parse("---\nname: a\ndescription: d\ncanSpawn: maybe\n---\n"), /true or false/);
   });
+
+  it("reads scope: none as the worktree-scoping opt-out and leaves it unset when absent", () => {
+    assert.equal(parse("---\nname: a\ndescription: d\n---\n").scope, undefined);
+    assert.equal(parse("---\nname: a\ndescription: d\nscope: none\n---\n").scope, "none");
+  });
+
+  it("rejects any other scope value: there is no second spelling of the default", () => {
+    assert.throws(() => parse("---\nname: a\ndescription: d\nscope: worktree\n---\n"), /scope must be "none"/);
+    assert.throws(() => parse("---\nname: a\ndescription: d\nscope: yes\n---\n"), /scope must be "none"/);
+  });
 });
 
 describe("profileArgs", () => {

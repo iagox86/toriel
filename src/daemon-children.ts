@@ -108,7 +108,7 @@ export class ChildManager {
     if (!fs.existsSync(s.cwd)) {
       throw new Error(`working directory no longer exists: ${s.cwd} (moved or deleted; recreate it or symlink it to the new location)`);
     }
-    const scopeRoot = scopeRootFor(s.cwd, s.agent !== undefined);
+    const scopeRoot = scopeRootFor(s.cwd, s.agent !== undefined && s.agent.scope !== "none");
     if (scopeRoot !== undefined) {
       log(`scope root for ${s.sessionId ?? s.id}: ${scopeRoot}`);
     }
