@@ -4,7 +4,7 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { readScope } from "../pi/extensions/scope-root.ts";
+import { readScope } from "../pi/extensions/lib/scope-root.ts";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-grantsext-"));
 const sock = path.join(dir, "d.sock");

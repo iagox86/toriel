@@ -10,10 +10,20 @@ export interface EnvSession {
   sessionFile?: string;
 }
 
-/** What the pi child process is started with. */
-export function childEnv(s: EnvSession, sock: string, base: NodeJS.ProcessEnv = process.env): Record<string, string> {
+/**
+ * What the pi child process is started with. `scopeRoot` (optional) becomes
+ * TORIEL_SCOPE_ROOT, the write scope for the scope deny link. A `!command` runs
+ * in the daemon, not in pi, so it must never receive that variable: `bangEnv`
+ * calls this without one, and a TORIEL_SCOPE_ROOT already in `base` is dropped
+ * (a daemon started inside a scoped session must not leak its own scope into
+ * every child).
+ */
+export function childEnv(s: EnvSession, sock: string, base: NodeJS.ProcessEnv = process.env, scopeRoot?: string): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(base)) {
+    if (key === "TORIEL_SCOPE_ROOT") {
+      continue;
+    }
     if (value !== undefined) {
       env[key] = value;
     }
@@ -22,6 +32,9 @@ export function childEnv(s: EnvSession, sock: string, base: NodeJS.ProcessEnv = 
   env.TORIEL_SOCK = sock;
   if (s.sessionId) {
     env.TORIEL_SESSION_ID = s.sessionId;
+  }
+  if (scopeRoot !== undefined) {
+    env.TORIEL_SCOPE_ROOT = scopeRoot;
   }
   return env;
 }

@@ -4,8 +4,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 
-import { SCOPE_ENV, isInside, readScope } from "../pi/extensions/scope-root.ts";
-import type { Scope } from "../pi/extensions/scope-root.ts";
+import { SCOPE_ENV, isInside, readScope } from "../pi/extensions/lib/scope-root.ts";
+import type { Scope } from "../pi/extensions/lib/scope-root.ts";
+import { scopeRootFor } from "../src/scope-root.ts";
 
 function freshTmpdir(): string {
   // /tmp may itself be a symlink on some hosts; every W must be canonical.
@@ -87,7 +88,7 @@ describe("readScope", () => {
     const dir = freshTmpdir();
     const fsApi = {
       realpathSync: (p: string): string => `${p}-resolved`,
-      statSync: (p: string): { isDirectory: () => boolean } => ({ isDirectory: () => true }),
+      statSync: (_p: string): { isDirectory: () => boolean } => ({ isDirectory: () => true }),
     };
     const scope = readScope({ [SCOPE_ENV]: dir }, fsApi);
     if (scope.kind !== "invalid") {
@@ -125,5 +126,61 @@ describe("isInside", () => {
   it("excludes relative targets", () => {
     assert.equal(isInside(W, "relative/dir"), false);
     assert.equal(isInside(W, "w/x"), false);
+  });
+});
+
+describe("scopeRootFor (daemon side)", () => {
+  it("leaves a plain repo (a .git directory) unscoped even with a profile", () => {
+    const dir = freshTmpdir();
+    fs.mkdirSync(path.join(dir, ".git"));
+    assert.equal(scopeRootFor(dir, true), undefined);
+  });
+
+  it("scopes a profile session at a linked worktree root to the realpath of the cwd", () => {
+    const dir = freshTmpdir();
+    fs.writeFileSync(path.join(dir, ".git"), "gitdir: /r/.git/worktrees/w1\n");
+    assert.equal(scopeRootFor(dir, true), fs.realpathSync(dir));
+  });
+
+  it("leaves a worktree unscoped without a profile", () => {
+    const dir = freshTmpdir();
+    fs.writeFileSync(path.join(dir, ".git"), "gitdir: /r/.git/worktrees/w1\n");
+    assert.equal(scopeRootFor(dir, false), undefined);
+  });
+
+  it("does not treat a submodule-style .git file as a worktree", () => {
+    const dir = freshTmpdir();
+    fs.writeFileSync(path.join(dir, ".git"), "gitdir: ../.git/modules/m\n");
+    assert.equal(scopeRootFor(dir, true), undefined);
+  });
+
+  it("leaves a directory without .git unscoped", () => {
+    const dir = freshTmpdir();
+    assert.equal(scopeRootFor(dir, true), undefined);
+  });
+
+  it("returns the canonical target when the cwd is a symlink to the worktree", () => {
+    const base = freshTmpdir();
+    const worktree = fs.realpathSync(fs.mkdtempSync(path.join(base, "wt-")));
+    fs.writeFileSync(path.join(worktree, ".git"), "gitdir: /r/.git/worktrees/w1\n");
+    const link = path.join(base, "link");
+    fs.symlinkSync(worktree, link);
+    assert.equal(scopeRootFor(link, true), worktree);
+  });
+
+  it("returns undefined, not a throw, for a garbage .git file or an fs error while probing", () => {
+    const dir = freshTmpdir();
+    fs.writeFileSync(path.join(dir, ".git"), "not a gitdir line\n");
+    assert.equal(scopeRootFor(dir, true), undefined);
+    const throwingFs = {
+      lstatSync: (): { isFile: () => boolean } => {
+        throw new Error("EACCES");
+      },
+      realpathSync: (p: string): string => p,
+      readFileSync: (): string => {
+        throw new Error("EACCES");
+      },
+    };
+    assert.equal(scopeRootFor(dir, true, throwingFs), undefined);
   });
 });

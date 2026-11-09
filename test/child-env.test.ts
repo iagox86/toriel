@@ -28,6 +28,30 @@ describe("a session's command environment", () => {
   });
 });
 
+describe("the TORIEL_SCOPE_ROOT seam", () => {
+  it("sets TORIEL_SCOPE_ROOT only when a scope root is given", () => {
+    const env = childEnv({ sessionId: "abc" }, "/sock", { A: "1" }, "/w");
+    assert.equal(env.TORIEL_SCOPE_ROOT, "/w");
+    assert.equal(env.A, "1");
+  });
+
+  it("drops a TORIEL_SCOPE_ROOT already in the base when no scope root is given (no leak)", () => {
+    const env = childEnv({ sessionId: "abc" }, "/sock", { A: "1", TORIEL_SCOPE_ROOT: "/leaked" });
+    assert.equal(env.TORIEL_SCOPE_ROOT, undefined);
+    assert.equal(env.A, "1");
+  });
+
+  it("lets the argument win over a leaked base value", () => {
+    const env = childEnv({}, "/sock", { TORIEL_SCOPE_ROOT: "/leaked" }, "/w");
+    assert.equal(env.TORIEL_SCOPE_ROOT, "/w");
+  });
+
+  it("never gives a !command the scope root, even when it leaks in the base", () => {
+    const env = bangEnv({ sessionId: "abc" }, "/sock", { PATH: "/usr/bin", TORIEL_SCOPE_ROOT: "/leaked" }, "/pi/bin");
+    assert.equal(env.TORIEL_SCOPE_ROOT, undefined);
+  });
+});
+
 describe("the background command name", () => {
   it("is the same in the daemon and in the extension", () => {
     assert.equal(DAEMON_COMMAND, EXTENSION_COMMAND);

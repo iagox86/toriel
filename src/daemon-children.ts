@@ -2,6 +2,7 @@
 import * as fs from "node:fs";
 import { RpcClient } from "@earendil-works/pi-coding-agent";
 import { childEnv } from "./child-env.ts";
+import { scopeRootFor } from "./scope-root.ts";
 import { DIALOG_METHODS, SOCK } from "./config.ts";
 import { withSuggestion } from "./permissions.ts";
 import { type BridgeTracker, INJECT_COMMAND, injectedId, mergedQueueTexts, parseBridgeReport } from "./daemon-bridge.ts";
@@ -107,11 +108,15 @@ export class ChildManager {
     if (!fs.existsSync(s.cwd)) {
       throw new Error(`working directory no longer exists: ${s.cwd} (moved or deleted; recreate it or symlink it to the new location)`);
     }
+    const scopeRoot = scopeRootFor(s.cwd, s.agent !== undefined);
+    if (scopeRoot !== undefined) {
+      log(`scope root for ${s.sessionId ?? s.id}: ${scopeRoot}`);
+    }
     const client = new RpcClient({
       cliPath: cfg.piCli,
       cwd: s.cwd,
       args,
-      env: { ...childEnv(s, SOCK), ...this.delegationEnv(s) },
+      env: { ...childEnv(s, SOCK, process.env, scopeRoot), ...this.delegationEnv(s) },
     });
     client.onEvent((event) => this.onEvent(s, event as Record<string, unknown>));
     this.launching.add(client);

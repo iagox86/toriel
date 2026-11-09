@@ -8,7 +8,7 @@
 // link that throws would block the tool call, so nothing here may throw. Runs only in children
 // the toriel daemon starts (TORIEL_CHILD).
 import { ask } from "./toriel-agents.ts";
-import { isInside, readScope, type Scope } from "./scope-root.ts";
+import { isInside, readScope, type Scope } from "./lib/scope-root.ts";
 
 export const LINK_NAME = "toriel-grants";
 /** How long the daemon gets to answer; a slow answer is a deferred one. */
