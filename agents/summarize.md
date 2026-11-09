@@ -3,7 +3,7 @@ name: summarize
 description: Digest a log, diff, document or long file into what matters. Returns a short summary, not the original text.
 tools: read, grep, find, ls
 thinking: off
-model: litellm/qwen/qwen3.8-27b
+model: litellm/local-model
 extensions: false
 ---
 You summarize. Read what you were pointed at and report the parts that matter for the question asked.

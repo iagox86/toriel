@@ -3,7 +3,7 @@ name: implement
 description: Implement a triaged change in the repo: edit code and tests, run the checks, report the diff. Edits files, so start it only for a task the user approved.
 tools: read, grep, find, ls, edit, write, bash, toriel_job
 thinking: medium
-model: litellm/qwen/qwen3.8-27b
+model: litellm/local-model
 extensions: true
 minimal: false
 maxTurns: 120

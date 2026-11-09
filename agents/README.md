@@ -40,7 +40,7 @@ Searched in order, a later folder replacing an earlier agent of the same name:
 name: reverse-engineer          # required: lowercase letters, digits, - and _
 description: What it is for.    # required: what picks the agent
 tools: read, grep, bash, mcp__ghidra__*   # allowlist; patterns allowed; Claude names (Read, Glob) are mapped
-model: litellm/gemma4:12b       # provider/id; default = your settings
+model: litellm/local-model      # provider/id; default = your settings
 thinking: low                   # off, minimal, low, medium, high, xhigh, max
 extensions: false               # default true; false drops pi extensions: the permission system, memory tools AND pi's MCP support (so not with mcp__ tools)
 minimal: true                   # default true; skips AGENTS.md/CLAUDE.md, skills, prompt templates

@@ -6,7 +6,7 @@
 //   name: explore
 //   description: Read-only look around the codebase.
 //   tools: read, grep, find, ls, mcp__ghidra__*
-//   model: litellm/gemma4:12b
+//   model: litellm/local-model
 //   thinking: low
 //   ---
 //   System prompt text...

@@ -332,7 +332,7 @@ A session's address is its UUID (pi's session id). toriel picks it before pi sta
 - `TORIEL_PROVIDER` / `TORIEL_MODEL` / `TORIEL_THINKING` / `TORIEL_STEERING_MODE` -
   override the settings file: provider, model and
   thinking level for spawned
-  children (e.g. `TORIEL_PROVIDER=litellm TORIEL_MODEL=gemma4:12b` for free
+  children (e.g. `TORIEL_PROVIDER=litellm TORIEL_MODEL=local-model` for free
   local tests, or `TORIEL_MODEL=glm-4.7 TORIEL_THINKING=low` for cheap test
   fleets); unset = your normal pi settings
 - `TORIEL_SETTINGS` - path of the toriel settings file (see Settings)
@@ -480,7 +480,7 @@ choices, narrowed by what is typed. Flags are not completed.
 `/summarize` (switcher) writes a one-line summary of the highlighted session
 into the Summary column, using a model run through pi's print mode:
 `-m provider/id` (default: `summaryModel` in `~/.config/toriel/settings.json`,
-else `litellm/gemma4:12b`), `-c <chars>` (transcript size, default 2500), `--all`
+else `litellm/local-model`), `-c <chars>` (transcript size, default 2500), `--all`
 (every session with no summary or a stale one). Summaries live in
 `session-groups.json`. They are kept up automatically: every
 `summaryIntervalMinutes` (default 60, `0` turns it off) while toriel is open, it

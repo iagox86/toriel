@@ -20,7 +20,7 @@ export interface TorielSettings {
   thinking?: string;
   /** Path of pi's cli.js. */
   piCli?: string;
-  /** Model /summarize uses (provider/id); default litellm/gemma4:12b. */
+  /** Model /summarize uses (provider/id); default litellm/local-model. */
   summaryModel?: string;
   /** Re-summarize changed sessions this often while toriel is open (default 60; 0 = never). */
   summaryIntervalMinutes?: number;

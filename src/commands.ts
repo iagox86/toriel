@@ -156,10 +156,10 @@ export const SWITCHER_COMMANDS = [
   {
     name: "summarize",
     description: "write a one-line summary of the highlighted session into the Summary column",
-    help: "Asks a small model for a one-line summary of the transcript and stores it for the Summary column. The model defaults to summaryModel in the toriel settings, else litellm/gemma4:12b. toriel also refreshes summaries by itself while it is open.\n\nExamples:\n  /summarize\n  /summarize --all -c 1500 -m litellm/gemma4:12b",
+    help: "Asks a small model for a one-line summary of the transcript and stores it for the Summary column. The model defaults to summaryModel in the toriel settings, else litellm/local-model. toriel also refreshes summaries by itself while it is open.\n\nExamples:\n  /summarize\n  /summarize --all -c 1500 -m litellm/local-model",
     build: (cmd) => {
       cmd
-        .option("-m, --model <model>", "model to summarize with, provider/id (default: summaryModel in settings, else litellm/gemma4:12b)")
+        .option("-m, --model <model>", "model to summarize with, provider/id (default: summaryModel in settings, else litellm/local-model)")
         .option("-c, --chars <n>", "most transcript characters to send (default 2500; smaller suits small models)", Number)
         .option("--all", "summarize every session that has no summary or a stale one, one after another");
     },
@@ -229,7 +229,7 @@ export const SESSION_COMMANDS = [
   {
     name: "btw",
     description: "ask a side question about this session; the answer pops up and the session never sees it",
-    help: "Asks a copy of this session (it has read the whole conversation but has no tools) one question in the background, so you can keep working. The answer opens in a panel: c copies it, s saves it to a file, any other key closes. Nothing is added to the session and its own model is not interrupted. Uses the session's model unless -m is given.\n\nExamples:\n  /btw why did you choose sqlite over a json file?\n  /btw -m litellm/gemma4:12b what is left to do?",
+    help: "Asks a copy of this session (it has read the whole conversation but has no tools) one question in the background, so you can keep working. The answer opens in a panel: c copies it, s saves it to a file, any other key closes. Nothing is added to the session and its own model is not interrupted. Uses the session's model unless -m is given.\n\nExamples:\n  /btw why did you choose sqlite over a json file?\n  /btw -m litellm/local-model what is left to do?",
     build: (cmd) => {
       cmd
         .option("-m, --model <model>", "model to ask, provider/id (default: this session's model)")

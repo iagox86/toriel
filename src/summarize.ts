@@ -9,7 +9,7 @@ import { messageText } from "./format.ts";
 import { loadSettings, resolveChildConfig } from "./settings.ts";
 import { errText } from "./util.ts";
 
-export const DEFAULT_SUMMARY_MODEL = "litellm/gemma4:12b";
+export const DEFAULT_SUMMARY_MODEL = "litellm/local-model";
 /** Local models are slow; wait a good while before giving up. */
 export const SUMMARY_TIMEOUT_MS = 5 * 60_000;
 const MAX_LINE = 100;

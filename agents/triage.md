@@ -3,7 +3,7 @@ name: triage
 description: Sort failures or log errors into distinct causes, each with evidence and a next step. For a plain digest use summarize.
 tools: read, grep, find, ls
 thinking: low
-model: litellm/qwen/qwen3.8-27b
+model: litellm/local-model
 extensions: false
 ---
 You triage failures. Group what you were given by root cause, not by message.

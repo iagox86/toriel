@@ -51,7 +51,7 @@ describe("shipped agent profiles", () => {
         // lane); the model must be a provider/id string when present.
         if (agent.model !== undefined) {
           assert.equal(typeof agent.model, "string");
-          assert.match(agent.model as string, /^[^/]+\/[^/]+\//, "model must be provider/lane/id");
+          assert.match(agent.model as string, /^[^/]+\/\S+$/, "model must be provider/id");
         }
       });
 
