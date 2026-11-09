@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 import { PERMISSIONS_FILE } from "../src/config.ts";
-import { auditFindings, describeResourceProblems, type Finding, missingResources, pathAction, PI_RESOURCES_DIR, RESOURCES, resourceArgs, staleInstalls, summarizeFindings, TORIEL_TOOLS } from "../src/resources.ts";
+import { auditFindings, describeResourceProblems, type Finding, missingResources, pathAction, PI_RESOURCES_DIR, RESOURCES, resourceArgs, scopeGuardFindings, staleInstalls, summarizeFindings, TORIEL_TOOLS } from "../src/resources.ts";
 
 function tmp(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "toriel-res-"));
@@ -95,8 +95,8 @@ describe("staleInstalls", () => {
 });
 
 /** A pi agent dir the way a working setup has it: the permission package listed, with a config. */
-/** The permission package's config as toriel wants it: the grants link in the chain, and the grants file asking. */
-const GOOD_CONFIG = { authorizerChain: ["toriel-grants"], permission: { "*": "allow", path: { "*": "allow", [PERMISSIONS_FILE]: "ask" } } };
+/** The permission package's config as toriel wants it: the grants link in the chain, the grants file asking, and no allow on a covered write surface (the scope guard). */
+const GOOD_CONFIG = { authorizerChain: ["toriel-grants"], permission: { "*": "ask", path: { "*": "ask", [PERMISSIONS_FILE]: "ask" } } };
 
 function agentDirWithPermissions(config: unknown = GOOD_CONFIG): string {
   const agent = tmp();
@@ -197,7 +197,7 @@ describe("permission grants audit", () => {
     assert.equal(missing?.level, "feature");
     assert.match(missing?.message ?? "", /grants are inactive: add "toriel-grants" to "authorizerChain" in .*config\.json/);
     assert.deepEqual(ids(audit({ ...rules, authorizerChain: ["other"] })), ["grants-chain"]);
-    assert.deepEqual(audit({ ...rules, authorizerChain: ["other", "toriel-grants"] }), []);
+    assert.deepEqual(ids(audit({ ...rules, authorizerChain: ["other", "toriel-grants"] })), [], "the grants problems are gone; an ask-only config cannot short-circuit the scope guard");
   });
 
   it("says to put a path rule on the grants file, as a hardening problem naming it with ~ and where it goes", () => {
@@ -205,13 +205,13 @@ describe("permission grants audit", () => {
     assert.equal(f?.id, "grants-path-rule");
     assert.equal(f?.level, "hardening");
     assert.match(f?.message ?? "", /nothing stops an agent editing the permission grants file: add "~\/\.local\/share\/toriel\/permissions\.json": "ask"/);
-    assert.match(f?.message ?? "", /after a "\*": "allow" entry/);
+    assert.match(f?.message ?? "", /last matching rule wins: put it after any catch-all allow entry/);
   });
 
   it("accepts ask or deny, as a literal path, a ~ path or a glob, and rejects a later allow", () => {
     const chain = { authorizerChain: ["toriel-grants"] };
     for (const [pattern, action] of [[grantsFile, "ask"], [grantsFile, "deny"], ["~/.local/share/toriel/permissions.json", "ask"], ["/home/u/.local/share/toriel/*", "ask"], ["*permissions.json", "deny"]] as const) {
-      assert.deepEqual(audit({ ...chain, permission: { path: { "*": "allow", [pattern]: action } } }), [], `${pattern} ${action}`);
+      assert.deepEqual(ids(audit({ ...chain, permission: { path: { "*": "allow", [pattern]: action } } })), [], `${pattern} ${action}: a path allow is in-cwd posture, not a guard short-circuit`);
     }
     assert.deepEqual(audit({ ...chain, permission: { path: { [grantsFile]: { action: "ask", reason: "grants" } } } }), []);
     assert.deepEqual(ids(audit({ ...chain, permission: { path: { [grantsFile]: "ask", "*": "allow" } } })), ["grants-path-rule"]);
@@ -232,6 +232,69 @@ describe("permission grants audit", () => {
     assert.ok(chain?.fix && rule?.fix);
     const odd = audit({ authorizerChain: "toriel-grants", permission: { path: "nope" } });
     assert.deepEqual(odd.map((f) => f.fix), [undefined, undefined]);
+  });
+});
+
+describe("scope guard audit", () => {
+  const ids = (config: unknown) => scopeGuardFindings(config).map((f) => f.id);
+
+  it("fires for an external_directory_write allow, as a hardening problem with no automatic fix", () => {
+    const [f] = scopeGuardFindings({ permission: { external_directory_write: { "*": "allow" } } });
+    assert.equal(f?.id, "scope-guard-short-circuit");
+    assert.equal(f?.level, "hardening");
+    assert.equal(f?.fix, undefined);
+    assert.match(f?.message ?? "", /^config allows outside-scope writes outright \(external_directory_write: "\*"\): an ask these match is allowed before the authorizer chain runs/);
+    assert.match(f?.message ?? "", /; set them to "ask" - an explicit "\*": "ask" on external_directory_write also makes the "\*" fallback unreachable - if you want directory scoping to hold$/);
+  });
+
+  it("fires for the \"*\" fallback when no external_directory_write catch-all answers, naming it as the fallback", () => {
+    const [f] = scopeGuardFindings({ permission: { "*": "allow" } });
+    assert.equal(f?.id, "scope-guard-short-circuit");
+    assert.match(f?.message ?? "", /\("\*" \(fallback\)\)/);
+  });
+
+  it("stays quiet when a catch-all ask makes the fallback unreachable (the locked-down shape)", () => {
+    assert.deepEqual(scopeGuardFindings({ permission: { "*": "allow", external_directory_write: { "*": "ask" } } }), []);
+    assert.deepEqual(scopeGuardFindings({ permission: { "*": "allow", external_directory: { "*": "ask" } } }), [], "the bare sugar expands into the directional section at load");
+    assert.deepEqual(scopeGuardFindings({ permission: { "*": "allow", external_directory_write: { "*": "deny" } } }), []);
+  });
+
+  it("fires for allow entries on the covered surfaces in any pattern form", () => {
+    assert.deepEqual(ids({ permission: { external_directory_write: "allow" } }), ["scope-guard-short-circuit"]);
+    assert.match(scopeGuardFindings({ permission: { external_directory_write: "allow" } })[0]?.message ?? "", /\(external_directory_write: "\*"\)/);
+    assert.deepEqual(ids({ permission: { external_directory: { "/tmp/*": "allow" } } }), ["scope-guard-short-circuit"]);
+    assert.deepEqual(ids({ permission: { external_directory_write: { "/tmp/*": { action: "allow" } } } }), ["scope-guard-short-circuit"]);
+  });
+
+  it("ignores path, path_write, write and edit allows: they gate in-cwd asks, which the guard does not deny", () => {
+    assert.deepEqual(scopeGuardFindings({ permission: { path: { "*": "allow" }, path_write: "allow", write: "allow", edit: { "*": "allow" } } }), []);
+  });
+
+  it("stays quiet on an ask-only config", () => {
+    assert.deepEqual(scopeGuardFindings({ permission: { path: { "*": "ask" }, "*": "ask" } }), []);
+  });
+
+  it("stays quiet on deny rules, read-only surfaces and bash, which the guard does not cover this phase", () => {
+    assert.deepEqual(scopeGuardFindings({ permission: { path: { "*": "deny" }, path_read: { "*": "allow" }, external_directory_read: "allow", bash: { "*": "allow" }, path_write: { "*": "ask" } } }), []);
+  });
+
+  it("returns nothing for a missing or unusable config", () => {
+    assert.deepEqual(scopeGuardFindings(undefined), []);
+    assert.deepEqual(scopeGuardFindings({}), []);
+    assert.deepEqual(scopeGuardFindings({ permission: "allow" }), []);
+    assert.deepEqual(scopeGuardFindings({ permission: [] }), []);
+    assert.deepEqual(scopeGuardFindings({ permission: { path: [] } }), []);
+  });
+
+  it("fires once for a mixed covered section, naming only the allow", () => {
+    const found = scopeGuardFindings({ permission: { external_directory_write: { "~/work/*": "ask", "*": "allow", "*.env": "deny" } } });
+    assert.equal(found.length, 1);
+    assert.match(found[0]?.message ?? "", /\(external_directory_write: "\*"\)/);
+  });
+
+  it("lists every offender in one finding, covered surfaces in order with the fallback last", () => {
+    const [f] = scopeGuardFindings({ permission: { "*": "allow", external_directory: { "~/x/*": "allow" }, external_directory_write: { "*": "allow", "/tmp/**": "allow" } } });
+    assert.match(f?.message ?? "", /\(external_directory_write: "\*", external_directory_write: "\/tmp\/\*\*", external_directory: "~\/x\/\*", "\*" \(fallback\)\)/);
   });
 });
 

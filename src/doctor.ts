@@ -58,6 +58,7 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: "clipboard", level: "feature", title: "clipboard tools for paste and copy (wl-clipboard on Wayland, xclip on X11)" },
   { id: "truecolor", level: "feature", title: "the terminal shows toriel's theme as intended (truecolor)" },
   { id: "grants-path-rule", level: "hardening", title: "an agent cannot edit the permission grants file unasked (a path rule)", needsPermissionPackage: true },
+  { id: "scope-guard-short-circuit", level: "hardening", title: 'no config allow short-circuits the scope guard for directory-scoped sessions (path, path_write, external_directory, write, edit, the "*" fallback)', needsPermissionPackage: true },
 ];
 
 const LEVELS: ReadonlyArray<{ level: Level; heading: string }> = [

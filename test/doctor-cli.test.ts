@@ -87,7 +87,7 @@ describe("toriel doctor (command line)", () => {
     assert.equal(await doctorMain(["--fix", "--yes"], t.io, s.opts), 0);
     assert.match(t.text(), /\+ {3}"authorizerChain": \[/);
     assert.match(t.text(), /Applied\. The original is at .*config\.json\.bak-\d{8}-\d{6}/);
-    assert.match(t.text(), /After fixing:[\s\S]*Everything checks out\./);
+    assert.match(t.text(), /After fixing:[\s\S]*Everything checks out\./, "the fix no longer seeds an allow, so the re-check is clean");
     assert.deepEqual(JSON.parse(fs.readFileSync(s.config, "utf8")).authorizerChain, ["toriel-grants"]);
     assert.equal(fs.readdirSync(path.dirname(s.config)).filter((f) => f.includes(".bak-")).length, 1);
     assert.equal(t.asked.length, 0, "--yes does not ask");

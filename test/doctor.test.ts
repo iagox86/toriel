@@ -32,6 +32,7 @@ describe("doctor checks", () => {
       { ...setup({}).opts, tty: true, env: { TERM: "xterm-256color" }, startup: [] },
       setup({ gitMcp: "none" }).opts,
       setup({ gdbMcp: "none", ghidraMcp: "codemode" }).opts,
+      setup({ config: { authorizerChain: ["toriel-grants"], permission: { "*": "allow", path: { "*": "allow", [GRANTS_RULE]: "ask" } } } }).opts,
     ];
     const seen = new Set<string>();
     for (const opts of scenarios) {
@@ -49,6 +50,9 @@ describe("doctor checks", () => {
     const grants = runDoctor(setup({ config: {} }).opts);
     assert.deepEqual(grants.filter((c) => c.state === "problem").map((c) => [c.id, c.level]), [["grants-chain", "feature"], ["grants-path-rule", "hardening"]]);
     assert.equal(exitCode(grants), 0);
+    const allows = runDoctor(setup({ config: { authorizerChain: ["toriel-grants"], permission: { "*": "allow", path: { "*": "allow", [GRANTS_RULE]: "ask" } } } }).opts);
+    assert.deepEqual(allows.filter((c) => c.state === "problem").map((c) => [c.id, c.level]), [["scope-guard-short-circuit", "hardening"]]);
+    assert.equal(exitCode(allows), 0);
     const noPackage = runDoctor(setup({ noPackage: true }).opts);
     assert.deepEqual(noPackage.filter((c) => c.state === "problem").map((c) => [c.id, c.level]), [["permission-package", "recommended"]]);
     assert.equal(exitCode(noPackage), 0);
@@ -86,7 +90,7 @@ describe("doctor checks", () => {
 
   it("skips the checks that need the permission package when it is not there, and says so", () => {
     const checks = runDoctor(setup({ noPackage: true }).opts);
-    assert.deepEqual(checks.filter((c) => c.state === "skipped").map((c) => c.id), ["grants-chain", "grants-path-rule"]);
+    assert.deepEqual(checks.filter((c) => c.state === "skipped").map((c) => c.id), ["grants-chain", "grants-path-rule", "scope-guard-short-circuit"]);
     assert.match(renderDoctor(checks), /skipped {2}permission grants are switched on[\s\S]*needs pi-permission-system/);
   });
 
@@ -191,7 +195,7 @@ describe("doctor fixes", () => {
     const diff = previewFixes(s.config, group?.fixes ?? []);
     assert.match(diff, /\+ {3}"authorizerChain": \[/);
     assert.match(diff, /\+ {7}"~\/\.local\/share\/toriel\/permissions\.json": "ask"/);
-    assert.match(diff, /\+ {7}"\*": "allow",/);
+    assert.doesNotMatch(diff, /\+ {7}"\*": "allow",/, "the fix no longer seeds an allow-all into a missing path section (an omitted fallback means ask)");
     assert.equal(fs.readFileSync(s.config, "utf8"), original, "previewing writes nothing");
     const backup = applyFixes(s.config, group?.fixes ?? [], new Date(2026, 10, 1, 9, 5, 7));
     assert.match(backup, /config\.json\.bak-20261101-090507$/);
@@ -200,8 +204,8 @@ describe("doctor fixes", () => {
     const now = JSON.parse(fs.readFileSync(s.config, "utf8"));
     assert.deepEqual(now.authorizerChain, ["toriel-grants"]);
     assert.deepEqual(now.permission.bash, { "*": "allow", "sudo *": "ask" }, "the user's own rules are untouched");
-    assert.deepEqual(now.permission.path, { "*": "allow", [GRANTS_RULE]: "ask" });
-    assert.deepEqual(collectFindings(s.opts), [], "the same check now passes");
+    assert.deepEqual(now.permission.path, { [GRANTS_RULE]: "ask" });
+    assert.deepEqual(collectFindings(s.opts).map((f) => f.id), ["scope-guard-short-circuit"], "the grants problems are gone; the \"*\": allow fallback remains, and only a person should narrow it");
     assert.deepEqual(plannedFixes(runDoctor(s.opts)), [], "and there is nothing left to fix");
   });
 

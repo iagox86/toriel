@@ -6,7 +6,7 @@ import type { DoctorOptions } from "../src/doctor.ts";
 import { RESOURCES } from "../src/resources.ts";
 
 export const GRANTS_RULE = "~/.local/share/toriel/permissions.json";
-export const GOOD_CONFIG = { authorizerChain: ["toriel-grants"], permission: { "*": "allow", path: { "*": "allow", [GRANTS_RULE]: "ask" } } };
+export const GOOD_CONFIG = { authorizerChain: ["toriel-grants"], permission: { "*": "ask", path: { "*": "ask", [GRANTS_RULE]: "ask" } } };
 
 const mk = (p: string) => fs.mkdirSync(p, { recursive: true });
 

@@ -85,7 +85,7 @@ describe("/doctor", () => {
     assert.match(t.notices[0] ?? "", /changed .*config\.json \(original kept at .*config\.json\.bak-\d{8}-\d{6}\)/);
     assert.deepEqual(JSON.parse(fs.readFileSync(s.config, "utf8")).authorizerChain, ["toriel-grants"]);
     assert.equal(fs.readdirSync(path.dirname(s.config)).filter((f) => f.includes(".bak-")).length, 1);
-    assert.match(t.panels.at(-1) ?? "", /Required: all 5 ok[\s\S]*Optional features: all 8 ok[\s\S]*Hardening: all 1 ok/);
+    assert.match(t.panels.at(-1) ?? "", /Required: all 5 ok[\s\S]*Optional features: all 8 ok[\s\S]*Hardening: all 2 ok[\s\S]*Everything checks out\./, "the fix no longer seeds an allow, so the re-check is clean");
   });
 
   it("with --fix says when nothing is automatic, and offers no fix for a config of an unusual shape", () => {
