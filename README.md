@@ -125,7 +125,7 @@ pi processes toriel did not start); continuing one in toriel forks it.
 ## Settings
 
 `~/.config/toriel/settings.json` (all keys optional): `steeringMode`, `provider`,
-`model`, `thinking`, `piCli`, `warnNoPermissionSystem`. Environment variables (`TORIEL_*`) override it.
+`model`, `thinking`, `piCli`, `warnNoPermissionSystem`, `scopeGuardAcceptedAllows`. Environment variables (`TORIEL_*`) override it.
 Full list and semantics: [docs/reference.md](docs/reference.md).
 
 ## Upgrading from ronpi

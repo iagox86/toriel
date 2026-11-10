@@ -36,6 +36,17 @@ describe("loadSettings", () => {
     assert.match(loadSettings(tmp('{"warnNoPermissionSystem":"no"}')).problems[0] as string, /true or false/);
   });
 
+  it("reads scopeGuardAcceptedAllows, rejecting bad surfaces and non-lists", () => {
+    const ok = loadSettings(tmp('{"scopeGuardAcceptedAllows":[{"surface":"external_directory_write","pattern":"/tmp/*"},{"surface":"*","pattern":"*"}]}'));
+    assert.deepEqual(ok.settings, { scopeGuardAcceptedAllows: [{ surface: "external_directory_write", pattern: "/tmp/*" }, { surface: "*", pattern: "*" }] });
+    assert.deepEqual(ok.problems, []);
+    const complaint = 'scopeGuardAcceptedAllows must be a list of {surface, pattern} entries (surface: "external_directory_write", "external_directory" or "*")';
+    const badSurface = loadSettings(tmp('{"scopeGuardAcceptedAllows":[{"surface":"external_directory_write","pattern":"/tmp/*"},{"surface":"nope","pattern":"/x"}]}'));
+    assert.deepEqual(badSurface.settings, {});
+    assert.equal(badSurface.problems[0], complaint);
+    assert.equal(loadSettings(tmp('{"scopeGuardAcceptedAllows":"yes"}')).problems[0], complaint);
+  });
+
   it("reads the scheduling and sleep settings, letting the usage pause be 0 (off)", () => {
     const s = loadSettings(tmp('{"scheduleUsagePause":0,"scheduleDailyLimit":50,"preventSleep":false}'));
     assert.deepEqual([s.settings.scheduleUsagePause, s.settings.scheduleDailyLimit, s.settings.preventSleep, s.problems], [0, 50, false, []]);

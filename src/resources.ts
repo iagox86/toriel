@@ -287,16 +287,19 @@ function permissionConfig(agentDir: string): unknown {
  * scope root, so ANY allow on these surfaces is flagged: `external_directory` expands at load
  * into read and write, and the `"*"` surface is the fallback for every surface. Ask and deny
  * rules never short-circuit. No automatic fix: narrowing an operator's allow rules is a judgment
- * call about their whole permission posture, so one hardening finding lists every offender.
+ * call about their whole permission posture, so one hardening finding lists every offender. An
+ * offender the operator has recorded as accepted (`scopeGuardAcceptedAllows` in the toriel
+ * settings, passed in `accepted`; exact surface and pattern) is deliberate and not flagged - a
+ * partial list narrows the finding to what remains.
  */
-export function scopeGuardFindings(config: unknown): Finding[] {
+export function scopeGuardFindings(config: unknown, accepted?: Array<{ surface: string; pattern: string }>): Finding[] {
   const permission = isObject(config) ? config.permission : undefined;
   if (!isObject(permission)) {
     return [];
   }
   const rules = (section: unknown): Record<string, unknown> | undefined => (typeof section === "string" ? { "*": section } : isObject(section) ? section : undefined);
   const actionOf = (rule: unknown): string | undefined => (typeof rule === "string" ? rule : isObject(rule) && typeof (rule as { action?: unknown }).action === "string" ? (rule as { action: string }).action : undefined);
-  const offenders: string[] = [];
+  const offenders: Array<{ surface: string; pattern: string }> = [];
   // An outside-scope write ask surfaces as external_directory_write (or the bare
   // external_directory family), and a directional ask consults only its own section plus
   // the "*" fallback (the resolver folds the bare family most-restrictive; a directional
@@ -304,7 +307,7 @@ export function scopeGuardFindings(config: unknown): Finding[] {
   for (const surface of ["external_directory_write", "external_directory"]) {
     for (const [pattern, rule] of Object.entries(rules(permission[surface]) ?? {})) {
       if (actionOf(rule) === "allow") {
-        offenders.push(`${surface}: "${pattern}"`);
+        offenders.push({ surface, pattern });
       }
     }
   }
@@ -315,16 +318,18 @@ export function scopeGuardFindings(config: unknown): Finding[] {
   const ed = rules(permission.external_directory);
   const catchAll = actionOf(edw?.["*"]) ?? actionOf(ed?.["*"]);
   if (catchAll !== "ask" && catchAll !== "deny" && actionOf(permission["*"]) === "allow") {
-    offenders.push(`"*" (fallback)`);
+    offenders.push({ surface: "*", pattern: "*" });
   }
-  if (offenders.length === 0) {
+  const remainder = offenders.filter((o) => !(accepted ?? []).some((a) => a.surface === o.surface && a.pattern === o.pattern));
+  if (remainder.length === 0) {
     return [];
   }
+  const labels = remainder.map((o) => (o.surface === "*" ? `"*" (fallback)` : `${o.surface}: "${o.pattern}"`));
   return [
     {
       id: "scope-guard-short-circuit",
       level: "hardening",
-      message: `config allows outside-scope writes outright (${[...new Set(offenders)].join(", ")}): an ask these match is allowed before the authorizer chain runs, so the scope guard cannot deny it for directory-scoped sessions (TORIEL_SCOPE_ROOT); set them to "ask" - an explicit "*": "ask" on external_directory_write also makes the "*" fallback unreachable - if you want directory scoping to hold`,
+      message: `config allows outside-scope writes outright (${[...new Set(labels)].join(", ")}): an ask these match is allowed before the authorizer chain runs, so the scope guard cannot deny it for directory-scoped sessions (TORIEL_SCOPE_ROOT); set them to "ask" - an explicit "*": "ask" on external_directory_write also makes the "*" fallback unreachable - if you want directory scoping to hold (deliberate allows can be recorded in the toriel settings as scopeGuardAcceptedAllows so they are not flagged)`,
     },
   ];
 }
@@ -334,6 +339,8 @@ export interface AuditOptions {
   permissionSystem?: boolean;
   /** Where toriel keeps permission grants (default PERMISSIONS_FILE). */
   grantsFile?: string;
+  /** Config allows the scope-guard check treats as deliberate and does not flag (the toriel settings' `scopeGuardAcceptedAllows`). */
+  scopeGuardAcceptedAllows?: Array<{ surface: string; pattern: string }>;
 }
 
 /** Everything wrong with the setup that the resource audit can see, graded. `toriel doctor` adds what needs the settings and the environment. */
@@ -357,7 +364,7 @@ export function auditFindings(agentDir: string, root = PI_RESOURCES_DIR, opts: A
       out.push({ id: "permission-package", level: "recommended", message: permission });
     } else {
       out.push(...grantsFindings(agentDir, opts.grantsFile ?? PERMISSIONS_FILE));
-      out.push(...scopeGuardFindings(permissionConfig(agentDir)));
+      out.push(...scopeGuardFindings(permissionConfig(agentDir), opts.scopeGuardAcceptedAllows));
     }
   }
   return out;

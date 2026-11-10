@@ -34,6 +34,7 @@ describe("doctor checks", () => {
       setup({ gdbMcp: "none", ghidraMcp: "codemode" }).opts,
       setup({ config: { authorizerChain: ["toriel-grants"], permission: { "*": "allow", path: { "*": "allow", [GRANTS_RULE]: "ask" } } } }).opts,
       setup({ scopePatch: "absent" }).opts,
+      setup({ scopePatch: "absent", config: { authorizerChain: ["toriel-grants"], permission: { "*": "allow", external_directory_write: { "/tmp/*": "allow" }, path: { "*": "ask", [GRANTS_RULE]: "ask" } } }, settings: JSON.stringify({ scopeGuardAcceptedAllows: [{ surface: "external_directory_write", pattern: "/tmp/*" }, { surface: "*", pattern: "*" }] }) }).opts,
     ];
     const seen = new Set<string>();
     for (const opts of scenarios) {
@@ -55,6 +56,16 @@ describe("doctor checks", () => {
     assert.equal(exitCode(absent), 0);
     const present = runDoctor(setup({ scopePatch: "present" }).opts);
     assert.deepEqual(present.filter((c) => c.state === "problem").map((c) => c.id), [], "the marker satisfies the check");
+  });
+
+  it("does not flag allows the toriel settings record as accepted (scopeGuardAcceptedAllows)", () => {
+    const allows = { authorizerChain: ["toriel-grants"], permission: { "*": "allow", external_directory_write: { "/tmp/*": "allow" }, path: { "*": "ask", [GRANTS_RULE]: "ask" } } };
+    const acceptance = JSON.stringify({ scopeGuardAcceptedAllows: [{ surface: "external_directory_write", pattern: "/tmp/*" }, { surface: "*", pattern: "*" }] });
+    const without = collectFindings(setup({ scopePatch: "absent", config: allows }).opts);
+    assert.ok(without.some((f) => f.id === "scope-guard-short-circuit"), "the same config without an acceptance still fires");
+    const quiet = collectFindings(setup({ scopePatch: "absent", config: allows, settings: acceptance }).opts);
+    assert.deepEqual(quiet.filter((f) => f.id === "scope-guard-short-circuit"), []);
+    assert.ok(quiet.every((f) => f.id !== "settings"), "the acceptance list itself parses cleanly");
   });
 
   it("grades what it finds, and exits 1 only for a required problem", () => {
