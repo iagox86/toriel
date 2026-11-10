@@ -38,18 +38,68 @@ describe("GrantStore", () => {
 
   it("covers an ask only when every suggested pair has a grant in the same session", () => {
     const s = make();
-    s.add({ session: A, surface: "bash", pattern: "ls" });
+    s.add({ session: A, surface: "bash", pattern: "l*" });
+    assert.ok(s.covers(A, [{ surface: "bash", pattern: "ls" }]));
     assert.equal(s.covers(A, [{ surface: "bash", pattern: "ls" }, { surface: "bash", pattern: "rm x" }]), undefined);
     assert.equal(s.covers(B, [{ surface: "bash", pattern: "ls" }]), undefined);
     assert.equal(s.covers(A, [{ surface: "mcp", pattern: "ls" }]), undefined);
     assert.equal(s.covers(A, []), undefined);
   });
 
-  it("matches the pattern exactly, not as a wildcard", () => {
+  it("covers an ask with a wider grant pattern: `git *` covers `git status`, `git *` and `git checkout main`", () => {
     const s = make();
     s.add({ session: A, surface: "bash", pattern: "git *" });
-    assert.equal(s.covers(A, [{ surface: "bash", pattern: "git status" }]), undefined);
-    assert.equal(s.covers(A, [{ surface: "bash", pattern: "git *" }])?.length, 1);
+    assert.ok(s.covers(A, [{ surface: "bash", pattern: "git status" }]));
+    assert.ok(s.covers(A, [{ surface: "bash", pattern: "git *" }]));
+    assert.ok(s.covers(A, [{ surface: "bash", pattern: "git checkout main" }]));
+  });
+
+  it("covers path asks inside a granted directory: `projects/code/*` covers `projects/code/tests/*` and `projects/code/foo`", () => {
+    const s = make();
+    s.add({ session: A, surface: "tool", pattern: "projects/code/*" });
+    assert.ok(s.covers(A, [{ surface: "tool", pattern: "projects/code/tests/*" }]));
+    assert.ok(s.covers(A, [{ surface: "tool", pattern: "projects/code/foo" }]));
+  });
+
+  it("does not cover asks outside the grant pattern: `projects/code/*` misses `projects/other/*` and `projects/code-tests/*`", () => {
+    const s = make();
+    s.add({ session: A, surface: "tool", pattern: "projects/code/*" });
+    assert.equal(s.covers(A, [{ surface: "tool", pattern: "projects/other/*" }]), undefined);
+    assert.equal(s.covers(A, [{ surface: "tool", pattern: "projects/code-tests/*" }]), undefined);
+  });
+
+  it("treats a grant without wildcards as a literal: `projects/code` covers only the ask `projects/code`", () => {
+    const s = make();
+    s.add({ session: A, surface: "tool", pattern: "projects/code" });
+    assert.ok(s.covers(A, [{ surface: "tool", pattern: "projects/code" }]));
+    assert.equal(s.covers(A, [{ surface: "tool", pattern: "projects/code/x" }]), undefined);
+  });
+
+  it("covers asks one character wide at each `?`: `a?c` covers `abc` and `a/c`, not `abbc`", () => {
+    const s = make();
+    s.add({ session: A, surface: "bash", pattern: "a?c" });
+    assert.ok(s.covers(A, [{ surface: "bash", pattern: "abc" }]));
+    assert.ok(s.covers(A, [{ surface: "bash", pattern: "a/c" }]));
+    assert.equal(s.covers(A, [{ surface: "bash", pattern: "abbc" }]), undefined);
+  });
+
+  it("treats other special characters in a grant as literal: `a.b` covers `a.b`, not `axb`", () => {
+    const s = make();
+    s.add({ session: A, surface: "bash", pattern: "a.b" });
+    assert.ok(s.covers(A, [{ surface: "bash", pattern: "a.b" }]));
+    assert.equal(s.covers(A, [{ surface: "bash", pattern: "axb" }]), undefined);
+  });
+
+  it("reports the covering grant: `used` holds the grant that covers the ask", () => {
+    const s = make();
+    const g = s.add({ session: A, surface: "bash", pattern: "git *" });
+    assert.deepEqual(s.covers(A, [{ surface: "bash", pattern: "git status" }])?.map((x) => x.id), [g.id]);
+  });
+
+  it("never covers a capped surface, even when a grant would match", () => {
+    const s = make();
+    s.add({ session: A, surface: "bash", pattern: "*" });
+    assert.equal(s.covers(A, [{ surface: "path_write", pattern: "/tmp" }]), undefined);
   });
 
   it("stops covering once a timed grant has expired, and sweep reports what lapsed", () => {

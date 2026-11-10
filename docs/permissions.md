@@ -132,11 +132,13 @@ Grant { id, session (uuid), surface, pattern, createdAt, expiresAt|null,
   trickle-up ticket (revisit with the
   permission trickle-up ticket).
 - No per-project or "always" scope in v1: a grant never applies outside its session.
-- Match: same surface, and the pattern equals the grant pattern pi suggested for the
-  ask (`details.sessionApproval.grants`, e.g. bash `git status *`, mcp `exa:*`).
-  Exact-suggestion matching needs no glob engine and is the first cut. Hand-written
-  wider patterns (`git *`, glob-matched against the ask's value) are a follow-up once
-  the exact form is proven.
+- Match: same surface, and the grant's pattern covers the ask's pattern as a glob:
+  `*` matches any run of characters including path separators, `?` matches one
+  character, everything else literal, full match. The ask's pattern is literal text
+  (a `*` in it is a character, not a wildcard), so a wider grant such as
+  `projects/code/*` covers narrower asks like `projects/code/tests/*` or
+  `projects/code/foo`; `git *` covers `git status` and `git checkout main`. Exact
+  matches remain covered. Hand-typed wider patterns are first-class for this reason.
 - `--for never` is an explicit alias of `--session` (the shared duration parser
   accepts `never`).
 - Expiry is checked at ask time (an expired grant simply does not match) and swept from
@@ -293,8 +295,9 @@ Items not covered are marked.
 - The link receives `requestId`, `command`, `toolName`, `source`, `payload.request`
   (surface, value, matched rule) and `sessionApproval.grants`, e.g. `[{surface:"bash",
   pattern:"sudo -V"}]`. The suggestion is the EXACT command for these asks
-  (`dnf --version` suggests `dnf --version*`), so exact-suggestion matching is
-  narrow: a grant covers the same command, not the family.
+  (`dnf --version` suggests `dnf --version*`), and the grant's pattern covers that
+  suggestion as a glob (so `dnf *` covers it, while a grant of the bare `git status`
+  covers only `git status`).
 - The link runs before the dialog, and `allow` suppresses it (`sudo -V` ran with no
   dialog while `dnf` still asked). A `defer` falls through to the normal dialog.
 - A link that THROWS makes the gate fail closed: the tool call is blocked with
