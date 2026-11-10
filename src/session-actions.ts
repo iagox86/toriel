@@ -3,7 +3,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Key, matchesKey } from "@earendil-works/pi-tui";
-import { type DialogRequest, dialogAnswer, grantGuarded, grantRowFor, isTextDialog, isTypingKey, optionTakesReason } from "./dialogs.ts";
+import { type DialogRequest, dialogAnswer, editablePattern, grantGuarded, grantRowFor, isTextDialog, isTypingKey, optionTakesReason } from "./dialogs.ts";
 import { isPlainLeft } from "./editor.ts";
 import { fmtAge } from "./format.ts";
 import { TRASH_DIR } from "./config.ts";
@@ -308,8 +308,8 @@ export class SessionActions {
   }
 
   /** Store the grant(s) the dialog suggested, lasting `life`; failures are said, not swallowed. */
-  private rememberGrants(session: number, dialog: DialogRequest, life: string): void {
-    for (const g of dialog.toriel?.grants ?? []) {
+  private rememberGrants(session: number, dialog: DialogRequest, life: string, pattern?: string): void {
+    for (const g of (dialog.toriel?.grants ?? []).map((x) => (pattern === undefined ? x : { ...x, pattern }))) {
       this.h
         .request({ type: "permission_add", session, surface: g.surface, pattern: g.pattern, for: life, source: "dialog" })
         .then((r) => this.h.notify((r as { echo: string }).echo))
@@ -327,8 +327,17 @@ export class SessionActions {
     const dialog = view.dialog!;
     const text = panel.editing;
     if (text === null) {
-      if (matchesKey(data, Key.tab) && optionTakesReason(dialog, panel.highlightedOption)) {
-        panel.edit("");
+      if (matchesKey(data, Key.tab)) {
+        const option = panel.highlightedOption;
+        const pattern = editablePattern(dialog, option);
+        if (pattern !== undefined) {
+          // a toriel "allow for ..." row: type the pattern to store instead of the suggested one
+          panel.edit(pattern);
+        } else if (optionTakesReason(dialog, option)) {
+          panel.edit("");
+        } else {
+          return false;
+        }
         this.h.renderChrome();
         return true;
       }
@@ -340,6 +349,20 @@ export class SessionActions {
       const value = panel.highlightedOption;
       const reason = text.trim();
       if (value === undefined) {
+        return true;
+      }
+      const row = grantRowFor(dialog, value);
+      if (row) {
+        // editing a grant pattern: pi just hears "Yes"; the grant is toriel's own record, consulted by the grants link on later asks
+        if (reason === "") {
+          this.h.notify("a grant pattern cannot be empty - type one, or esc to go back");
+          return true;
+        }
+        panel.edit(null);
+        this.h.send({ type: "ui_response", session, response: { type: "extension_ui_response", id: dialog.id, value: "Yes" } });
+        this.rememberGrants(session, dialog, row.for, reason);
+        view.dialog = undefined;
+        this.h.renderChrome();
         return true;
       }
       view.pendingReason = reason ? { text: reason, at: Date.now() } : undefined;

@@ -264,6 +264,16 @@ the daemon to store the grant. pi never sees the extra rows. The 700ms guard,
 esc-means-deny and the deny-reason flow are untouched. Durations come from a setting
 (`permissionGrantDurations`, default `["1h"]`).
 
+**Editing the pattern (T13).** Tab on a toriel row (5 or 6) opens the pattern inline,
+pre-filled with the suggestion, the way tab on "No, provide reason" opens the reason. Type a
+broader pattern (an ask for `projects/code/docs/*`, edit to `projects/code/*`) and press enter:
+pi still hears the plain "Yes", and the grant is stored with the typed pattern and that row's
+duration. With broader-grant matching (T11) the one edited grant then covers the narrower asks
+for the rest of its life. Empty is refused; esc leaves the editor without answering. Offered only
+when the ask carries exactly one suggested grant (nothing single to edit otherwise), and never on
+pi's own rows. The typed pattern is not otherwise validated: it is toriel's own record, glob-matched
+by the grants link, and the surface was already known grantable when the row appeared.
+
 Where the controller gets the pattern and surface: the link reports its
 `sessionApproval` suggestion (with the ask's `requestId` and command) to the daemon just
 before the dialog. The spike showed asks are serialized per session (one pending dialog

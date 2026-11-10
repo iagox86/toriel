@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { DEFAULT_GRANT_DURATIONS, DIALOG_GUARD_MS, DialogPanel, dialogAnswer, dialogLines, dialogPrompt, grantGuarded, grantRowFor, isTypingKey, optionTakesReason, withGrantRows, withOrigin } from "../src/dialogs.ts";
+import { DEFAULT_GRANT_DURATIONS, DIALOG_GUARD_MS, DialogPanel, dialogAnswer, dialogLines, dialogPrompt, editablePattern, grantGuarded, grantRowFor, isTypingKey, optionTakesReason, withGrantRows, withOrigin } from "../src/dialogs.ts";
 
 const confirm = { id: "1", method: "confirm", title: "Run rm?", message: "rm -rf x" };
 const select = { id: "2", method: "select", title: "Pick", options: ["a", "b", "c"] };
@@ -104,7 +104,7 @@ describe("dialog rendering", () => {
 
   it("leaves unlabelled dialogs unchanged", () => {
     assert.doesNotMatch(dialogLines(perm, 0, 100).join("\n"), /Session/);
-    assert.equal(dialogPrompt(perm), "PERMISSION pending - up/down choose, enter or 1-9 answer, tab reason, esc deny");
+    assert.equal(dialogPrompt(perm), "PERMISSION pending - up/down choose, enter or 1-9 answer, tab reason or edit pattern, esc deny");
   });
 });
 
@@ -201,6 +201,18 @@ describe("toriel's grant rows on a permission prompt", () => {
     panel.sync(d);
     panel.move(4);
     assert.equal(panel.highlightedOption, d.options?.[4]);
+  });
+
+  it("offers editing the pattern only on a toriel row of an ask with exactly one suggested grant", () => {
+    const d = withGrantRows(ask, ["1h"]);
+    assert.equal(editablePattern(d, d.options?.[4]), "sudo -V");
+    assert.equal(editablePattern(d, "Yes"), undefined);
+    assert.equal(editablePattern(d, undefined), undefined);
+    const two = withGrantRows({ ...ask, toriel: { grants: [{ surface: "bash", pattern: "a" }, { surface: "bash", pattern: "b" }] } }, ["1h"]);
+    assert.equal(editablePattern(two, two.options?.[4]), undefined);
+    assert.match(dialogLines(d, 4, 120).find((l) => l.includes("Yes, and allow")) ?? "", /tab: edit the pattern/);
+    assert.doesNotMatch(dialogLines(two, 4, 120).join("\n"), /edit the pattern/);
+    assert.match(dialogLines(d, 4, 120, "sudo*").join("\n"), /Yes, and allow pattern \(1 hour\): sudo\*/);
   });
 
   it("offers an hour and a kept-across-restarts row unless the setting says otherwise", () => {

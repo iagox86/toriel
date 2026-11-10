@@ -55,6 +55,16 @@ export function grantRowFor(d: DialogRequest, value: unknown): GrantRow | undefi
   return d.extraRows?.find((r) => r.label === value);
 }
 
+/**
+ * The pattern a toriel "allow for ..." row would store, when `option` is one of those rows and the
+ * ask carries exactly one suggested grant: tab on the row types a different (usually broader)
+ * pattern in its place. With several grants there is no single pattern to edit, so none is offered.
+ */
+export function editablePattern(d: DialogRequest, option: string | undefined): string | undefined {
+  const grants = d.toriel?.grants ?? [];
+  return grants.length === 1 && grantRowFor(d, option) !== undefined ? grants[0].pattern : undefined;
+}
+
 /** Whether choosing `option` chains a free-text reason dialog; toriel's own rows never do, whatever their pattern says. */
 export function optionTakesReason(d: DialogRequest, option: string | undefined): boolean {
   return grantRowFor(d, option) === undefined && takesReason(option);
@@ -137,7 +147,7 @@ export function dialogPrompt(d: DialogRequest): string {
   if (isTextDialog(d)) {
     return `PERMISSION pending${who} - type a reply, enter send, esc skip`;
   }
-  return `PERMISSION pending${who} - up/down choose, enter or 1-9 answer, tab reason, esc deny`;
+  return `PERMISSION pending${who} - up/down choose, enter or 1-9 answer, tab reason or edit pattern, esc deny`;
 }
 
 /** Options that chain a free-text dialog afterwards ("No, provide reason"). */
@@ -169,11 +179,13 @@ export function dialogLines(d: DialogRequest, index: number, width: number, reas
     if (d.extraRows?.length && i === extraFrom) {
       out.push(dim(" -- toriel: also remember this --"));
     }
+    const row = grantRowFor(d, o);
     if (i === index && reason !== null) {
-      out.push(selected(truncateToWidth(` > ${i + 1}. ${o}: ${reason}\u2588`, width)));
+      const label = row && editablePattern(d, o) !== undefined ? `Yes, and allow pattern (${row.for === "session" ? "this session" : durationWords(row.for)})` : o;
+      out.push(selected(truncateToWidth(` > ${i + 1}. ${label}: ${reason}\u2588`, width)));
       return;
     }
-    const hint = i === index && optionTakesReason(d, o) ? "  (tab: type a reason)" : "";
+    const hint = i === index && optionTakesReason(d, o) ? "  (tab: type a reason)" : i === index && editablePattern(d, o) !== undefined ? "  (tab: edit the pattern)" : "";
     const text = truncateToWidth(` ${i + 1}. ${o}${hint}`, width - 2);
     out.push(i === index ? selected(` >${text}`) : dim(`  ${text}`));
   });
