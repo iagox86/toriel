@@ -46,7 +46,7 @@ union).
 3. **Update the libraries** in toriel: bump the two `@earendil-works` entries
    in `package.json` to the target, then `npm install`.
 4. **Run the gates**: `npm test`, `npm run typecheck`, `npm run lint`
-   (node v26: `~/.nvm/versions/node/v26.12.0/bin`).
+   (any node >= 22.18 on PATH).
 5. **Update the global CLI**:
 
    ```

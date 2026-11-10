@@ -63,7 +63,7 @@ export function probeDaemon(timeoutMs = 1500): Promise<{ up: boolean; hello?: He
   });
 }
 
-/** Start the daemon detached, using this process's node (same v26 binary). */
+/** Start the daemon detached, using this process's node (same node binary). */
 function spawnDaemon(): void {
   const child = spawn(process.execPath, [DAEMON_FILE], {
     detached: true,

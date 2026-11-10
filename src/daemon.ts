@@ -12,7 +12,7 @@
 // exclusive). Deletes never unlink: files move to the toriel trash dir with a
 // restore manifest, because the session file is the only copy of a session.
 //
-// Run: node daemon.ts   (from a shell where `node` is v26; children inherit
+// Run: node daemon.ts   (from a shell where `node` is >= 22.18; children inherit
 // this env, including pi settings/auth/extensions.)
 import "./migrate-on-start.ts";
 import * as fs from "node:fs";

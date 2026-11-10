@@ -14,10 +14,10 @@ closing or crashing the UI never touches a running agent.
 
 Requirements:
 
-- Node v26.12.0 or newer (the code is TypeScript run directly by node; the
-  `.nvmrc` pins it). With nvm: `nvm install 26.12.0`. The `toriel` launcher
-  (below) finds it even when your default node is older; `npm test` and the
-  other commands need it on your PATH.
+- Node 22.18.0 or newer (the code is TypeScript run directly by node, which
+  needs unflagged type stripping; the `.nvmrc` pins the floor). With nvm:
+  `nvm install 22.18.0`. The `toriel` launcher (below) finds a node even when
+  your default is older.
 - pi installed globally under that node (`npm install -g @earendil-works/pi-coding-agent`)
   and logged in to at least one provider
 - A truecolor terminal; one with the kitty keyboard protocol (kitty, ghostty, wezterm, ...) gives the best key handling

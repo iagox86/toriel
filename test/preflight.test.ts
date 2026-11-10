@@ -27,9 +27,14 @@ describe("startupProblems", () => {
     assert.deepEqual(startupProblems(ENV, "26.12.0", checkout("26.12.0", true)), []);
   });
 
-  it("says when node is older than the pinned major", () => {
+  it("says when node is older than the pinned version", () => {
     const [p] = startupProblems(ENV, "22.1.0", checkout("26.12.0", true));
-    assert.match(p ?? "", /node 22\.1\.0 is too old.*node 26 or newer/);
+    assert.match(p ?? "", /node 22\.1\.0 is too old.*node 26\.12\.0 or newer/);
+  });
+
+  it("says when node is older than the pinned minor", () => {
+    const [p] = startupProblems(ENV, "26.1.0", checkout("26.12.0", true));
+    assert.match(p ?? "", /node 26\.1\.0 is too old.*node 26\.12\.0 or newer/);
   });
 
   it("accepts a newer node than the pin", () => {
