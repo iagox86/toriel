@@ -122,8 +122,8 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
   for (const message of opts.startup ?? startupProblems(env, opts.nodeVersion)) {
     out.push({ id: "startup", level: "required", message });
   }
-  out.push(...auditFindings(opts.agentDir ?? piAgentDir(), opts.root ?? PI_RESOURCES_DIR, opts));
   const loaded = loadSettings(opts.settingsFile);
+  out.push(...auditFindings(opts.agentDir ?? piAgentDir(), opts.root ?? PI_RESOURCES_DIR, { ...opts, scopeGuardAcceptedAllows: loaded.settings.scopeGuardAcceptedAllows }));
   for (const problem of loaded.problems) {
     out.push({ id: "settings", level: "recommended", message: `toriel settings: ${problem}` });
   }

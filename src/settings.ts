@@ -36,6 +36,8 @@ export interface TorielSettings {
   permissionGrantLimit?: number;
   /** Lifetimes the permission dialog offers as "allow for ..." rows: durations, or "session" for until revoked (default ["1h", "session"]; [] = none). */
   permissionGrantDurations?: string[];
+  /** Config allows the scope-guard doctor check treats as deliberate and does not flag: {surface, pattern} entries (surface "external_directory_write", "external_directory" or "*"; pattern a config glob). */
+  scopeGuardAcceptedAllows?: Array<{ surface: string; pattern: string }>;
   /** Warn when pi-permission-system is not installed or has no usable config (default true). */
   warnNoPermissionSystem?: boolean;
 }
@@ -68,6 +70,23 @@ const BOOLEAN_KEYS = ["warnNoPermissionSystem", "preventSleep"] as const;
 /** Number settings where 0 is a meaningful "off". */
 const ZERO_OK: readonly string[] = ["summaryIntervalMinutes", "scheduleUsagePause"];
 const STRING_KEYS = ["provider", "model", "thinking", "piCli", "summaryModel"] as const;
+/** The surfaces a scopeGuardAcceptedAllows entry may name ("*" is the config fallback). */
+const SCOPE_GUARD_SURFACES = ["external_directory_write", "external_directory", "*"] as const;
+
+/** Valid when it is a list of at most 20 objects, each with a known surface and a non-empty pattern. */
+function validAcceptedAllows(value: unknown): value is Array<{ surface: string; pattern: string }> {
+  return (
+    Array.isArray(value) &&
+    value.length <= 20 &&
+    value.every((entry) => {
+      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+        return false;
+      }
+      const { surface, pattern } = entry as { surface?: unknown; pattern?: unknown };
+      return typeof surface === "string" && (SCOPE_GUARD_SURFACES as readonly string[]).includes(surface) && typeof pattern === "string" && pattern.length > 0;
+    })
+  );
+}
 
 export function loadSettings(file: string = settingsFile()): LoadedSettings {
   let raw: string;
@@ -100,6 +119,12 @@ export function loadSettings(file: string = settingsFile()): LoadedSettings {
         settings.permissionGrantDurations = value as string[];
       } else {
         problems.push(`permissionGrantDurations must be a list of at most 5 durations such as ["1h", "8h", "session"]`);
+      }
+    } else if (key === "scopeGuardAcceptedAllows") {
+      if (validAcceptedAllows(value)) {
+        settings.scopeGuardAcceptedAllows = value;
+      } else {
+        problems.push(`scopeGuardAcceptedAllows must be a list of {surface, pattern} entries (surface: "external_directory_write", "external_directory" or "*")`);
       }
     } else if ((BOOLEAN_KEYS as readonly string[]).includes(key)) {
       if (typeof value === "boolean") {

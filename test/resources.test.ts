@@ -244,7 +244,7 @@ describe("scope guard audit", () => {
     assert.equal(f?.level, "hardening");
     assert.equal(f?.fix, undefined);
     assert.match(f?.message ?? "", /^config allows outside-scope writes outright \(external_directory_write: "\*"\): an ask these match is allowed before the authorizer chain runs/);
-    assert.match(f?.message ?? "", /; set them to "ask" - an explicit "\*": "ask" on external_directory_write also makes the "\*" fallback unreachable - if you want directory scoping to hold$/);
+    assert.match(f?.message ?? "", /; set them to "ask" - an explicit "\*": "ask" on external_directory_write also makes the "\*" fallback unreachable - if you want directory scoping to hold \(deliberate allows can be recorded in the toriel settings as scopeGuardAcceptedAllows so they are not flagged\)$/);
   });
 
   it("fires for the \"*\" fallback when no external_directory_write catch-all answers, naming it as the fallback", () => {
@@ -295,6 +295,28 @@ describe("scope guard audit", () => {
   it("lists every offender in one finding, covered surfaces in order with the fallback last", () => {
     const [f] = scopeGuardFindings({ permission: { "*": "allow", external_directory: { "~/x/*": "allow" }, external_directory_write: { "*": "allow", "/tmp/**": "allow" } } });
     assert.match(f?.message ?? "", /\(external_directory_write: "\*", external_directory_write: "\/tmp\/\*\*", external_directory: "~\/x\/\*", "\*" \(fallback\)\)/);
+  });
+
+  it("stays quiet when every offender is recorded as accepted (exact surface and pattern)", () => {
+    const config = { permission: { "*": "allow", external_directory_write: { "/tmp/*": "allow" } } };
+    assert.deepEqual(scopeGuardFindings(config, [{ surface: "external_directory_write", pattern: "/tmp/*" }, { surface: "*", pattern: "*" }]), []);
+  });
+
+  it("narrows the finding to the unaccepted offenders when only some are accepted, and teaches the mechanism", () => {
+    const config = { permission: { "*": "allow", external_directory_write: { "/tmp/*": "allow" } } };
+    const [f] = scopeGuardFindings(config, [{ surface: "external_directory_write", pattern: "/tmp/*" }]);
+    assert.equal(f?.id, "scope-guard-short-circuit");
+    assert.match(f?.message ?? "", /^config allows outside-scope writes outright \("\*" \(fallback\)\):/);
+    assert.match(f?.message ?? "", /\(deliberate allows can be recorded in the toriel settings as scopeGuardAcceptedAllows so they are not flagged\)$/);
+  });
+
+  it("accepts an offender only on its exact surface: the write form does not cover the bare external_directory", () => {
+    assert.equal(scopeGuardFindings({ permission: { external_directory: { "/tmp/*": "allow" } } }, [{ surface: "external_directory_write", pattern: "/tmp/*" }]).length, 1);
+  });
+
+  it("accepts the \"*\" entry only for the fallback offender, not for allows on the named surfaces", () => {
+    const [f] = scopeGuardFindings({ permission: { "*": "allow", external_directory_write: { "/tmp/*": "allow" } } }, [{ surface: "*", pattern: "*" }]);
+    assert.match(f?.message ?? "", /^config allows outside-scope writes outright \(external_directory_write: "\/tmp\/\*"\):/);
   });
 });
 
