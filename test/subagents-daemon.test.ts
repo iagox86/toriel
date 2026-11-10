@@ -225,7 +225,7 @@ describe("daemon: subagents", () => {
     const childGrants = grants();
     assert.equal(childGrants.find((g) => g.pattern === "git status*")?.source, "spawn");
     assert.ok(!childGrants.some((g) => g.pattern.startsWith("git commit")), "no mutating git grant is seeded");
-    assert.ok(childGrants.some((g) => g.pattern === "cargo build*" && g.source === "inherit"), "the parent's grants are copied");
+    assert.ok(childGrants.some((g) => g.pattern === "cargo build*" && g.source === "command"), "the parent's grants are copied (copySession keeps the original source)");
     await c.request({ type: "delete", session: child()?.id });
     until(() => c.sessions().every((s) => s.id !== child()?.id));
     assert.equal(grants().length, 0, "the child's grants go with the session");
