@@ -12,7 +12,7 @@
  * older daemon or controller cannot cope with. A mismatch blocks the controller
  * (see version-check.ts); a mere code difference with the same protocol only warns.
  */
-export const PROTOCOL = 2; // 2: the `cd` command and adopt's `keepPermissions`
+export const PROTOCOL = 3; // 3: agent_spawn's optional cwd (2: the `cd` command and adopt's `keepPermissions`)
 
 /** Which toriel code a process runs (build-id.ts). */
 export interface BuildInfo {
@@ -175,6 +175,8 @@ type ClientCommandBody =
       background?: boolean;
       context?: "fresh" | "fork";
       system?: string;
+      /** Optional absolute path; the subagent is launched (and scoped) there instead of the parent's cwd. */
+      cwd?: string;
     }
   /** List, inspect, wait for, stop or fetch the result of the subagents the session `from` started. `ref` is a handle number (#2 or 2). */
   | { type: "agents_op"; id?: string; from: string; action: "list" | "status" | "wait" | "stop" | "result"; ref?: string; timeoutMs?: number }
@@ -281,7 +283,7 @@ export interface GrantView {
   createdAt: number;
   /** Epoch ms; null = until revoked. */
   expiresAt: number | null;
-  source: "dialog" | "command";
+  source: string;
   note?: string;
   /** Saved before a daemon restart and not active until /permissions restore. */
   dormant: boolean;

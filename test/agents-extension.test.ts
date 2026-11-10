@@ -175,6 +175,19 @@ describe("toriel_agent tools", () => {
     }
   });
 
+  it("exposes a cwd parameter, mentions it in the description and forwards it to the daemon", async () => {
+    const d = await fakeDaemon(() => ({ ok: true, data: { text: "done", state: "done" } }));
+    try {
+      const spawn = registeredWith({ TORIEL_CAN_SPAWN: "1" }).find((t) => t.name === "toriel_agent") as unknown as { description: string; parameters: { properties: Record<string, unknown> }; execute(...a: unknown[]): Promise<{ content: Array<{ text: string }> }> };
+      assert.ok(spawn.parameters.properties.cwd, "the schema has a cwd parameter");
+      assert.match(spawn.description, /worktree/);
+      await spawn.execute("t1", { agent: "explore", task: "x", description: "x", cwd: "/tmp/wt" }, undefined, undefined, {});
+      assert.equal(d.seen[0]?.cwd, "/tmp/wt");
+    } finally {
+      d.close();
+    }
+  });
+
   it("drops the connection when the call is cancelled, which is how the daemon stops the subagent", async () => {
     const d = await fakeDaemon(() => undefined);
     try {

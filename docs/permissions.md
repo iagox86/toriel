@@ -356,3 +356,17 @@ Items not covered are marked.
 - Wider hand-written patterns; per-project scope as an explicit opt-in.
 - If path-surface grants ever matter, revisit carrying a patched fork (pi's `git:`
   sources can be pinned by commit); not needed for v1.
+
+## Seeded grants (T12)
+
+Every subagent is seeded at spawn (daemon-subagents.ts, list in seed-grants.ts) with
+read-only git/gh grants - `git status*`, `git diff*`, `git log*`, `git show*`,
+`git blame*`, `git grep*`, `git branch*`, `git remote*`, `git fetch*`, `git pull*`,
+`gh pr view/list/checks/diff*`, `gh issue view/list*`, `gh repo view*` (source
+`spawn`) - plus a copy of the parent's active grants (source `inherit`). This is what
+lets a worktree worker read repo state with zero permission dialogs: the seed list is
+read-only by construction (nothing that mutates - commit, push, checkout, rebase,
+merge, add, reset, stash, rm - is ever seeded; the manager commits), and inherited
+grants are copies, not shared: revoking one side does not touch the other, and the
+child's grants expire with its session. Seeding never throws - a failure is logged and
+means more prompting, never less.
