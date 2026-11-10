@@ -206,6 +206,40 @@ describe("daemon: subagents", () => {
     await c.request({ type: "agents_op", from: uuid, action: "stop", ref: "#1" });
   });
 
+  it("spawns the subagent at the requested cwd, seeds its grants, inherits the parent's and drops them when the child is deleted", async () => {
+    harness = await startDaemon();
+    const h = harness;
+    const { c, uuid } = await parentSession(h);
+    const otherDir = fs.mkdtempSync(path.join(h.dir, "worktree-"));
+    // give the parent a grant worth inheriting (a command-source dialog grant)
+    await c.request({ type: "permission_add", uuid, surface: "bash", pattern: "cargo build*", source: "command" });
+    await spawn(c, uuid, { task: "[hang]", background: true, cwd: otherDir });
+    const child = () => c.sessions().find((x) => x.sessionName?.startsWith("worker: look"));
+    const childEnv = JSON.parse(fs.readFileSync(`${child()?.sessionFile}.env.json`, "utf8"));
+    assert.equal(childEnv.TORIEL_SCOPE_ROOT, fs.realpathSync(otherDir), "the child is scoped to its own cwd, not the parent's");
+    const grants = () => {
+      const store = JSON.parse(fs.readFileSync(path.join(h.dir, "permissions.json"), "utf8")) as { grants: Array<{ session: string; surface: string; pattern: string; source: string }> };
+      return store.grants.filter((g) => g.session === child()?.sessionId);
+    };
+    until(() => child()?.sessionId !== undefined && grants().some((g) => g.pattern === "git status*"));
+    const childGrants = grants();
+    assert.equal(childGrants.find((g) => g.pattern === "git status*")?.source, "spawn");
+    assert.ok(!childGrants.some((g) => g.pattern.startsWith("git commit")), "no mutating git grant is seeded");
+    assert.ok(childGrants.some((g) => g.pattern === "cargo build*" && g.source === "inherit"), "the parent's grants are copied");
+    await c.request({ type: "delete", session: child()?.id });
+    until(() => c.sessions().every((s) => s.id !== child()?.id));
+    assert.equal(grants().length, 0, "the child's grants go with the session");
+    await c.request({ type: "agents_op", from: uuid, action: "stop", ref: "#1" });
+  });
+
+  it("refuses a spawn whose cwd does not exist, naming the directory", async () => {
+    harness = await startDaemon();
+    const h = harness;
+    const { c, uuid } = await parentSession(h);
+    const gone = path.join(h.dir, "no-such-dir");
+    await assert.rejects(spawn(c, uuid, { cwd: gone }), (err: Error) => err.message.includes(gone));
+  });
+
   it("marks a finished subagent delivered, then deletes it after the grace window: file in the trash, link cut, result still readable", async () => {
     harness = await startDaemon({ TORIEL_SUBAGENT_KEEP_MS: "1500" });
     const { c, uuid } = await parentSession(harness);

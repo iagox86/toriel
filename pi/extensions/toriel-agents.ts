@@ -73,7 +73,7 @@ export const SCHEDULE_CANCEL_DESCRIPTION = "Cancel one of this session's repeati
 
 /** The toriel_agent description with the live agent types (the daemon passes them in TORIEL_AGENT_TYPES, so this never goes stale). */
 export function agentDescription(types: string | undefined): string {
-  return `Delegate a self-contained task to a subagent: a separate session that runs the named agent type and returns its final message. Foreground (the default) waits for the result; several toriel_agent calls in one turn run in parallel. With background: true it returns a handle at once and the result arrives later as a message; toriel_agents can list, wait for, stop or fetch it. The subagent sees nothing of this conversation unless context is "fork", so write the task as a complete brief: the goal, the paths and facts it needs, what to return and how long, and whether it may edit anything. Its answer is only as good as the brief. Limits apply (depth, how many at once and in total, a token budget per subagent); a refusal comes back as text, so then do the work yourself.\n\nAgent types:\n${types?.trim() || "(none defined)"}`;
+  return `Delegate a self-contained task to a subagent: a separate session that runs the named agent type and returns its final message. Foreground (the default) waits for the result; several toriel_agent calls in one turn run in parallel. With background: true it returns a handle at once and the result arrives later as a message; toriel_agents can list, wait for, stop or fetch it. The subagent sees nothing of this conversation unless context is "fork", so write the task as a complete brief: the goal, the paths and facts it needs, what to return and how long, and whether it may edit anything. Its answer is only as good as the brief. Limits apply (depth, how many at once and in total, a token budget per subagent); a refusal comes back as text, so then do the work yourself. Pass cwd when the task lives in a worktree or another directory: the subagent is scoped to its own cwd, so its writes inside it are silent and outside it are denied.\n\nAgent types:\n${types?.trim() || "(none defined)"}`;
 }
 
 export const AGENTS_DESCRIPTION =
@@ -210,12 +210,13 @@ export default function (pi: Pi) {
           background: { type: "boolean", description: "Return a handle at once; the result arrives later as a message" },
           context: { type: "string", enum: ["fresh", "fork"], description: "fresh (default) starts empty; fork starts from a copy of this conversation" },
           system: { type: "string", description: "Extra instructions appended to the agent type's system prompt" },
+          cwd: { type: "string", description: "Optional absolute path; the subagent runs there instead of the parent's cwd" },
         },
         required: ["agent", "task", "description"],
         additionalProperties: false,
       },
       async execute(_id, params, signal, _onUpdate, ctx) {
-        const p = params as { agent: string; task: string; description: string; model?: string; background?: boolean; context?: string; system?: string };
+        const p = params as { agent: string; task: string; description: string; model?: string; background?: boolean; context?: string; system?: string; cwd?: string };
         try {
           const r = await ask(sock, { type: "agent_spawn", from: own(ctx), ...p }, 0, signal as AbortSignal | undefined);
           return text(String(r.text ?? ""), r);
