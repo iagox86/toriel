@@ -116,6 +116,98 @@ describe("permission prompt: toriel's grant rows", () => {
   });
 });
 
+describe("permission prompt: editing the grant pattern (tab on a toriel row)", () => {
+  const BACKSPACE = "\x7f";
+  const type = (t: ReturnType<typeof setup>, text: string) => {
+    for (const ch of text) {
+      t.sa.dialogKeys(t.view, ch);
+    }
+  };
+
+  it("pre-fills the suggested pattern and stores the typed one with the row's duration", async () => {
+    const t = setup();
+    t.sa.dialogKeys(t.view, "\x1b[B"); // 2
+    t.sa.dialogKeys(t.view, "\x1b[B"); // 3
+    t.sa.dialogKeys(t.view, "\x1b[B"); // 4
+    t.sa.dialogKeys(t.view, "\x1b[B"); // 5: the 1h row
+    assert.equal(t.sa.dialogKeys(t.view, "\t"), true);
+    const panel = (t.sa as unknown as { h: { dialogPanel: DialogPanel } }).h.dialogPanel;
+    assert.equal(panel.editing, "sudo -V");
+    for (let i = 0; i < 2; i++) {
+      t.sa.dialogKeys(t.view, BACKSPACE);
+    }
+    type(t, "*");
+    assert.equal(panel.editing, "sudo *");
+    t.sa.dialogKeys(t.view, "\r");
+    await settle();
+    assert.deepEqual(t.sent, [{ type: "ui_response", session: 4, response: { type: "extension_ui_response", id: "g1", value: "Yes" } }]);
+    assert.deepEqual(t.requests, [{ type: "permission_add", session: 4, surface: "bash", pattern: "sudo *", for: "1h", source: "dialog" }]);
+    assert.equal(t.view.dialog, undefined);
+    assert.equal(panel.editing, null);
+  });
+
+  it("keeps the session lifetime of the row it was started on", async () => {
+    const t = setup();
+    for (let i = 0; i < 5; i++) {
+      t.sa.dialogKeys(t.view, "\x1b[B"); // the session row
+    }
+    t.sa.dialogKeys(t.view, "\t");
+    t.sa.dialogKeys(t.view, "\r");
+    await settle();
+    assert.equal(t.requests[0]?.for, "session");
+    assert.equal(t.requests[0]?.pattern, "sudo -V", "enter on the untouched pre-fill stores the suggested pattern");
+  });
+
+  it("refuses an empty pattern and keeps the dialog open", async () => {
+    const t = setup();
+    for (let i = 0; i < 4; i++) {
+      t.sa.dialogKeys(t.view, "\x1b[B");
+    }
+    t.sa.dialogKeys(t.view, "\t");
+    for (let i = 0; i < "sudo -V".length; i++) {
+      t.sa.dialogKeys(t.view, BACKSPACE);
+    }
+    t.sa.dialogKeys(t.view, "\r");
+    await settle();
+    assert.deepEqual(t.sent, []);
+    assert.deepEqual(t.requests, []);
+    assert.match(t.notices[0] ?? "", /cannot be empty/);
+    assert.ok(t.view.dialog);
+  });
+
+  it("escape leaves the editor without answering", async () => {
+    const t = setup();
+    for (let i = 0; i < 4; i++) {
+      t.sa.dialogKeys(t.view, "\x1b[B");
+    }
+    t.sa.dialogKeys(t.view, "\t");
+    t.sa.dialogKeys(t.view, "\x1b");
+    await settle();
+    assert.deepEqual(t.sent, []);
+    assert.deepEqual(t.requests, []);
+    assert.ok(t.view.dialog);
+  });
+
+  it("does not offer editing on pi's own rows", () => {
+    const t = setup();
+    t.sa.dialogKeys(t.view, "\t"); // pi's "Yes" is highlighted
+    const panel = (t.sa as unknown as { h: { dialogPanel: DialogPanel } }).h.dialogPanel;
+    assert.equal(panel.editing, null);
+  });
+
+  it("does not offer editing when the ask carries several grants", () => {
+    const t = setup();
+    const two = { ...t.dialog, toriel: { grants: [{ surface: "bash", pattern: "a" }, { surface: "bash", pattern: "b" }] } };
+    t.view.dialog = two;
+    for (let i = 0; i < 4; i++) {
+      t.sa.dialogKeys(t.view, "\x1b[B");
+    }
+    t.sa.dialogKeys(t.view, "\t");
+    const panel = (t.sa as unknown as { h: { dialogPanel: DialogPanel } }).h.dialogPanel;
+    assert.equal(panel.editing, null);
+  });
+});
+
 describe("a subagent's dialog shown in its parent's view", () => {
   const PARENT = "/tmp/fake/parent.jsonl";
   const forwarded = () => {
