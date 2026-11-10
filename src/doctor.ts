@@ -151,10 +151,26 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
     const users = shipped.filter((a) => (a.tools ?? []).some((t) => t.startsWith(`mcp__${server.name}__`)));
     const problems = users.flatMap((a) => mcpWarnings(a, servers));
     if (users.length > 0 && problems.length > 0) {
+      // fixable only when the entry is here with the wrong exposure; a missing entry needs the
+      // server's own command/args, which doctor cannot invent for the user
+      const info = servers[server.name];
       out.push({
         id: `mcp-${server.name}-direct`,
         level: "feature",
         message: `the ${nameList(users.map((a) => a.name))} ${users.length > 1 ? "agents need" : "agent needs"} an MCP server named "${server.name}" (${server.hint}) with "exposure": "direct" in ${mcpFile}; without it ${users.length > 1 ? "they have" : "it has"} no ${server.name} tool (${problems[0]})`,
+        fix:
+          info !== undefined && info.exposure !== "direct"
+            ? {
+                file: mcpFile,
+                summary: `set "exposure": "direct" on the "${server.name}" entry`,
+                edit: (c) => {
+                  const entries = isJsonObject(c.mcpServers) ? c.mcpServers : {};
+                  const raw = entries[server.name];
+                  const entry = isJsonObject(raw) ? raw : {};
+                  return { ...c, mcpServers: { ...entries, [server.name]: { ...entry, exposure: "direct" } } };
+                },
+              }
+            : undefined,
       });
     }
   }
@@ -299,6 +315,11 @@ function readConfig(file: string): Record<string, unknown> {
     throw new Error(`${file} is not a JSON object`);
   }
   return json as Record<string, unknown>;
+}
+
+/** A JSON object value; the exposure fix spreads only entries it can spread and rebuilds anything else. */
+function isJsonObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
 function edited(file: string, fixes: readonly Fix[]): { before: string; after: string } {
