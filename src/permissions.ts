@@ -16,7 +16,7 @@ export interface Grant {
   session: string;
   /** pi-permission-system surface: bash, mcp, tool, skill ... */
   surface: string;
-  /** The pattern pi suggested for the ask (matched exactly), or one typed by hand. */
+  /** The pattern pi suggested for the ask, or one typed by hand; a grant covers an ask when its pattern matches the ask's pattern as a glob (see `covers`). */
   pattern: string;
   createdAt: number;
   /** Epoch ms; null = until revoked or the session is deleted. */
@@ -245,7 +245,11 @@ export class GrantStore {
 
   /**
    * The active grants that together cover every pair in `asked`, or undefined when any
-   * pair is uncovered. An empty ask is never covered, and neither is a capped surface.
+   * pair is uncovered. A grant covers a pair when the surfaces are equal and the ask's
+   * pattern, treated as literal text, matches the grant's pattern as a glob (`*` = any
+   * run of characters including `/`, `?` = one character); so a wider grant such as
+   * `projects/code/*` covers narrower asks like `projects/code/tests/*`. An empty ask is
+   * never covered, and neither is a capped surface.
    */
   covers(session: string, asked: readonly GrantSpec[]): Grant[] | undefined {
     if (asked.length === 0) {
@@ -257,7 +261,7 @@ export class GrantStore {
       if (isCappedSurface(a.surface)) {
         return undefined;
       }
-      const hit = live.find((g) => g.surface === a.surface && g.pattern === a.pattern);
+      const hit = live.find((g) => g.surface === a.surface && coversPattern(g.pattern, a.pattern));
       if (!hit) {
         return undefined;
       }
@@ -290,6 +294,27 @@ export class GrantStore {
     const data: StoreFile = { version: 1, nextId: this.nextId, grants: [...this.grants.values()].sort((a, b) => a.id - b.id) };
     writeJsonAtomic(this.file, data, 0o600);
   }
+}
+
+/**
+ * The ask pattern as literal text against the grant pattern as a glob: `*` matches any
+ * run of characters (including `/`), `?` matches any single character, everything else
+ * matches literally, and the match must span the whole ask. A `*` or `?` in the ask is
+ * an ordinary character, not a wildcard.
+ */
+function coversPattern(grant: string, ask: string): boolean {
+  const escaped = [...grant]
+    .map((c) => {
+      if (c === "*") {
+        return "[\\s\\S]*";
+      }
+      if (c === "?") {
+        return "[\\s\\S]";
+      }
+      return c.replace(/[.*+?^${}()|[\]\\]/, "\\$&");
+    })
+    .join("");
+  return new RegExp(`^${escaped}$`).test(ask);
 }
 
 function expired(g: Grant, now: number): boolean {
