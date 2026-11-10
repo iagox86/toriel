@@ -773,23 +773,33 @@ describe("daemon: lifecycle", () => {
     assert.equal(c.sessions().find((x) => x.id === sessionId)?.agent, "explore");
   });
 
-  it("scopes a profile session at a worktree root, and a profile with scope: none opts out", async () => {
+  it("scopes every profile session to its launch dir: deny at a worktree root, ask in a plain dir; no profile and scope: none stay unscoped", async () => {
     harness = await startDaemon({ TORIEL_AGENTS_DIR: path.join(os.tmpdir(), "toriel-no-user-agents") });
     const dir = harness.dir;
     // the harness dir passes for the root of a linked worktree: a .git file pointing into a worktrees dir
     fs.writeFileSync(path.join(dir, ".git"), "gitdir: /r/.git/worktrees/w1\n");
     fs.mkdirSync(path.join(dir, ".toriel", "agents"), { recursive: true });
     fs.writeFileSync(path.join(dir, ".toriel", "agents", "unscoped.md"), "---\nname: unscoped\ndescription: test profile that opts out of scoping\nscope: none\n---\nBe brief.\n");
+    const plain = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-plain-"));
     const c = await harness.connect();
-    const childEnv = async (agent?: string) => {
-      const { sessionId } = await c.request({ type: "spawn", cwd: dir, ...(agent ? { agent } : {}) });
+    const childEnv = async (cwd: string, agent?: string) => {
+      const { sessionId } = await c.request({ type: "spawn", cwd, ...(agent ? { agent } : {}) });
       await c.waitFor((m) => m.type === "history" && m.session === sessionId);
       const f = c.sessions().find((x) => x.id === sessionId)?.sessionFile as string;
       return JSON.parse(fs.readFileSync(`${f}.env.json`, "utf8"));
     };
-    assert.equal((await childEnv()).TORIEL_SCOPE_ROOT, null, "a session without a profile is never scoped");
-    assert.equal((await childEnv("explore")).TORIEL_SCOPE_ROOT, fs.realpathSync(dir));
-    assert.equal((await childEnv("unscoped")).TORIEL_SCOPE_ROOT, null, "scope: none keeps the variable out of the child");
+    const unprofiled = await childEnv(dir);
+    assert.equal(unprofiled.TORIEL_SCOPE_ROOT, null, "a session without a profile is never scoped");
+    assert.equal(unprofiled.TORIEL_SCOPE_MODE, null);
+    const atWorktree = await childEnv(dir, "explore");
+    assert.equal(atWorktree.TORIEL_SCOPE_ROOT, fs.realpathSync(dir));
+    assert.equal(atWorktree.TORIEL_SCOPE_MODE, "deny", "a linked-worktree launch dir gets deny mode");
+    const atPlain = await childEnv(plain, "explore");
+    assert.equal(atPlain.TORIEL_SCOPE_ROOT, fs.realpathSync(plain));
+    assert.equal(atPlain.TORIEL_SCOPE_MODE, "ask", "a plain launch dir gets ask mode");
+    const none = await childEnv(dir, "unscoped");
+    assert.equal(none.TORIEL_SCOPE_ROOT, null, "scope: none keeps the variables out of the child");
+    assert.equal(none.TORIEL_SCOPE_MODE, null);
   });
 
   it("adds toriel's tools to the loadout on every start and resume, unless a profile owns the tool list", async () => {

@@ -4,7 +4,7 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { readScope } from "../pi/extensions/lib/scope-root.ts";
+import { SCOPE_ENV, SCOPE_MODE_ENV, readScope } from "../pi/extensions/lib/scope-root.ts";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-grantsext-"));
 const sock = path.join(dir, "d.sock");
@@ -108,7 +108,8 @@ describe("scope link", () => {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "toriel-scope-")));
   fs.mkdirSync(path.join(base, "W"));
   const W = fs.realpathSync(path.join(base, "W"));
-  const root = { kind: "root" as const, root: W };
+  const root = { kind: "root" as const, root: W, mode: "deny" as const };
+  const askRoot = { kind: "root" as const, root: W, mode: "ask" as const };
   const off = { kind: "off" as const };
 
   function writeAsk(surface: string, boundaryValue: unknown, extra: Record<string, unknown> = {}) {
@@ -161,6 +162,7 @@ describe("scope link", () => {
   it("stays total: hostile details and a throwing send resolve to a verdict, never a rejection", async () => {
     const throwing = { get accessIntent() { throw new Error("boom"); } };
     assert.doesNotThrow(() => assert.equal(ext.scopeVerdict(root, throwing as never).kind, "deny"), "covered check under a root scope fails closed");
+    assert.doesNotThrow(() => assert.equal(ext.scopeVerdict(askRoot, throwing as never).kind, "defer"), "in ask mode it fails to prompting");
     assert.doesNotThrow(() => assert.equal(ext.scopeVerdict(off, throwing as never).kind, "defer"), "off never touches details");
     assert.deepEqual(await ext.authorize(sock, "u", null as never, () => { throw new Error("boom"); }, off), { kind: "defer" });
     assert.equal((await ext.authorize(sock, "u", throwing as never, () => { throw new Error("boom"); }, root)).kind, "deny");
@@ -171,9 +173,10 @@ describe("scope link", () => {
     fs.writeFileSync(file, "x");
     const link = path.join(base, "link-to-W");
     fs.symlinkSync(W, link);
-    const bad = ["", "  ", "relative", path.join(base, "missing"), file, "/", link, `${W}/`].map((v) => readScope({ TORIEL_SCOPE_ROOT: v }));
+    const bad = ["", "  ", "relative", path.join(base, "missing"), file, "/", link, `${W}/`].map((v) => readScope({ [SCOPE_ENV]: v }));
     for (const s of bad) {
       assert.equal(s.kind, "invalid", "readScope rejects this value");
+      assert.equal(s.kind === "invalid" && s.mode, "deny", "a scope without TORIEL_SCOPE_MODE defaults to deny");
       const w = writeAsk("path_write", path.join(W, "x"));
       const dv = ext.scopeVerdict(s, w);
       assert.equal(dv.kind, "deny", "a covered write under an invalid scope denies, never defers");
@@ -236,6 +239,40 @@ describe("scope link", () => {
       assert.equal(d2.seen.filter((c) => c.type === "permission_check").length, 1, "inside-W writes still go through the grants path");
     } finally {
       d2.close();
+    }
+  });
+
+  it("defers an outside write in ask mode, letting the grants round-trip (only when grants exist) decide", async () => {
+    const outside = path.join(base, "outside-ask.txt");
+    assert.deepEqual(ext.scopeVerdict(askRoot, writeAsk("path_write", outside)), { kind: "defer" }, "the ask-mode guard never denies");
+    assert.deepEqual(ext.scopeVerdict(askRoot, writeAsk("path_write", path.join(W, "inside.txt"))), { kind: "defer" }, "an inside write defers too: ask mode never answers, the normal flow decides");
+    assert.deepEqual(ext.scopeVerdict(askRoot, writeAsk("path_read", outside)), { kind: "defer" }, "non-covered surfaces defer (reads are not jailed)");
+    const d = await fakeDaemon(() => ({ ok: true, data: { allow: true } }));
+    try {
+      assert.deepEqual(await ext.authorize(sock, "u", writeAsk("path_write", outside), undefined, askRoot), { kind: "allow" }, "a deferred scope lets the daemon's grant answer");
+      assert.equal(d.seen.filter((c) => c.type === "permission_check").length, 1, "the grants round-trip ran");
+      const noGrants = { surface: "path_write", accessIntent: { surface: "path_write", matchValues: [outside], boundaryValue: outside } };
+      assert.deepEqual(await ext.authorize(sock, "u", noGrants, undefined, askRoot), { kind: "defer" }, "no suggested grants, no round-trip");
+      assert.equal(d.seen.filter((c) => c.type === "permission_check").length, 1, "only the granted ask reached the daemon");
+      assert.deepEqual(await ext.authorize(sock, "u", writeAsk("path_write", outside), () => Promise.reject(new Error("daemon down")), askRoot), { kind: "defer" }, "a daemon failure defers to the dialog");
+    } finally {
+      d.close();
+    }
+  });
+
+  it("defers a covered write with a missing canonical target in ask mode (unknowable, so prompt)", () => {
+    for (const b of [null, "", 42]) {
+      assert.deepEqual(ext.scopeVerdict(askRoot, writeAsk("external_directory", b)), { kind: "defer" }, `boundary ${String(b)}`);
+    }
+  });
+
+  it("defers every covered write while the env is invalid in ask mode, and denies in deny mode", () => {
+    const outside = path.join(base, "invalid-mode.txt");
+    for (const v of ["", "relative", path.join(base, "missing")]) {
+      const asking = readScope({ [SCOPE_ENV]: v, [SCOPE_MODE_ENV]: "ask" });
+      assert.deepEqual(ext.scopeVerdict(asking, writeAsk("path_write", outside)), { kind: "defer" }, `ask mode defers an unusable root (${v})`);
+      const denying = readScope({ [SCOPE_ENV]: v });
+      assert.equal(ext.scopeVerdict(denying, writeAsk("path_write", outside)).kind, "deny", `deny mode fails closed (${v})`);
     }
   });
 });

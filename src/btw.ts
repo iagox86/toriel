@@ -84,9 +84,13 @@ export async function sideRun(opts: SideRunOptions): Promise<string> {
 function run(args: string[], opts: { cwd?: string; timeoutMs?: number }): Promise<string> {
   const limit = opts.timeoutMs ?? BTW_TIMEOUT_MS;
   return new Promise((resolve, reject) => {
+    const childEnvVars: NodeJS.ProcessEnv = { ...process.env, TORIEL_CHILD: "1" };
+    // a daemon started inside a scoped session must not leak its scope into these side children
+    delete childEnvVars.TORIEL_SCOPE_ROOT;
+    delete childEnvVars.TORIEL_SCOPE_MODE;
     const child = spawn(process.execPath, args, {
       cwd: opts.cwd && fs.existsSync(opts.cwd) ? opts.cwd : os.tmpdir(),
-      env: { ...process.env, TORIEL_CHILD: "1" },
+      env: childEnvVars,
       stdio: ["ignore", "pipe", "pipe"],
     });
     let out = "";

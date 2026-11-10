@@ -1369,6 +1369,28 @@ no-op: `agents/implement.md:19` and `agents/test-runner.md:16` already forbid gi
 no shipped profile names `git_write`/`git_net` (`test/agents-shipped.test.ts` enforces), so no
 `agents/*.md` changed.
 
+Addendum (2026-11-09, T8, later same day): ticket 172 extended scoping to every profile spawn - the scope root
+is the launch directory's realpath, not just a linked-worktree root (`scopeForSession`,
+`src/scope-root.ts`). Three decisions with the why:
+- One env pair, two modes: `TORIEL_SCOPE_MODE` ("deny"/"ask") joins `TORIEL_SCOPE_ROOT`; deny
+  exactly when the launch cwd is a linked-worktree root (T1's incident), ask otherwise.
+  Un-profiled sessions and `scope: none` profiles stay unscoped, and subagents inherit the
+  parent's cwd, so an agent tree is bounded by its root session's launch dir.
+- Invalid env in ask mode defers, never denies: deny mode keeps T1's fail-closed deny (P6), but
+  in ask mode the guard cannot know inside from outside and the mode's promise is "prompt,
+  never silently allow" - an unusable root defers every covered write (more prompting, never
+  less). The link still never throws.
+- `TORIEL_SCOPE_MODE` defaults to deny: a root without a mode (older daemon, hand-set env)
+  behaves exactly as T1 shipped.
+T3's doctor check needed no change (it flags config allows that would short-circuit the chain
+regardless of mode). Review note (Claude, F1): ask mode is observably a no-op today - the link
+runs only on asks, so a config allow short-circuits it like any other; ask mode ships as the
+boundary marker and the seam for a future pre-config prompt mechanism, and the docs say so
+(reference.md TORIEL_SCOPE_MODE). The same review flagged F3: `btw.ts` and `summarize.ts` spawn
+pi with a `{...process.env}` spread, so a daemon started inside a scoped session leaks
+TORIEL_SCOPE_ROOT/MODE into those children - fixed here by stripping both (pre-existing for
+ROOT, now closed for both).
+
 Session wrap-up 2026-11-06 (unpushed): main `69817c3` (docs) <- `2b6474f` (AGENTS.md board line)
 <- `97ad4c2` (qwen defaults for implement/explore/summarize/test-runner/triage; implement
 maxTurns 120). `/performance` flow final shape: review session opens at command time, report
