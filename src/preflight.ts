@@ -8,6 +8,20 @@ import { basename, join } from "node:path";
 const ROOT = join(import.meta.dirname, "..");
 const DEPENDENCIES = ["@earendil-works/pi-coding-agent", "@earendil-works/pi-tui", "commander"];
 
+/** True when dotted version a is older than dotted version b, compared element-wise. */
+function versionLess(a: string, b: string): boolean {
+  const av = a.split(".").map(Number);
+  const bv = b.split(".").map(Number);
+  for (let i = 0; i < Math.max(av.length, bv.length); i++) {
+    const x = av[i] ?? 0;
+    const y = bv[i] ?? 0;
+    if (x !== y) {
+      return x < y;
+    }
+  }
+  return false;
+}
+
 /** What is wrong with the environment toriel is about to start in; empty when it is fine. */
 export function startupProblems(env: NodeJS.ProcessEnv = process.env, nodeVersion = process.versions.node, root = ROOT): string[] {
   const problems: string[] = [];
@@ -17,8 +31,8 @@ export function startupProblems(env: NodeJS.ProcessEnv = process.env, nodeVersio
   } catch {
     // no pin: nothing to compare
   }
-  if (want && Number(nodeVersion.split(".")[0]) < Number(want.split(".")[0])) {
-    problems.push(`node ${nodeVersion} is too old: toriel needs node ${want.split(".")[0]} or newer (nvm install ${want.split(".")[0]}, or start it with bin/toriel, which finds it)`);
+  if (want && versionLess(nodeVersion, want)) {
+    problems.push(`node ${nodeVersion} is too old: toriel needs node ${want} or newer (nvm install ${want.split(".")[0]}, or start it with bin/toriel, which finds it)`);
   }
   const missing = DEPENDENCIES.filter((d) => !existsSync(join(root, "node_modules", d)));
   if (missing.length > 0) {

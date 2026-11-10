@@ -19,7 +19,7 @@ done. Full workflow: the `toriel-job-board-workflow` skill; API details: the
 
 ## Commands
 
-Use node v26 (`~/.nvm/versions/node/v26.12.0/bin`); the default node is too old. (`bin/toriel`, the launcher, finds it on its own; these commands do not.)
+Any node >= 22.18 on PATH works (the code is TypeScript run directly by node; `.nvmrc` pins the floor). `bin/toriel` finds an nvm node when PATH's node is older.
 
 - `npm test` - all tests, no network or model
 - `npm run typecheck` - tsc (node strips types at runtime and never checks them)
@@ -28,10 +28,9 @@ Use node v26 (`~/.nvm/versions/node/v26.12.0/bin`); the default node is too old.
 
 Run it with `bin/toriel` (the launcher picks the right node) or `npm start`.
 
-A single test file or pattern (node v26 is not the default node; in fish):
+A single test file or pattern:
 
-```fish
-set -x PATH ~/.nvm/versions/node/v26.12.0/bin $PATH
+```
 node --test test/commands.test.ts
 node --test --test-name-pattern="some behavior" test/daemon.test.ts
 ```

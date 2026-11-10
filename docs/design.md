@@ -202,14 +202,14 @@ Risk: Loader/diff components are interactive-mode internals, not all exported
   to mix up; check both indexes.
 - Node type stripping is erasable-only: parameter properties
   (`constructor(readonly x)`) throw ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX. No
-  enums/namespaces either. Run files directly with node v26 (.nvmrc pins
-  26.12.0; nvm default alias is v20, which will NOT run this).
+  enums/namespaces either. Run files directly with node (>= 22.18; .nvmrc
+  pins the floor; nvm default alias is v20, which will NOT run this).
 - RpcClient: extension_ui_request records fall through to onEvent
   listeners; answer with (client as any).send({type:
   "extension_ui_response", id, ...}) (send is typed-private, present at
   runtime). cliPath defaults to cwd-relative "dist/cli.js" - always pass
   the absolute path. RpcClient spawns `node` from PATH: daemon must be
-  launched with v26 first in PATH.
+  launched with a node >= 22.18 first in PATH (bin/toriel does this).
 - message_update deltas: text_end/thinking_end carry authoritative
   `content`; replace on end and on message_end.message. toolcall_* deltas
   can be skipped - tools render from tool_execution_* events (args +

@@ -100,8 +100,9 @@ column. For pi processes
 without the extension, a file modified within the last 60s triggers a
 warn-and-confirm (enter twice) before forking.
 
-Node v26.12.0 via nvm (`.nvmrc`; the nvm default alias v20 will NOT run
-this). Children are normal pi processes using your settings/auth/extensions.
+Node 22.18.0 or newer (`.nvmrc` pins the floor; the nvm default alias v20
+will NOT run this - no type stripping). Children are normal pi processes
+using your settings/auth/extensions.
 The auto-started daemon uses the controller's own node binary, so it works
 regardless of PATH.
 
