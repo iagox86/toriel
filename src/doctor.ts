@@ -9,7 +9,7 @@
 // changes or goes away, change or remove its check. test/doctor.test.ts fails when a finding
 // carries an id the catalog does not list.
 import { accessSync, constants, copyFileSync, existsSync, readFileSync, statSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { mcpWarnings, mergeMcpServers, loadAgents } from "./agents.ts";
 import { piAgentDir } from "./pi-dir.ts";
 import { startupProblems } from "./preflight.ts";
@@ -58,6 +58,7 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: "clipboard", level: "feature", title: "clipboard tools for paste and copy (wl-clipboard on Wayland, xclip on X11)" },
   { id: "truecolor", level: "feature", title: "the terminal shows toriel's theme as intended (truecolor)" },
   { id: "grants-path-rule", level: "hardening", title: "an agent cannot edit the permission grants file unasked (a path rule)", needsPermissionPackage: true },
+  { id: "permission-package-scope-patch", level: "hardening", title: "the installed pi-permission-system carries the toriel scope patch (a trusted project config cannot override a scope root)", needsPermissionPackage: true },
   { id: "scope-guard-short-circuit", level: "hardening", title: 'no config allow short-circuits the scope guard for directory-scoped sessions (path, path_write, external_directory, write, edit, the "*" fallback)', needsPermissionPackage: true },
 ];
 
@@ -97,6 +98,23 @@ function onPath(name: string, dirs: readonly string[]): boolean {
   });
 }
 
+/**
+ * Locate the installed @gotgenes/pi-permission-system package (the copy pi loads raw src
+ * from): the tree pi's cli.js lives in, then the running node's global modules (an nvm
+ * layout). Undefined when none of the candidates has the package's source tree.
+ */
+export function locatePermissionPackageSrc(piCli: string, execPath: string): string | undefined {
+  const roots = [dirname(piCli), join(dirname(execPath), "..", "lib", "node_modules")];
+  for (const root of roots) {
+    for (const candidate of [join(root, "@gotgenes", "pi-permission-system"), join(root, "node_modules", "@gotgenes", "pi-permission-system")]) {
+      if (existsSync(join(candidate, "src", "session", "permission-session.ts"))) {
+        return candidate;
+      }
+    }
+  }
+  return undefined;
+}
+
 /** Everything wrong that doctor can see, graded; the resource audit's findings plus the ones that need settings and the environment. */
 export function collectFindings(opts: DoctorOptions = {}): Finding[] {
   const env = opts.env ?? process.env;
@@ -112,6 +130,18 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
   const piCli = opts.piCli ?? resolveChildConfig(loaded.settings, env).piCli;
   if (!existsSync(piCli)) {
     out.push({ id: "pi-cli", level: "required", message: `pi's cli.js is not at ${piCli}: run npm install in the toriel checkout, or set piCli in the toriel settings` });
+  }
+  // the scope patch: a trusted project config inside a scoped session's directory can
+  // re-allow outside-scope writes (project policy outranks global and lives INSIDE the
+  // scope root, writable by the agent), so the installed package must carry the two-site
+  // patch that withholds project policy under TORIEL_SCOPE_ROOT (pi/patches/scope-config-patch.md)
+  const pkgSrc = locatePermissionPackageSrc(piCli, env.TORIEL_NODE ?? process.execPath);
+  if (pkgSrc !== undefined && !readFileSync(join(pkgSrc, "src", "session", "permission-session.ts"), "utf8").includes("toriel-scope-patch")) {
+    out.push({
+      id: "permission-package-scope-patch",
+      level: "hardening",
+      message: `the installed pi-permission-system at ${pkgSrc} lacks the toriel scope patch: a trusted project config inside a scoped session's directory could re-allow outside-scope writes; apply the two-site patch from pi/patches/scope-config-patch.md in the toriel checkout (package updates overwrite it; this check flags it again then)`,
+    });
   }
   // shipped agents that name mcp__<server>__* tools: pi gives an agent an MCP tool only when its server is exposed directly
   const shipped = loadAgents(process.cwd(), env).agents.filter((a) => a.source === "built-in");

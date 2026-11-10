@@ -40,6 +40,8 @@ export interface Over {
   /** Same for the gdb and ghidra servers (the debug and re-* agents). */
   gdbMcp?: string;
   ghidraMcp?: string;
+  /** Place a fake installed pi-permission-system package beside piCli: "absent" (unpatched) or "present" (carries the scope-patch marker). */
+  scopePatch?: "absent" | "present";
 }
 
 export function setup(home: string, over: Over = {}) {
@@ -83,11 +85,16 @@ export function setup(home: string, over: Over = {}) {
   if (!over.noCli) {
     fs.writeFileSync(piCli, "");
   }
+  if (over.scopePatch !== undefined) {
+    const pkg = path.join(base, "node_modules", "@gotgenes", "pi-permission-system", "src", "session");
+    mk(pkg);
+    fs.writeFileSync(path.join(pkg, "permission-session.ts"), over.scopePatch === "present" ? "// toriel-scope-patch\n" : "export {}\n");
+  }
   const settingsFile = path.join(base, "toriel-settings.json");
   if (over.settings !== undefined) {
     fs.writeFileSync(settingsFile, over.settings);
   }
   const grantsFile = path.join(home, ".local", "share", "toriel", "permissions.json");
-  const opts: DoctorOptions = { agentDir, root, grantsFile, settingsFile, piCli, pathDirs: [bin], platform: "linux", startup: [], env: {} };
+  const opts: DoctorOptions = { agentDir, root, grantsFile, settingsFile, piCli, pathDirs: [bin], platform: "linux", startup: [], env: { TORIEL_NODE: "/nonexistent-node" } };
   return { agentDir, opts, config: path.join(agentDir, "extensions", "pi-permission-system", "config.json"), grantsFile };
 }
