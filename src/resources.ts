@@ -253,14 +253,14 @@ function grantsFindings(agentDir: string, grantsFile: string): Finding[] {
     findings.push({
       id: "grants-path-rule",
       level: "hardening",
-      message: `nothing stops an agent editing the permission grants file: add "${shown}": "ask" to the "permission" > "path" rules in ${file}, after a "*": "allow" entry (it matches later rules last)`,
+      message: `nothing stops an agent editing the permission grants file: add "${shown}": "ask" to the "permission" > "path" rules in ${file} (last matching rule wins: put it after any catch-all allow entry)`,
       fix: fixable
         ? {
             file,
             summary: `make writes to ${shown} ask first`,
             edit: (c) => {
               const perm = isObject(c.permission) ? c.permission : {};
-              const path = isObject(perm.path) ? perm.path : { "*": "allow" };
+              const path = isObject(perm.path) ? perm.path : {};
               const others = Object.entries(path).filter(([key]) => key !== shown && key !== grantsFile);
               return { ...c, permission: { ...perm, path: { ...Object.fromEntries(others), [shown]: "ask" } } };
             },
@@ -269,6 +269,64 @@ function grantsFindings(agentDir: string, grantsFile: string): Finding[] {
     });
   }
   return findings;
+}
+
+/** The permission package's config parsed, or undefined when it is missing or broken (permissionSystemProblem reports that). */
+function permissionConfig(agentDir: string): unknown {
+  try {
+    return JSON.parse(readFileSync(join(agentDir, "extensions", PERMISSION_PACKAGE, "config.json"), "utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A config ALLOW on a covered write surface is allowed before the authorizer chain runs, so the
+ * scope guard (TORIEL_SCOPE_ROOT, the deny link in toriel-grants.ts) never sees the ask and a
+ * directory-scoped session can write outside its scope. The guard cannot know every session's
+ * scope root, so ANY allow on these surfaces is flagged: `external_directory` expands at load
+ * into read and write, and the `"*"` surface is the fallback for every surface. Ask and deny
+ * rules never short-circuit. No automatic fix: narrowing an operator's allow rules is a judgment
+ * call about their whole permission posture, so one hardening finding lists every offender.
+ */
+export function scopeGuardFindings(config: unknown): Finding[] {
+  const permission = isObject(config) ? config.permission : undefined;
+  if (!isObject(permission)) {
+    return [];
+  }
+  const rules = (section: unknown): Record<string, unknown> | undefined => (typeof section === "string" ? { "*": section } : isObject(section) ? section : undefined);
+  const actionOf = (rule: unknown): string | undefined => (typeof rule === "string" ? rule : isObject(rule) && typeof (rule as { action?: unknown }).action === "string" ? (rule as { action: string }).action : undefined);
+  const offenders: string[] = [];
+  // An outside-scope write ask surfaces as external_directory_write (or the bare
+  // external_directory family), and a directional ask consults only its own section plus
+  // the "*" fallback (the resolver folds the bare family most-restrictive; a directional
+  // member is checked alone). Allows here - and only here - can short-circuit the guard:
+  for (const surface of ["external_directory_write", "external_directory"]) {
+    for (const [pattern, rule] of Object.entries(rules(permission[surface]) ?? {})) {
+      if (actionOf(rule) === "allow") {
+        offenders.push(`${surface}: "${pattern}"`);
+      }
+    }
+  }
+  // The fallback only matters when the sections cannot answer: an explicit catch-all ask
+  // (or deny) on external_directory_write - or reached through the bare external_directory
+  // sugar, whose entries expand into it - makes the fallback unreachable for these asks.
+  const edw = rules(permission.external_directory_write);
+  const ed = rules(permission.external_directory);
+  const catchAll = actionOf(edw?.["*"]) ?? actionOf(ed?.["*"]);
+  if (catchAll !== "ask" && catchAll !== "deny" && actionOf(permission["*"]) === "allow") {
+    offenders.push(`"*" (fallback)`);
+  }
+  if (offenders.length === 0) {
+    return [];
+  }
+  return [
+    {
+      id: "scope-guard-short-circuit",
+      level: "hardening",
+      message: `config allows outside-scope writes outright (${[...new Set(offenders)].join(", ")}): an ask these match is allowed before the authorizer chain runs, so the scope guard cannot deny it for directory-scoped sessions (TORIEL_SCOPE_ROOT); set them to "ask" - an explicit "*": "ask" on external_directory_write also makes the "*" fallback unreachable - if you want directory scoping to hold`,
+    },
+  ];
 }
 
 export interface AuditOptions {
@@ -299,6 +357,7 @@ export function auditFindings(agentDir: string, root = PI_RESOURCES_DIR, opts: A
       out.push({ id: "permission-package", level: "recommended", message: permission });
     } else {
       out.push(...grantsFindings(agentDir, opts.grantsFile ?? PERMISSIONS_FILE));
+      out.push(...scopeGuardFindings(permissionConfig(agentDir)));
     }
   }
   return out;
