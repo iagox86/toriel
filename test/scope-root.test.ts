@@ -4,9 +4,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 
-import { SCOPE_ENV, isInside, readScope } from "../pi/extensions/lib/scope-root.ts";
+import { SCOPE_ENV, SCOPE_MODE_ENV, isInside, readScope } from "../pi/extensions/lib/scope-root.ts";
 import type { Scope } from "../pi/extensions/lib/scope-root.ts";
-import { scopeRootFor } from "../src/scope-root.ts";
+import { isLinkedWorktreeRoot, scopeForSession, scopeRootFor } from "../src/scope-root.ts";
 
 function freshTmpdir(): string {
   // /tmp may itself be a symlink on some hosts; every W must be canonical.
@@ -53,7 +53,17 @@ describe("readScope", () => {
 
   it("accepts a real canonical directory as the root", () => {
     const dir = freshTmpdir();
-    assert.deepEqual(readScope({ [SCOPE_ENV]: dir }), { kind: "root", root: dir });
+    assert.deepEqual(readScope({ [SCOPE_ENV]: dir }), { kind: "root", root: dir, mode: "deny" });
+  });
+
+  it("reads TORIEL_SCOPE_MODE: exactly 'ask' is ask, anything else (including absent) is deny", () => {
+    const dir = freshTmpdir();
+    const modeOf = (s: Scope): string | undefined => (s.kind === "off" ? undefined : s.mode);
+    assert.equal(modeOf(readScope({ [SCOPE_ENV]: dir, [SCOPE_MODE_ENV]: "ask" })), "ask");
+    assert.equal(modeOf(readScope({ [SCOPE_ENV]: dir, [SCOPE_MODE_ENV]: "ASK" })), "deny", "case-sensitive");
+    assert.equal(modeOf(readScope({ [SCOPE_ENV]: dir, [SCOPE_MODE_ENV]: "garbage" })), "deny");
+    assert.equal(modeOf(readScope({ [SCOPE_ENV]: dir })), "deny", "a root without a mode behaves as T1 shipped");
+    assert.equal(modeOf(readScope({ [SCOPE_ENV]: "", [SCOPE_MODE_ENV]: "ask" })), "ask", "the mode rides along on an invalid root too");
   });
 
   it("rejects a symlink to a real directory (not canonical)", () => {
@@ -126,6 +136,65 @@ describe("isInside", () => {
   it("excludes relative targets", () => {
     assert.equal(isInside(W, "relative/dir"), false);
     assert.equal(isInside(W, "w/x"), false);
+  });
+});
+
+describe("isLinkedWorktreeRoot (daemon side)", () => {
+  it("is true for a .git file pointing into a worktrees dir", () => {
+    const dir = freshTmpdir();
+    fs.writeFileSync(path.join(dir, ".git"), "gitdir: /r/.git/worktrees/w1\n");
+    assert.equal(isLinkedWorktreeRoot(dir), true);
+  });
+
+  it("is false for a plain repo (a .git directory)", () => {
+    const dir = freshTmpdir();
+    fs.mkdirSync(path.join(dir, ".git"));
+    assert.equal(isLinkedWorktreeRoot(dir), false);
+  });
+
+  it("is false for a submodule-style .git file", () => {
+    const dir = freshTmpdir();
+    fs.writeFileSync(path.join(dir, ".git"), "gitdir: ../.git/modules/m\n");
+    assert.equal(isLinkedWorktreeRoot(dir), false);
+  });
+
+  it("is false without .git, for a garbage .git file, and on any fs error while probing", () => {
+    const dir = freshTmpdir();
+    assert.equal(isLinkedWorktreeRoot(dir), false);
+    fs.writeFileSync(path.join(dir, ".git"), "not a gitdir line\n");
+    assert.equal(isLinkedWorktreeRoot(dir), false);
+    const throwingFs = {
+      lstatSync: (): { isFile: () => boolean } => {
+        throw new Error("EACCES");
+      },
+      realpathSync: (p: string): string => p,
+      readFileSync: (): string => {
+        throw new Error("EACCES");
+      },
+    };
+    assert.equal(isLinkedWorktreeRoot(dir, throwingFs), false);
+  });
+});
+
+describe("scopeForSession (daemon side)", () => {
+  // `scope: none` stays unscoped through the caller's boolean: the daemon passes
+  // hasProfile = s.agent !== undefined && s.agent.scope !== "none", so a `scope: none`
+  // profile arrives here as false.
+  it("scopes a profiled session in a plain directory to the realpath of the cwd, in ask mode", () => {
+    const dir = freshTmpdir();
+    fs.mkdirSync(path.join(dir, ".git"));
+    assert.deepEqual(scopeForSession(dir, true), { root: fs.realpathSync(dir), mode: "ask" });
+  });
+
+  it("scopes a profiled session at a linked worktree root to the realpath of the cwd, in deny mode", () => {
+    const dir = freshTmpdir();
+    fs.writeFileSync(path.join(dir, ".git"), "gitdir: /r/.git/worktrees/w1\n");
+    assert.deepEqual(scopeForSession(dir, true), { root: fs.realpathSync(dir), mode: "deny" });
+  });
+
+  it("leaves an unprofiled session unscoped", () => {
+    const dir = freshTmpdir();
+    assert.equal(scopeForSession(dir, false), undefined);
   });
 });
 

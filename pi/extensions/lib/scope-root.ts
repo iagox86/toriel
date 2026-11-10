@@ -2,11 +2,15 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 export const SCOPE_ENV = "TORIEL_SCOPE_ROOT";
+export const SCOPE_MODE_ENV = "TORIEL_SCOPE_MODE";
+
+/** What the scope link does with a covered write outside the root (decision 1 of SPEC-172-T8). */
+export type ScopeMode = "deny" | "ask";
 
 export type Scope =
   | { kind: "off" }
-  | { kind: "root"; root: string }
-  | { kind: "invalid"; why: string };
+  | { kind: "root"; root: string; mode: ScopeMode }
+  | { kind: "invalid"; why: string; mode: ScopeMode };
 
 type FsApi = {
   realpathSync: (p: string) => string;
@@ -14,35 +18,39 @@ type FsApi = {
 };
 
 /**
- * Resolve TORIEL_SCOPE_ROOT from a child's env into a Scope.
+ * Resolve TORIEL_SCOPE_ROOT (and its TORIEL_SCOPE_MODE companion) from a child's
+ * env into a Scope.
  *
  * Absent (undefined) is the only "off". Every present value that fails
- * validation is "invalid" (fail-closed), never trimmed or repaired.
- * Never throws: an fs error while probing yields "invalid".
+ * validation is "invalid", never trimmed or repaired. The mode defaults to
+ * deny: a root without a mode (older daemon, hand-set env) behaves as T1
+ * shipped (decision 4 of SPEC-172-T8); only the exact string "ask" reads as
+ * ask. Never throws: an fs error while probing yields "invalid".
  */
 export function readScope(env: Record<string, string | undefined>, fsApi: FsApi = { realpathSync: fs.realpathSync, statSync: fs.statSync }): Scope {
+  const mode: ScopeMode = env[SCOPE_MODE_ENV] === "ask" ? "ask" : "deny";
   try {
     const value = env[SCOPE_ENV];
     if (value === undefined) {
       return { kind: "off" };
     }
     if (!path.isAbsolute(value)) {
-      return { kind: "invalid", why: "not an absolute path" };
+      return { kind: "invalid", why: "not an absolute path", mode };
     }
     if (value === path.parse(value).root) {
-      return { kind: "invalid", why: "is the filesystem root, which would allow everything" };
+      return { kind: "invalid", why: "is the filesystem root, which would allow everything", mode };
     }
     if (!fsApi.statSync(value).isDirectory()) {
-      return { kind: "invalid", why: "is not a directory" };
+      return { kind: "invalid", why: "is not a directory", mode };
     }
     const real = fsApi.realpathSync(value);
     if (real !== value) {
-      return { kind: "invalid", why: `is not canonical (resolves to ${real})` };
+      return { kind: "invalid", why: `is not canonical (resolves to ${real})`, mode };
     }
-    return { kind: "root", root: value };
+    return { kind: "root", root: value, mode };
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
-    return { kind: "invalid", why: `does not exist or cannot be stat'd (${detail})` };
+    return { kind: "invalid", why: `does not exist or cannot be stat'd (${detail})`, mode };
   }
 }
 

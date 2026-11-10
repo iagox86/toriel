@@ -47,7 +47,7 @@ minimal: true                   # default true; skips AGENTS.md/CLAUDE.md, skill
 maxTurns: 25                    # turns a subagent may take before it is cut off (toriel_agent runs)
 budget: 150000                  # fresh tokens (input + output, not cache reads) a subagent may use; default 150000, capped by its parent's remainder
 canSpawn: false                 # may this agent start subagents of its own (also needs depth left; default false)
-scope: none                     # opt out of worktree scoping: the daemon then never sets TORIEL_SCOPE_ROOT for this profile's sessions (default: scoped when the cwd is a linked-worktree root)
+scope: none                     # opt out of scoping: the daemon then never sets TORIEL_SCOPE_ROOT/TORIEL_SCOPE_MODE for this profile's sessions (default: scoped - deny mode in a linked-worktree root [outside-root covered writes are denied], ask mode everywhere else [outside-root covered asks are deferred to the normal dialog/grants flow; the config still decides whether they prompt])
 ---
 The system prompt, appended to pi's own.
 ```

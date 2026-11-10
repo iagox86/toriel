@@ -28,27 +28,34 @@ describe("a session's command environment", () => {
   });
 });
 
-describe("the TORIEL_SCOPE_ROOT seam", () => {
-  it("sets TORIEL_SCOPE_ROOT only when a scope root is given", () => {
-    const env = childEnv({ sessionId: "abc" }, "/sock", { A: "1" }, "/w");
+describe("the TORIEL_SCOPE_ROOT / TORIEL_SCOPE_MODE seam", () => {
+  it("sets both scope variables when a scope is given", () => {
+    const env = childEnv({ sessionId: "abc" }, "/sock", { A: "1" }, { root: "/w", mode: "deny" });
     assert.equal(env.TORIEL_SCOPE_ROOT, "/w");
+    assert.equal(env.TORIEL_SCOPE_MODE, "deny");
+    const ask = childEnv({ sessionId: "abc" }, "/sock", { A: "1" }, { root: "/w", mode: "ask" });
+    assert.equal(ask.TORIEL_SCOPE_ROOT, "/w");
+    assert.equal(ask.TORIEL_SCOPE_MODE, "ask");
     assert.equal(env.A, "1");
   });
 
-  it("drops a TORIEL_SCOPE_ROOT already in the base when no scope root is given (no leak)", () => {
-    const env = childEnv({ sessionId: "abc" }, "/sock", { A: "1", TORIEL_SCOPE_ROOT: "/leaked" });
+  it("drops both variables already in the base when no scope is given (no leak)", () => {
+    const env = childEnv({ sessionId: "abc" }, "/sock", { A: "1", TORIEL_SCOPE_ROOT: "/leaked", TORIEL_SCOPE_MODE: "ask" });
     assert.equal(env.TORIEL_SCOPE_ROOT, undefined);
+    assert.equal(env.TORIEL_SCOPE_MODE, undefined);
     assert.equal(env.A, "1");
   });
 
-  it("lets the argument win over a leaked base value", () => {
-    const env = childEnv({}, "/sock", { TORIEL_SCOPE_ROOT: "/leaked" }, "/w");
+  it("lets the argument win over leaked base values", () => {
+    const env = childEnv({}, "/sock", { TORIEL_SCOPE_ROOT: "/leaked", TORIEL_SCOPE_MODE: "deny" }, { root: "/w", mode: "ask" });
     assert.equal(env.TORIEL_SCOPE_ROOT, "/w");
+    assert.equal(env.TORIEL_SCOPE_MODE, "ask");
   });
 
-  it("never gives a !command the scope root, even when it leaks in the base", () => {
-    const env = bangEnv({ sessionId: "abc" }, "/sock", { PATH: "/usr/bin", TORIEL_SCOPE_ROOT: "/leaked" }, "/pi/bin");
+  it("never gives a !command either scope variable, even when they leak in the base", () => {
+    const env = bangEnv({ sessionId: "abc" }, "/sock", { PATH: "/usr/bin", TORIEL_SCOPE_ROOT: "/leaked", TORIEL_SCOPE_MODE: "ask" }, "/pi/bin");
     assert.equal(env.TORIEL_SCOPE_ROOT, undefined);
+    assert.equal(env.TORIEL_SCOPE_MODE, undefined);
   });
 });
 

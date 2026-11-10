@@ -142,6 +142,10 @@ export interface SummarizerOptions {
 /** Run pi once in print mode over `transcript`; rejects with pi's stderr on failure. */
 export function runSummarizer(opts: SummarizerOptions): Promise<string> {
   return new Promise((resolve, reject) => {
+    const childEnvVars: NodeJS.ProcessEnv = { ...process.env, TORIEL_CHILD: "1" };
+    // a daemon started inside a scoped session must not leak its scope into these side children
+    delete childEnvVars.TORIEL_SCOPE_ROOT;
+    delete childEnvVars.TORIEL_SCOPE_MODE;
     const child = spawn(
       process.execPath,
       [
@@ -159,7 +163,7 @@ export function runSummarizer(opts: SummarizerOptions): Promise<string> {
         opts.model,
         opts.prompt ?? PROMPT,
       ],
-      { cwd: os.tmpdir(), env: { ...process.env, TORIEL_CHILD: "1" }, stdio: ["pipe", "pipe", "pipe"] },
+      { cwd: os.tmpdir(), env: childEnvVars, stdio: ["pipe", "pipe", "pipe"] },
     );
     let out = "";
     let err = "";

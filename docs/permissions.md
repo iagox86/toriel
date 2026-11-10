@@ -84,8 +84,13 @@ its source and docs:
    Since ticket 163 the link also holds the scope guard for directory-scoped sessions:
    when the daemon set `TORIEL_SCOPE_ROOT` in the child's environment, covered write
    asks whose canonical target is outside it are denied (with a reason naming the path
-   and the root) before the grants check ever runs. That half fails closed - an invalid
-   env denies every covered write, it does not defer - but it still never throws; and
+   and the root) before the grants check ever runs - in deny mode. Since ticket 172
+   the daemon scopes every agent-profile session to its launch dir and pairs the root
+   with `TORIEL_SCOPE_MODE`: `ask` (any launch dir that is not a linked-worktree
+   root) defers outside-root and unresolvable covered writes to the dialog instead of
+   denying them. Both modes never silently allow and never throw; the deny-mode half
+   fails closed (an invalid env denies every covered write, it does not defer), the
+   ask-mode half fails to prompting (an invalid env defers every covered write); and
    when the env is absent the guard is off and the link behaves exactly as before.
    Details and limits: `docs/reference.md` "Env" under `TORIEL_SCOPE_ROOT`.
 3. The operator opts in once by adding `"authorizerChain": ["toriel-grants"]` to

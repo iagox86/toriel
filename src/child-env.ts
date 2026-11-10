@@ -4,6 +4,7 @@
 // ones or it would see the daemon's environment instead (#100).
 import { delimiter, join } from "node:path";
 import { piAgentDir } from "./pi-dir.ts";
+import type { ScopeAssignment } from "./scope-root.ts";
 
 export interface EnvSession {
   sessionId?: string;
@@ -11,17 +12,17 @@ export interface EnvSession {
 }
 
 /**
- * What the pi child process is started with. `scopeRoot` (optional) becomes
- * TORIEL_SCOPE_ROOT, the write scope for the scope deny link. A `!command` runs
- * in the daemon, not in pi, so it must never receive that variable: `bangEnv`
- * calls this without one, and a TORIEL_SCOPE_ROOT already in `base` is dropped
- * (a daemon started inside a scoped session must not leak its own scope into
- * every child).
+ * What the pi child process is started with. `scope` (optional) becomes
+ * TORIEL_SCOPE_ROOT + TORIEL_SCOPE_MODE, the write scope pair for the scope link;
+ * both are daemon-owned. A `!command` runs in the daemon, not in pi, so it must
+ * never receive either variable: `bangEnv` calls this without a scope, and a
+ * TORIEL_SCOPE_ROOT or TORIEL_SCOPE_MODE already in `base` is dropped (a daemon
+ * started inside a scoped session must not leak its own scope into every child).
  */
-export function childEnv(s: EnvSession, sock: string, base: NodeJS.ProcessEnv = process.env, scopeRoot?: string): Record<string, string> {
+export function childEnv(s: EnvSession, sock: string, base: NodeJS.ProcessEnv = process.env, scope?: ScopeAssignment): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(base)) {
-    if (key === "TORIEL_SCOPE_ROOT") {
+    if (key === "TORIEL_SCOPE_ROOT" || key === "TORIEL_SCOPE_MODE") {
       continue;
     }
     if (value !== undefined) {
@@ -33,8 +34,9 @@ export function childEnv(s: EnvSession, sock: string, base: NodeJS.ProcessEnv = 
   if (s.sessionId) {
     env.TORIEL_SESSION_ID = s.sessionId;
   }
-  if (scopeRoot !== undefined) {
-    env.TORIEL_SCOPE_ROOT = scopeRoot;
+  if (scope !== undefined) {
+    env.TORIEL_SCOPE_ROOT = scope.root;
+    env.TORIEL_SCOPE_MODE = scope.mode;
   }
   return env;
 }
