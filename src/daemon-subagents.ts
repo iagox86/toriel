@@ -8,6 +8,7 @@ import * as fs from "node:fs";
 import type * as net from "node:net";
 import { findAgent, type AgentProfile } from "./agents.ts";
 import { SEED_GRANTS } from "./seed-grants.ts";
+import { validateSubagentCwd } from "./subagent-cwd.ts";
 import type { Cmd, DaemonContext, Responder } from "./daemon-context.ts";
 import { removeSession } from "./daemon-handlers-lifecycle.ts";
 import { deliverToTarget } from "./daemon-handlers-messages.ts";
@@ -273,9 +274,13 @@ export class SubagentManager {
         .filter((p) => p?.trim())
         .join("\n\n"),
     };
-    // fail before the record exists rather than leaving the child on a dead directory (same check as daemon-children.ts launch)
-    if (cmd.cwd !== undefined && !fs.existsSync(cmd.cwd)) {
-      throw new Error(`working directory no longer exists: ${cmd.cwd} (moved or deleted; recreate it or symlink it to the new location)`);
+    // fail before the record exists rather than leaving the child on a dead directory; a child's scope root is its
+    // cwd, so it must be inside the parent's cwd or a linked worktree of the same repo (delegating never widens)
+    if (cmd.cwd !== undefined) {
+      const check = validateSubagentCwd(cmd.cwd, parent.cwd);
+      if (!check.ok) {
+        throw new Error(check.error);
+      }
     }
     // everything above is synchronous with the record below, so parallel calls cannot both slip past a limit
     const child = ctx.registry.create(cmd.cwd ?? parent.cwd);
@@ -304,6 +309,13 @@ export class SubagentManager {
       }
       rec.childId = child.sessionId;
       if (child.sessionId) {
+        // copy the parent's active grants first (copySession keeps expiry and notes), then the seed
+        // grants: a seed's add() replaces the same-pattern copy, so the read-only seed wins
+        try {
+          ctx.grants.copySession(parentUuid, child.sessionId);
+        } catch (err) {
+          log(`subagent #${rec.handle}: parent grants not inherited: ${errText(err)}`);
+        }
         // a failure to seed is logged, never thrown: more prompting, never less
         for (const seed of SEED_GRANTS) {
           try {
@@ -311,17 +323,6 @@ export class SubagentManager {
           } catch (err) {
             log(`subagent #${rec.handle}: seed grant ${seed.pattern} not added: ${errText(err)}`);
           }
-        }
-        try {
-          for (const g of ctx.grants.active(parentUuid)) {
-            try {
-              ctx.grants.add({ session: child.sessionId, surface: g.surface, pattern: g.pattern, source: "inherit" });
-            } catch (err) {
-              log(`subagent #${rec.handle}: grant ${g.pattern} not inherited: ${errText(err)}`);
-            }
-          }
-        } catch (err) {
-          log(`subagent #${rec.handle}: parent grants not inherited: ${errText(err)}`);
         }
         recordSubagent({ id: parentUuid, name: parentName, file: parent.sessionFile ?? "" }, { id: child.sessionId, name, file: child.sessionFile ?? "" });
       }

@@ -120,16 +120,17 @@ matching); a project config overlay (above).
 
 ```
 Grant { id, session (uuid), surface, pattern, createdAt, expiresAt|null,
-        source: "dialog"|"command", note? }
+        source: "dialog"|"command"|"spawn", note? }
 ```
 
 - Keyed by session UUID, like schedules: survives stop, park, respawn, `/reload`,
   daemon restart. Deleting the session removes its grants (same hook as schedules).
-  A forked or spawned toriel session has its own uuid and starts with none (no
-  inheritance). Exception, by decision: an in-process pi subagent node shares its
-  parent's process and so its `TORIEL_SESSION_ID`; its asks match the parent session's
-  grants. Acceptable and probably desirable; it is absorbed by the permission
-  trickle-up ticket (revisit with the
+  A forked or spawned toriel session has its own uuid and starts with the parent's
+  active grants copied (fork) or seeded + inherited (subagent spawn, see "Seeded
+  grants"; the daemon does this, not an agent tool). Exception: an
+  in-process pi subagent node shares its parent's process and so its
+  `TORIEL_SESSION_ID`; its asks match the parent session's grants. Acceptable and
+  probably desirable; it is absorbed by the permission trickle-up ticket.
   permission trickle-up ticket).
 - No per-project or "always" scope in v1: a grant never applies outside its session.
 - Match: same surface, and the grant's pattern covers the ask's pattern as a glob:
@@ -146,7 +147,9 @@ Grant { id, session (uuid), surface, pattern, createdAt, expiresAt|null,
   opt-in.
 - Cap per session (100) so the store stays reviewable.
 - Only user actions create grants: controller commands and dialog answers. No agent
-  tool grants anything (same reasoning as `--until`).
+  tool grants anything (same reasoning as `--until`) - the one exception is the
+  daemon's spawn-time seeding ("Seeded grants" below), which is daemon policy, not an
+  agent tool.
 
 ### Threat model, stated plainly
 
@@ -361,12 +364,21 @@ Items not covered are marked.
 
 Every subagent is seeded at spawn (daemon-subagents.ts, list in seed-grants.ts) with
 read-only git/gh grants - `git status*`, `git diff*`, `git log*`, `git show*`,
-`git blame*`, `git grep*`, `git branch*`, `git remote*`, `git fetch*`, `git pull*`,
-`gh pr view/list/checks/diff*`, `gh issue view/list*`, `gh repo view*` (source
-`spawn`) - plus a copy of the parent's active grants (source `inherit`). This is what
-lets a worktree worker read repo state with zero permission dialogs: the seed list is
-read-only by construction (nothing that mutates - commit, push, checkout, rebase,
-merge, add, reset, stash, rm - is ever seeded; the manager commits), and inherited
-grants are copies, not shared: revoking one side does not touch the other, and the
-child's grants expire with its session. Seeding never throws - a failure is logged and
-means more prompting, never less.
+`git blame*`, `git grep*`, `git branch --list*`, `git branch --show-current*`,
+`git branch -a`, `git branch -r`, `git branch -v`, `git branch -vv`, `git branch -av`,
+`git remote`, `git remote -v`, `git remote get-url*`, `git remote show*`,
+`gh pr view/list/checks/diff*`, `gh issue view/list*`, `gh repo view*` (source `spawn`) - plus a copy of the parent's
+active grants made first (copySession: expiry and notes kept, copies not shared -
+revoking one side does not touch the other, and the child's grants expire with its
+session; a seed with the same pattern as an inherited grant replaces it). Inheritance
+is NOT filtered to reads: a parent's `git push*` grant (say) copies too, so the worker
+gets no more than the parent but may be able to mutate - the manager commits, and it
+keeps its grants. The seed list is deliberately read-only by review, not by
+construction: `git branch*`/`git remote*` are narrowed to their read subcommands
+(`git branch -D`, `git remote set-url` and friends mutate), `git fetch*`/`git pull*`
+are not seeded (pull merges, fetch deletes refs, and a linked worktree shares refs and
+objects with the main checkout), and residual caveats (`git grep -O<pager>`,
+`git diff/log --output=<file>`) are accepted under a mistakes-only threat model. This
+is a change to the "only user actions create grants" rule, by decision: the daemon
+seeds at spawn, no agent tool grants anything. Seeding never throws - a failure is
+logged and means more prompting, never less.

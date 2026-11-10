@@ -21,7 +21,7 @@ export interface Grant {
   createdAt: number;
   /** Epoch ms; null = until revoked or the session is deleted. */
   expiresAt: number | null;
-  source: "dialog" | "command" | "spawn" | "inherit";
+  source: "dialog" | "command" | "spawn";
   note?: string;
 }
 
@@ -44,7 +44,7 @@ export interface NewGrant {
   pattern: string;
   /** Lifetime in ms; null or undefined = until revoked. */
   expiresIn?: number | null;
-  source?: "dialog" | "command" | "spawn" | "inherit";
+  source?: "dialog" | "command" | "spawn";
   note?: string;
 }
 
@@ -332,7 +332,7 @@ function isGrant(v: unknown): v is Grant {
     typeof g.pattern === "string" &&
     typeof g.createdAt === "number" &&
     (g.expiresAt === null || typeof g.expiresAt === "number") &&
-    (g.source === "dialog" || g.source === "command" || g.source === "spawn" || g.source === "inherit") &&
+    (g.source === "dialog" || g.source === "command" || g.source === "spawn") &&
     !isCappedSurface(g.surface)
   );
 }
