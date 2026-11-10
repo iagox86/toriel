@@ -59,7 +59,7 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: "truecolor", level: "feature", title: "the terminal shows toriel's theme as intended (truecolor)" },
   { id: "grants-path-rule", level: "hardening", title: "an agent cannot edit the permission grants file unasked (a path rule)", needsPermissionPackage: true },
   { id: "permission-package-scope-patch", level: "hardening", title: "the installed pi-permission-system carries the toriel scope patch (a trusted project config cannot override a scope root)", needsPermissionPackage: true },
-  { id: "scope-guard-short-circuit", level: "hardening", title: 'no config allow short-circuits the scope guard for directory-scoped sessions (path, path_write, external_directory, write, edit, the "*" fallback)', needsPermissionPackage: true },
+  { id: "scope-guard-short-circuit", level: "hardening", title: 'no config allow short-circuits the scope guard for directory-scoped sessions (external_directory_write, the bare external_directory, the "*" fallback)', needsPermissionPackage: true },
 ];
 
 const LEVELS: ReadonlyArray<{ level: Level; heading: string }> = [
