@@ -33,6 +33,7 @@ describe("doctor checks", () => {
       setup({ gitMcp: "none" }).opts,
       setup({ gdbMcp: "none", ghidraMcp: "codemode" }).opts,
       setup({ config: { authorizerChain: ["toriel-grants"], permission: { "*": "allow", path: { "*": "allow", [GRANTS_RULE]: "ask" } } } }).opts,
+      setup({ scopePatch: "absent" }).opts,
     ];
     const seen = new Set<string>();
     for (const opts of scenarios) {
@@ -44,6 +45,16 @@ describe("doctor checks", () => {
     assert.equal(new Set(catalog).size, catalog.length, "catalog ids are unique");
     assert.deepEqual([...seen].filter((id) => !catalog.includes(id)), [], "a finding id is missing from the catalog (src/doctor.ts)");
     assert.deepEqual(catalog.filter((id) => !seen.has(id)), [], "a catalog entry nothing can report any more");
+  });
+
+  it("flags an installed package that lacks the scope patch, and stays quiet when the marker is there", () => {
+    const absent = runDoctor(setup({ scopePatch: "absent" }).opts);
+    const hit = absent.filter((c) => c.id === "permission-package-scope-patch");
+    assert.deepEqual(hit.map((c) => [c.id, c.level]), [["permission-package-scope-patch", "hardening"]]);
+    assert.match(hit[0]?.findings[0]?.message ?? '', /lacks the toriel scope patch[\s\S]*pi\/patches\/scope-config-patch\.md/);
+    assert.equal(exitCode(absent), 0);
+    const present = runDoctor(setup({ scopePatch: "present" }).opts);
+    assert.deepEqual(present.filter((c) => c.state === "problem").map((c) => c.id), [], "the marker satisfies the check");
   });
 
   it("grades what it finds, and exits 1 only for a required problem", () => {
@@ -90,7 +101,7 @@ describe("doctor checks", () => {
 
   it("skips the checks that need the permission package when it is not there, and says so", () => {
     const checks = runDoctor(setup({ noPackage: true }).opts);
-    assert.deepEqual(checks.filter((c) => c.state === "skipped").map((c) => c.id), ["grants-chain", "grants-path-rule", "scope-guard-short-circuit"]);
+    assert.deepEqual(checks.filter((c) => c.state === "skipped").map((c) => c.id), ["grants-chain", "grants-path-rule", "permission-package-scope-patch", "scope-guard-short-circuit"]);
     assert.match(renderDoctor(checks), /skipped {2}permission grants are switched on[\s\S]*needs pi-permission-system/);
   });
 
