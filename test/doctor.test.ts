@@ -148,7 +148,10 @@ describe("doctor checks", () => {
     const [gdb] = grade("mcp-gdb-direct", { gdbMcp: "codemode" });
     assert.equal(gdb?.level, "feature");
     assert.match(gdb?.message ?? "", /crash-analysis and debug agents need an MCP server named "gdb".*"exposure": "direct"/);
-    assert.match(grade("mcp-ghidra-direct", { ghidraMcp: "none" })[0]?.message ?? "", /binary-diff, re-explain, re-find and re-trace agents need an MCP server named "ghidra".*MCP server "ghidra" is not configured/);
+    assert.match(gdb?.fix?.summary ?? "", /set "exposure": "direct" on the "gdb" entry/, "the entry exists, only its exposure is wrong: fixable");
+    const [missing] = grade("mcp-ghidra-direct", { ghidraMcp: "none" });
+    assert.match(missing?.message ?? "", /binary-diff, re-explain, re-find and re-trace agents need an MCP server named "ghidra".*MCP server "ghidra" is not configured/);
+    assert.equal(missing?.fix, undefined, "a missing entry needs the user's own command and args: no automatic fix");
     assert.deepEqual(grade("mcp-git-direct", { gdbMcp: "codemode", ghidraMcp: "none" }), [], "one server's problem is not another's");
   });
 
@@ -249,6 +252,24 @@ describe("doctor fixes", () => {
     assert.throws(() => previewFixes(s.config, [{ file: s.config, summary: "x", edit: (c) => c }]), /not a JSON object/);
     assert.equal(fs.readFileSync(s.config, "utf8"), "[]");
     assert.deepEqual(fs.readdirSync(path.dirname(s.config)), ["config.json"], "no backup for a failed fix");
+  });
+
+  it("sets \"exposure\": \"direct\" on a mis-exposed mcp.json entry, leaving its siblings alone", () => {
+    const s = setup({ gdbMcp: "codemode" });
+    const mcp = path.join(s.agentDir, "mcp.json");
+    const original = fs.readFileSync(mcp, "utf8");
+    const [group] = plannedFixes(runDoctor(s.opts));
+    assert.equal(group?.file, mcp);
+    assert.equal(group?.fixes.length, 1);
+    const diff = previewFixes(mcp, group?.fixes ?? []);
+    assert.match(diff, /\+ {7}"exposure": "direct"/);
+    assert.match(diff, /- {7}"exposure": "codemode"/);
+    assert.equal(fs.readFileSync(mcp, "utf8"), original, "previewing writes nothing");
+    applyFixes(mcp, group?.fixes ?? []);
+    const now = JSON.parse(fs.readFileSync(mcp, "utf8"));
+    assert.deepEqual(now.mcpServers.gdb, { command: "node", args: ["x"], exposure: "direct" });
+    assert.deepEqual(now.mcpServers.git, { command: "node", args: ["x"], exposure: "direct" }, "the healthy sibling is untouched");
+    assert.deepEqual(collectFindings(s.opts), [], "and the setup is healthy again");
   });
 
   it("offers no fix for the package, the files or the settings: those need a person", () => {
