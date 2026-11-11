@@ -1,0 +1,15 @@
+PASS  B1 write inside W works
+PASS  B2 write outside W is denied (read-only fs)
+PASS  B3 write through W/node_modules -> M denied unless M bound
+PASS  B4 with M bound rw, the node_modules write works
+PASS  B5 git status in the worktree (read) works with .git read-only (ro root)
+PASS  B6 git commit in the worktree FAILS when the common dir is read-only
+PASS  B7 git commit works with ONLY objects/, the worktree gitdir, refs/heads and logs/ writable
+PASS  B8 ...and the shared hooks/ dir stays unwritable (no planted hook)
+PASS  B9 ...and the shared config stays unwritable (no core.fsmonitor / aliases planted)
+PASS  B10 TRAP: binding the whole common dir rw lets a hook be planted (host-side escape)
+PASS  B11 an approved extra path is writable on the NEXT command with no restart of anything
+PASS  B12 --unshare-net blocks the network for the command
+
+12 passed, 0 failed
+tmp: /home/ron/.claude/jobs/fd476edc/tmp/bw-probe-QHaSkI
