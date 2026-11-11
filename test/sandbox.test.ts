@@ -2,7 +2,8 @@
 // thing: confinement, the node_modules symlink, git in a linked worktree, and the host-side escapes
 // (planted hooks/config, rewritten git pointer files) that must stay closed.
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import net from "node:net";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -42,7 +43,7 @@ function repoWithWorktree() {
   return { base, repo, wt, common: join(repo, ".git"), gitdir: join(repo, ".git", "worktrees", "feat") };
 }
 
-const cfgFor = (root: string, extra: { shared?: string; staticRw?: string[] } = {}) => ({ kind: "bwrap" as const, root, shared: extra.shared, staticRw: extra.staticRw ?? [] });
+const cfgFor = (root: string, extra: { shared?: string; staticRw?: string[]; sock?: string } = {}) => ({ kind: "bwrap" as const, root, shared: extra.shared, staticRw: extra.staticRw ?? [], sock: extra.sock });
 
 describe("readSandbox", () => {
   it("is off when TORIEL_SANDBOX is absent", () => {
@@ -75,7 +76,8 @@ describe("readSandbox", () => {
   it("reads the root, the shared directory and the static roots", () => {
     const root = mk();
     const r = readSandbox({ [SANDBOX_ENV]: "bwrap", TORIEL_SCOPE_ROOT: root, [SHARED_DIR_ENV]: "/s", [SANDBOX_RW_ENV]: ["/a", "rel", "/b"].join(delimiter) });
-    assert.deepEqual(r, { kind: "bwrap", root, shared: "/s", staticRw: ["/a", "/b"] });
+    assert.deepEqual(r, { kind: "bwrap", root, shared: "/s", staticRw: ["/a", "/b"], sock: undefined });
+    assert.equal((readSandbox({ [SANDBOX_ENV]: "bwrap", TORIEL_SCOPE_ROOT: root, TORIEL_SOCK: "/run/user/1/toriel.sock" }) as { sock?: string }).sock, "/run/user/1/toriel.sock");
   });
 });
 
@@ -124,8 +126,20 @@ describe("derivePolicy", () => {
 
 describe("bwrapArgs and makeWrap", () => {
   it("binds writable areas before the read-only carve-outs, with a private /tmp", () => {
-    const args = bwrapArgs({ writable: ["/w", "/x"], readOnly: ["/w/.git"] }, "/w");
-    assert.deepEqual(args, ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "--die-with-parent", "--bind", "/w", "/w", "--bind", "/x", "/x", "--ro-bind-try", "/w/.git", "/w/.git", "--chdir", "/w"]);
+    const args = bwrapArgs({ writable: ["/w", "/x"], readOnly: ["/w/.git"], masked: ["/run/user"], hidden: ["/s/toriel.sock"] }, "/w");
+    assert.deepEqual(args, ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "--die-with-parent", "--tmpfs", "/run/user", "--bind", "/w", "/w", "--bind", "/x", "/x", "--ro-bind-try", "/w/.git", "/w/.git", "--ro-bind", "/dev/null", "/s/toriel.sock", "--chdir", "/w"]);
+  });
+
+  it("masks the socket directories that exist and hides the daemon's socket unless it is already masked", () => {
+    const root = mk();
+    const sockDir = mk();
+    const sock = join(sockDir, "toriel.sock");
+    writeFileSync(sock, "");
+    const p = derivePolicy({ ...cfgFor(root), sock });
+    assert.deepEqual(p.hidden, [sock]);
+    assert.deepEqual(p.masked, ["/run/user", "/run/dbus"].filter((d) => existsSync(d)));
+    assert.deepEqual(derivePolicy({ ...cfgFor(root), sock: join(sockDir, "missing.sock") }).hidden, [], "no socket, nothing to hide");
+    assert.deepEqual(derivePolicy({ ...cfgFor(root), sock: "/run/user/1000/toriel.sock" }).hidden, [], "inside a masked directory it is gone already");
   });
 
   it("is undefined when off, and refuses every command when invalid", () => {
@@ -232,6 +246,35 @@ describe("real bwrap", { skip: bwrapUsable ? false : "bwrap is not usable here" 
     assert.ok(run(cfgFor(root, { shared }), `echo hi > ${shared}/note && echo t > /tmp/toriel-sandbox-private-probe`, root).ok);
     assert.ok(existsSync(join(shared, "note")));
     assert.ok(!existsSync("/tmp/toriel-sandbox-private-probe"), "a /tmp write never reaches the real /tmp");
+  });
+
+  it("cannot connect to the daemon's own socket, though the same connection works outside", async () => {
+    const root = mk();
+    const sockDir = mk();
+    const sock = join(sockDir, "toriel.sock");
+    const server = net.createServer((c) => c.end("hello"));
+    await new Promise<void>((resolve) => server.listen(sock, resolve));
+    try {
+      const probe = `const s = require("node:net").connect(${JSON.stringify(sock)}); s.on("data", () => process.exit(0)); s.on("error", () => process.exit(3)); setTimeout(() => process.exit(4), 3000);`;
+      const connect = (cfg: ReturnType<typeof cfgFor>) => {
+        const w = makeWrap(cfg);
+        assert.ok(w);
+        const s = w(`${JSON.stringify(process.execPath)} -e '${probe}'`, root);
+        return new Promise<number | null>((resolve) => {
+          const child = spawn(s.file, s.args);
+          child.on("close", (code) => resolve(code));
+        });
+      };
+      const unrestricted = await new Promise<number | null>((resolve) => {
+        const child = spawn(process.execPath, ["-e", probe]);
+        child.on("close", (code) => resolve(code));
+      });
+      assert.equal(unrestricted, 0, "control: the socket answers outside the sandbox");
+      assert.equal(await connect({ ...cfgFor(root), sock }), 3, "inside the sandbox the connection is refused");
+      assert.equal(await connect(cfgFor(root)), 0, "control: without the hidden bind the sandbox alone does not stop a connection (the reason it is there)");
+    } finally {
+      server.close();
+    }
   });
 
   it("applies an approved path on the next command", () => {

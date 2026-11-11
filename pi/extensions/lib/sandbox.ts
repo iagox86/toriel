@@ -21,7 +21,7 @@ export const SANDBOX_RW_ENV = "TORIEL_SANDBOX_RW";
 
 export type SandboxConfig =
   | { kind: "off" }
-  | { kind: "bwrap"; root: string; shared?: string; staticRw: string[] }
+  | { kind: "bwrap"; root: string; shared?: string; staticRw: string[]; sock?: string }
   | { kind: "invalid"; why: string };
 
 type FsApi = {
@@ -62,11 +62,13 @@ export function readSandbox(env: Record<string, string | undefined>, fsApi: Pick
   }
   const shared = env[SHARED_DIR_ENV];
   const rw = env[SANDBOX_RW_ENV];
+  const sock = env.TORIEL_SOCK;
   return {
     kind: "bwrap",
     root: scope.root,
     shared: shared !== undefined && path.isAbsolute(shared) ? shared : undefined,
     staticRw: rw ? rw.split(path.delimiter).filter((p) => path.isAbsolute(p)) : [],
+    sock: sock !== undefined && path.isAbsolute(sock) ? sock : undefined,
   };
 }
 
@@ -76,7 +78,22 @@ export interface SandboxPolicy {
   writable: string[];
   /** Bound read-only AFTER the writable binds, to carve exceptions out of them (a missing path is skipped). */
   readOnly: string[];
+  /** Directories replaced by an empty tmpfs: the places live unix sockets sit (see `MASKED_DIRS`). */
+  masked: string[];
+  /** Socket files replaced by /dev/null, so connecting fails (the daemon's own socket, wherever it is). */
+  hidden: string[];
 }
+
+/**
+ * Where live unix sockets are on a typical Linux desktop: the per-user runtime directory (the
+ * session D-Bus, the toriel daemon's own socket, wayland, pipewire, ...) and the system D-Bus. A
+ * read-only bind does NOT stop a command connecting to a socket there, and a connection is as good
+ * as a write: through D-Bus a command can start anything outside the sandbox, and through the
+ * daemon socket it can talk to toriel itself. Network namespaces do not help (these are
+ * filesystem sockets). Abstract-namespace sockets (X11, D-Bus) are only hidden by cutting the
+ * network namespace, which this sandbox does not do yet.
+ */
+export const MASKED_DIRS: readonly string[] = ["/run/user", "/run/dbus"];
 
 function isDir(fsApi: FsApi, p: string): boolean {
   try {
@@ -109,8 +126,8 @@ function realOrUndefined(fsApi: FsApi, p: string): string | undefined {
  * Anything it cannot work out yields no git paths (git then fails read-only inside the sandbox:
  * more refusing, never less).
  */
-export function gitPolicy(root: string, fsApi: FsApi = defaultFs): SandboxPolicy {
-  const none: SandboxPolicy = { writable: [], readOnly: [] };
+export function gitPolicy(root: string, fsApi: FsApi = defaultFs): Pick<SandboxPolicy, "writable" | "readOnly"> {
+  const none: Pick<SandboxPolicy, "writable" | "readOnly"> = { writable: [], readOnly: [] };
   try {
     const dotGit = path.join(root, ".git");
     const st = fsApi.lstatSync(dotGit);
@@ -178,23 +195,33 @@ export function derivePolicy(cfg: Extract<SandboxConfig, { kind: "bwrap" }>, ext
       writable.push(real);
     }
   }
-  return { writable: [...new Set(writable)], readOnly: [...new Set(readOnly)] };
+  const masked = MASKED_DIRS.filter((d) => isDir(fsApi, d));
+  // the daemon's own socket, wherever it is; a socket inside a masked directory is already gone
+  const hidden = cfg.sock !== undefined && fsApi.existsSync(cfg.sock) && !masked.some((d) => cfg.sock === d || cfg.sock?.startsWith(`${d}/`)) ? [cfg.sock] : [];
+  return { writable: [...new Set(writable)], readOnly: [...new Set(readOnly)], masked, hidden };
 }
 
 /**
  * The bwrap arguments (before the command) for a policy: read-only view of the whole filesystem, a
  * private /dev, /proc and /tmp (the real /tmp holds live sockets such as tmux and X11, which would
- * be a way out - board 190), the writable areas, then the read-only carve-outs on top. No
+ * be a way out - board 190), empty tmpfs over the socket directories (`MASKED_DIRS`), the writable
+ * areas, the read-only carve-outs on top, and /dev/null over the daemon's socket. No
  * --new-session or --unshare-pid: toriel kills a command through its process group and neither was
  * probed. `--die-with-parent` ends the command if the daemon-owned child goes away.
  */
 export function bwrapArgs(policy: SandboxPolicy, cwd: string): string[] {
   const args = ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "--die-with-parent"];
+  for (const p of policy.masked) {
+    args.push("--tmpfs", p);
+  }
   for (const p of policy.writable) {
     args.push("--bind", p, p);
   }
   for (const p of policy.readOnly) {
     args.push("--ro-bind-try", p, p);
+  }
+  for (const p of policy.hidden) {
+    args.push("--ro-bind", "/dev/null", p);
   }
   args.push("--chdir", cwd);
   return args;
