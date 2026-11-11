@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { makeWrap, readSandbox } from "../pi/extensions/lib/sandbox.ts";
 import extension, { describeJob, endNotice, formatDuration, type Job, JobRegistry, jobEnv, shellEnv } from "../pi/extensions/toriel-jobs.ts";
 
 const until = async (cond: () => boolean, ms = 5000): Promise<void> => {
@@ -230,6 +232,116 @@ describe("foreground commands", () => {
     await pending;
     await until(() => ended.length === 1);
     assert.equal(ended[0]?.state, "timed out");
+  });
+});
+
+describe("the sandbox wrapper (board 190)", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "toriel-wrap-test-"));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const collect = () => {
+    const chunks: string[] = [];
+    return { onData: (c: Buffer) => chunks.push(c.toString()), text: () => chunks.join("") };
+  };
+
+  it("spawns what the wrapper says, for a foreground command and a background job", async () => {
+    const seen: string[] = [];
+    const jobs = new JobRegistry({
+      dir,
+      onEnd: () => {},
+      wrap: (command, cwd) => {
+        seen.push(`${command}@${cwd}`);
+        return { file: "bash", args: ["-c", `echo wrapped; ${command}`] };
+      },
+    });
+    const out = collect();
+    assert.deepEqual(await jobs.runForeground("echo inner", dir, process.env, { onData: out.onData }), { exitCode: 0 });
+    assert.match(out.text(), /wrapped\ninner/);
+    const job = jobs.start("echo bg", dir);
+    await until(() => jobs.get(job.id)?.state === "exited");
+    assert.match(jobs.output(job.id, 0, 1000)?.text ?? "", /wrapped\nbg/);
+    assert.deepEqual(seen, [`echo inner@${dir}`, `echo bg@${dir}`]);
+  });
+
+  it("refuses the command when the wrapper throws: nothing runs, no log file or job is left behind", async () => {
+    const jobs = new JobRegistry({
+      dir,
+      onEnd: () => {},
+      wrap: () => {
+        throw new Error("sandbox: refused");
+      },
+    });
+    await assert.rejects(jobs.runForeground(`touch ${join(dir, "ran")}`, dir, process.env, { onData: () => {} }), /sandbox: refused/);
+    assert.throws(() => jobs.start("true", dir), /sandbox: refused/);
+    assert.equal(jobs.list().length, 0);
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(existsSync(join(dir, "ran")), false);
+  });
+
+  it("says the command was not run when the sandbox program cannot start", async () => {
+    const jobs = new JobRegistry({ dir, onEnd: () => {}, wrap: () => ({ file: "definitely-not-a-real-bwrap", args: [] }) });
+    await assert.rejects(jobs.runForeground("true", dir, process.env, { onData: () => {} }), /sandbox: could not start definitely-not-a-real-bwrap .*the command was not run/);
+  });
+});
+
+const bwrapWorks = spawnSync("bwrap", ["--ro-bind", "/", "/", "true"], { stdio: "ignore" }).status === 0;
+
+describe("the registry with the real sandbox (board 190)", { skip: bwrapWorks ? false : "bwrap is not usable here" }, () => {
+  let root: string;
+  let outside: string;
+  beforeEach(() => {
+    // not under /tmp: the sandbox hides it
+    root = realpathSync(mkdtempSync(join("/var/tmp", "toriel-realwrap-")));
+    outside = realpathSync(mkdtempSync(join("/var/tmp", "toriel-realwrap-out-")));
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  });
+  const registry = () => {
+    const cfg = readSandbox({ TORIEL_SANDBOX: "bwrap", TORIEL_SCOPE_ROOT: root });
+    assert.equal(cfg.kind, "bwrap");
+    return new JobRegistry({ dir: root, onEnd: () => {}, wrap: makeWrap(cfg) });
+  };
+
+  it("runs a command that writes inside the root and refuses one that writes outside it", async () => {
+    const jobs = registry();
+    const out = { text: "" };
+    const onData = (c: Buffer) => {
+      out.text += c.toString();
+    };
+    assert.deepEqual(await jobs.runForeground(`echo ok > ${root}/in && echo ok > ${outside}/out`, root, process.env, { onData }), { exitCode: 1 });
+    assert.equal(existsSync(join(root, "in")), true);
+    assert.equal(existsSync(join(outside, "out")), false);
+    assert.match(out.text, /Read-only file system/);
+  });
+
+  it("is still killed on timeout and on abort: the process group reaches the sandboxed command", async () => {
+    const jobs = registry();
+    await assert.rejects(jobs.runForeground("sleep 31.337", root, process.env, { onData: () => {}, timeout: 0.3 }), /timeout:0\.3/);
+    const ac = new AbortController();
+    const pending = jobs.runForeground("sleep 31.338", root, process.env, { onData: () => {}, signal: ac.signal });
+    await new Promise((r) => setTimeout(r, 300));
+    ac.abort();
+    await assert.rejects(pending, /aborted/);
+    await new Promise((r) => setTimeout(r, 300));
+    for (const marker of ["sleep 31.337", "sleep 31.338"]) {
+      assert.equal(spawnSync("pgrep", ["-f", marker]).status, 1, `no "${marker}" process is left running`);
+    }
+  });
+
+  it("stops a sandboxed background job on request", async () => {
+    const jobs = registry();
+    const job = jobs.start("sleep 31.339", root);
+    await new Promise((r) => setTimeout(r, 300));
+    jobs.stop(job.id);
+    await until(() => jobs.get(job.id)?.state !== "running");
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(spawnSync("pgrep", ["-f", "sleep 31.339"]).status, 1, "the sandboxed sleep is gone");
   });
 });
 

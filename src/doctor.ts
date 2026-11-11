@@ -8,6 +8,7 @@
 // audit in resources.ts), a test, and a line in docs/reference.md "Doctor". When a requirement
 // changes or goes away, change or remove its check. test/doctor.test.ts fails when a finding
 // carries an id the catalog does not list.
+import { spawnSync } from "node:child_process";
 import { accessSync, constants, copyFileSync, existsSync, readFileSync, statSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { mcpWarnings, mergeMcpServers, loadAgents } from "./agents.ts";
@@ -54,6 +55,7 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: "web-package", level: "feature", title: "pi-web-access is installed (the research-web and advisory-diff agents need its web tools)" },
   { id: "mcp-gdb-direct", level: "feature", title: 'the gdb MCP server is configured with "exposure": "direct" (the debug and crash-analysis agents need it)' },
   { id: "mcp-ghidra-direct", level: "feature", title: 'the ghidra MCP server is configured with "exposure": "direct" (the re-explain, re-find, re-trace and binary-diff agents need it)' },
+  { id: "sandbox-bwrap", level: "feature", title: 'bubblewrap works (needed only when the "sandbox" setting is "bwrap": scoped sessions run each bash command sandboxed)' },
   { id: "sleep-lock", level: "feature", title: "the machine is kept awake for scheduled runs (systemd-inhibit)" },
   { id: "clipboard", level: "feature", title: "clipboard tools for paste and copy (wl-clipboard on Wayland, xclip on X11)" },
   { id: "truecolor", level: "feature", title: "the terminal shows toriel's theme as intended (truecolor)" },
@@ -85,6 +87,23 @@ export interface DoctorOptions extends AuditOptions {
   startup?: readonly string[];
   /** Whether the report goes to a real terminal; the terminal checks only run then (the CLI passes stdout.isTTY). */
   tty?: boolean;
+  /** Runs bwrap once and says why it cannot, or undefined when it works (default: really runs it; tests inject). */
+  probeBwrap?: () => string | undefined;
+}
+
+/**
+ * Run bubblewrap once. `which bwrap` is not enough: it also needs unprivileged user namespaces,
+ * which some systems disable, and then every sandboxed command would fail.
+ */
+export function probeBwrap(): string | undefined {
+  const r = spawnSync("bwrap", ["--ro-bind", "/", "/", "true"], { encoding: "utf8", timeout: 5000 });
+  if (r.error !== undefined) {
+    return (r.error as NodeJS.ErrnoException).code === "ENOENT" ? "bwrap is not installed (the bubblewrap package)" : `bwrap could not run: ${r.error.message}`;
+  }
+  if (r.status !== 0) {
+    return `bwrap runs but cannot start a sandbox (${(r.stderr ?? "").trim().split("\n")[0] || `exit ${r.status}`}); unprivileged user namespaces may be disabled`;
+  }
+  return undefined;
 }
 
 function onPath(name: string, dirs: readonly string[]): boolean {
@@ -182,6 +201,13 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
       level: "feature",
       message: `the ${nameList(webAgents.map((a) => a.name))} ${webAgents.length > 1 ? "agents need" : "agent needs"} ${WEB_PACKAGE} in the packages of ${join(opts.agentDir ?? piAgentDir(env), "settings.json")} (pi install npm:${WEB_PACKAGE}) and a search provider set up for it; without it the agent has no web tools`,
     });
+  }
+  // the per-command sandbox (board 190) refuses to run a command rather than run it unsandboxed, so a setting that asks for bwrap without a working bwrap would stop every scoped session's bash
+  if (loaded.settings.sandbox === "bwrap") {
+    const why = (opts.probeBwrap ?? probeBwrap)();
+    if (why !== undefined) {
+      out.push({ id: "sandbox-bwrap", level: "feature", message: `the toriel setting "sandbox" is "bwrap" but ${why}; scoped sessions would refuse every bash command (install bubblewrap and enable user namespaces, or set "sandbox": "off")` });
+    }
   }
   const dirs = opts.pathDirs ?? (env.PATH ?? "").split(delimiter).filter(Boolean);
   if ((opts.platform ?? process.platform) === "linux" && loaded.settings.preventSleep !== false && !onPath("systemd-inhibit", dirs)) {

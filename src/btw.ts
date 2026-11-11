@@ -88,6 +88,9 @@ function run(args: string[], opts: { cwd?: string; timeoutMs?: number }): Promis
     // a daemon started inside a scoped session must not leak its scope into these side children
     delete childEnvVars.TORIEL_SCOPE_ROOT;
     delete childEnvVars.TORIEL_SCOPE_MODE;
+    delete childEnvVars.TORIEL_SANDBOX;
+    delete childEnvVars.TORIEL_SANDBOX_RW;
+    delete childEnvVars.TORIEL_SHARED_DIR;
     const child = spawn(process.execPath, args, {
       cwd: opts.cwd && fs.existsSync(opts.cwd) ? opts.cwd : os.tmpdir(),
       env: childEnvVars,

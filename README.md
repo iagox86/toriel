@@ -126,8 +126,19 @@ pi processes toriel did not start); continuing one in toriel forks it.
 ## Settings
 
 `~/.config/toriel/settings.json` (all keys optional): `steeringMode`, `provider`,
-`model`, `thinking`, `piCli`, `warnNoPermissionSystem`, `scopeGuardAcceptedAllows`. Environment variables (`TORIEL_*`) override it.
+`model`, `thinking`, `piCli`, `warnNoPermissionSystem`, `scopeGuardAcceptedAllows`, `sandbox`, `sandboxWritable`. Environment variables (`TORIEL_*`) override it.
 Full list and semantics: [docs/reference.md](docs/reference.md).
+
+### Sandboxing agent commands (optional)
+
+`"sandbox": "bwrap"` runs every bash command of a directory-scoped session (any agent-profile
+session) in a [bubblewrap](https://github.com/containers/bubblewrap) sandbox: the filesystem is
+read-only except the session's working directory, a few cache directories and the shared
+directory `~/.local/share/toriel/shared`, so a program an agent runs cannot write elsewhere
+even where the permission system would have let the write through. It needs `bwrap` installed
+and working (`toriel doctor` runs it once to check). It is off by default and applies to
+sessions started after you set it. Details and limits: "Command sandbox" in
+[docs/reference.md](docs/reference.md).
 
 ## Upgrading from ronpi
 

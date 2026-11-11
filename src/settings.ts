@@ -40,7 +40,14 @@ export interface TorielSettings {
   scopeGuardAcceptedAllows?: Array<{ surface: string; pattern: string }>;
   /** Warn when pi-permission-system is not installed or has no usable config (default true). */
   warnNoPermissionSystem?: boolean;
+  /** "bwrap" runs each bash command of a directory-scoped session in a bubblewrap sandbox whose only writable places are the scope root and a few others (default "off"; read when a session starts). */
+  sandbox?: "off" | "bwrap";
+  /** Extra places a sandboxed command may write, absolute or ~/ paths, mainly package caches (default ~/.npm and ~/.cache; [] = none). */
+  sandboxWritable?: string[];
 }
+
+/** The caches sandboxed commands may write when the settings do not say. */
+export const DEFAULT_SANDBOX_WRITABLE: readonly string[] = ["~/.npm", "~/.cache"];
 
 export interface LoadedSettings {
   settings: TorielSettings;
@@ -119,6 +126,18 @@ export function loadSettings(file: string = settingsFile()): LoadedSettings {
         settings.permissionGrantDurations = value as string[];
       } else {
         problems.push(`permissionGrantDurations must be a list of at most 5 durations such as ["1h", "8h", "session"]`);
+      }
+    } else if (key === "sandbox") {
+      if (value === "off" || value === "bwrap") {
+        settings.sandbox = value;
+      } else {
+        problems.push(`sandbox must be "off" or "bwrap"`);
+      }
+    } else if (key === "sandboxWritable") {
+      if (Array.isArray(value) && value.length <= 20 && value.every((p) => typeof p === "string" && (p.startsWith("/") || p.startsWith("~/")) && p.length > 2)) {
+        settings.sandboxWritable = value as string[];
+      } else {
+        problems.push(`sandboxWritable must be a list of at most 20 absolute or ~/ paths such as ["~/.npm", "~/.cache"]`);
       }
     } else if (key === "scopeGuardAcceptedAllows") {
       if (validAcceptedAllows(value)) {
