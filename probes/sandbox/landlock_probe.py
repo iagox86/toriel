@@ -8,6 +8,7 @@ Run: python3 -I landlock_probe.py
 import ctypes
 import errno
 import os
+import shutil
 import struct
 import sys
 import tempfile
@@ -217,6 +218,7 @@ def main():
 
     bad = [n for n, ok in results if not ok]
     print(f"\n{len(results) - len(bad)}/{len(results)} expectations held")
+    shutil.rmtree(base, ignore_errors=True)
     sys.exit(1 if bad else 0)
 
 

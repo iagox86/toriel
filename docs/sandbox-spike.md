@@ -1,11 +1,13 @@
 # 148-T6 findings: sandbox spike (landlock vs bwrap)
 
 2026-11-10, host Linux 7.1.4-204.fc44, landlock ABI 9 (`/sys/kernel/security/lsm` has it), bwrap 0.11.0
-unprivileged, python 3.14, **no C compiler**. Probes: `probes/landlock_probe.py` (10 expectations,
-ctypes on the raw syscalls) and `probes/bwrap_probe.sh` (12 expectations, throwaway repo + linked
-worktree). Captured output beside each (`*.out`). Both ran green; two bwrap checks failed on the
-first run because my test tree sat under `/tmp`, which the jail masks - fixed in the script and
-noted there.
+unprivileged, python 3.14, **no C compiler**. Probes: `probes/sandbox/landlock_probe.py` (10 expectations,
+ctypes on the raw syscalls; run `python3 -I probes/sandbox/landlock_probe.py`) and
+`probes/sandbox/bwrap_probe.sh` (12 expectations, throwaway repo + linked worktree; run
+`bash probes/sandbox/bwrap_probe.sh`). Both ran green and are kept so the findings can be re-checked
+after a kernel or bwrap update; neither touches toriel. Two bwrap checks failed on the first run
+because my test tree sat under `/tmp`, which the jail masks - fixed in the script and noted there.
+Caveat: B12 (network cut) would also pass on a host with no network; it is not a control test.
 
 ## Headline
 
@@ -79,10 +81,12 @@ bwrap (`--ro-bind / /` + `--bind W W`, per command):
 
 ## Open design decisions this surfaces
 
-1. **/tmp.** A private tmpfs per command (`--tmpfs /tmp`, used in the probe) breaks anything that
-   passes files through /tmp between commands, e.g. the `/tmp/permissions.review.md` flow. Options:
-   bind the real /tmp read-write as a static root (simple, but a shared writable area), or a
-   per-session scratch dir bound at /tmp. Needs your call.
+1. **/tmp - DECIDED (Ron, 2026-11-10).** A private tmpfs `/tmp` per command (as in the probe)
+   breaks anything that passes files through /tmp between commands, e.g. the
+   `/tmp/permissions.review.md` flow. Decision: keep `/tmp` private and bind one dedicated shared
+   directory, `~/.local/share/toriel/shared`, read-write at the same path. The real /tmp was
+   rejected: on the dev machine it holds live unix sockets (tmux, X11, ICE, Chrome, the login
+   manager) that a sandboxed command could connect to, acting outside the sandbox.
 2. **Static roots list**: `/dev/null`, `/dev/tty`, tmp, the package caches
    (`~/.npm`, `~/.cache`), and the shared node_modules target. Concrete list belongs in the
    implementation ticket, found by running real agent workloads under the wrapper.

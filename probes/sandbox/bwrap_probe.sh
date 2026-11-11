@@ -51,5 +51,6 @@ check "B11 an approved extra path is writable on the NEXT command with no restar
 # 4: network is separable
 check "B12 --unshare-net blocks the network for the command" 0 jail --unshare-net bash -c "exec 3<>/dev/tcp/1.1.1.1/53"
 
-echo; echo "$pass passed, $fail failed"; echo "tmp: $T"
+echo; echo "$pass passed, $fail failed"
+rm -rf "$T"
 [ $fail -eq 0 ]
