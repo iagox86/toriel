@@ -55,6 +55,14 @@ describe("loadSettings", () => {
     const grants = loadSettings(tmp('{"permissionGrantLimit":20,"permissionGrantDurations":["30m","1h","session"]}'));
     assert.deepEqual([grants.settings.permissionGrantLimit, grants.settings.permissionGrantDurations, grants.problems], [20, ["30m", "1h", "session"], []]);
     assert.deepEqual(loadSettings(tmp('{"permissionGrantDurations":[]}')).settings.permissionGrantDurations, []);
+    const sandbox = loadSettings(tmp('{"sandbox":"bwrap","sandboxWritable":["~/.npm","/var/cache/x"]}'));
+    assert.deepEqual([sandbox.settings.sandbox, sandbox.settings.sandboxWritable, sandbox.problems], ["bwrap", ["~/.npm", "/var/cache/x"], []]);
+    assert.deepEqual(loadSettings(tmp('{"sandboxWritable":[]}')).settings.sandboxWritable, []);
+    for (const bad of ['{"sandbox":"yes"}', '{"sandbox":true}', '{"sandboxWritable":["relative"]}', '{"sandboxWritable":["~/"]}', '{"sandboxWritable":"~/x"}']) {
+      const r = loadSettings(tmp(bad));
+      assert.deepEqual([r.settings.sandbox, r.settings.sandboxWritable], [undefined, undefined], bad);
+      assert.equal(r.problems.length, 1, bad);
+    }
     assert.match(loadSettings(tmp('{"permissionGrantLimit":0}')).problems[0] as string, /at least 1/);
     assert.match(loadSettings(tmp('{"permissionGrantDurations":["soon"]}')).problems[0] as string, /list of at most 5 durations/);
     assert.match(loadSettings(tmp('{"permissionGrantDurations":"1h"}')).problems[0] as string, /list of at most 5 durations/);

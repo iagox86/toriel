@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { bangEnv, childEnv } from "../src/child-env.ts";
+import { bangEnv, childEnv, sandboxWritableRoots } from "../src/child-env.ts";
 import { BACKGROUND_COMMAND as DAEMON_COMMAND } from "../src/daemon-handlers-ops.ts";
 import { BACKGROUND_COMMAND as EXTENSION_COMMAND } from "../pi/extensions/toriel-jobs.ts";
 
@@ -56,6 +56,38 @@ describe("the TORIEL_SCOPE_ROOT / TORIEL_SCOPE_MODE seam", () => {
     const env = bangEnv({ sessionId: "abc" }, "/sock", { PATH: "/usr/bin", TORIEL_SCOPE_ROOT: "/leaked", TORIEL_SCOPE_MODE: "ask" }, "/pi/bin");
     assert.equal(env.TORIEL_SCOPE_ROOT, undefined);
     assert.equal(env.TORIEL_SCOPE_MODE, undefined);
+  });
+});
+
+describe("the sandbox and shared-directory variables (board 190)", () => {
+  it("always gives the shared directory, and the sandbox pair only for a scoped child that asks", () => {
+    const plain = childEnv({}, "/sock", {}, undefined, { sharedDir: "/shared" });
+    assert.equal(plain.TORIEL_SHARED_DIR, "/shared");
+    assert.equal(plain.TORIEL_SANDBOX, undefined);
+    const scoped = childEnv({}, "/sock", {}, { root: "/w", mode: "deny" }, { sharedDir: "/shared", sandboxWritable: ["/home/u/.npm", "/home/u/.cache"] });
+    assert.equal(scoped.TORIEL_SANDBOX, "bwrap");
+    assert.equal(scoped.TORIEL_SANDBOX_RW, "/home/u/.npm:/home/u/.cache");
+    assert.equal(childEnv({}, "/sock", {}, { root: "/w", mode: "deny" }, { sharedDir: "/shared" }).TORIEL_SANDBOX, undefined, "no sandbox unless asked");
+  });
+
+  it("never turns the sandbox on without a scope root (it would be invalid and refuse every command)", () => {
+    assert.equal(childEnv({}, "/sock", {}, undefined, { sandboxWritable: ["/x"] }).TORIEL_SANDBOX, undefined);
+  });
+
+  it("drops all three from the base, for the child and for a !command", () => {
+    const leaked = { TORIEL_SANDBOX: "bwrap", TORIEL_SANDBOX_RW: "/x", TORIEL_SHARED_DIR: "/leaked", A: "1" };
+    for (const env of [childEnv({}, "/sock", leaked), bangEnv({}, "/sock", leaked, "/pi/bin")]) {
+      assert.equal(env.TORIEL_SANDBOX, undefined);
+      assert.equal(env.TORIEL_SANDBOX_RW, undefined);
+      assert.equal(env.TORIEL_SHARED_DIR, undefined);
+      assert.equal(env.A, "1");
+    }
+  });
+
+  it("expands ~/ in the writable roots and defaults to the npm and cache directories", () => {
+    assert.deepEqual(sandboxWritableRoots({}, "/home/u"), ["/home/u/.npm", "/home/u/.cache"]);
+    assert.deepEqual(sandboxWritableRoots({ sandboxWritable: ["~/x", "/abs"] }, "/home/u"), ["/home/u/x", "/abs"]);
+    assert.deepEqual(sandboxWritableRoots({ sandboxWritable: [] }, "/home/u"), []);
   });
 });
 

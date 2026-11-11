@@ -1,9 +1,9 @@
 // Starting, stopping and listening to the pi child processes behind sessions.
 import * as fs from "node:fs";
 import { RpcClient } from "@earendil-works/pi-coding-agent";
-import { childEnv } from "./child-env.ts";
+import { childEnv, sandboxWritableRoots } from "./child-env.ts";
 import { scopeForSession } from "./scope-root.ts";
-import { DIALOG_METHODS, SOCK } from "./config.ts";
+import { DIALOG_METHODS, SHARED_DIR, SOCK } from "./config.ts";
 import { withSuggestion } from "./permissions.ts";
 import { type BridgeTracker, INJECT_COMMAND, injectedId, mergedQueueTexts, parseBridgeReport } from "./daemon-bridge.ts";
 import type { ClientHub } from "./daemon-hub.ts";
@@ -112,11 +112,17 @@ export class ChildManager {
     if (scope !== undefined) {
       log(`scope for ${s.sessionId ?? s.id}: ${scope.root} (mode ${scope.mode})`);
     }
+    // the per-command bash sandbox (board 190): only for a scoped session, only when the setting asks; read now, so a change applies to sessions started after it
+    const settings = loadSettings().settings;
+    const sandbox = scope !== undefined && settings.sandbox === "bwrap" ? sandboxWritableRoots(settings, process.env.HOME ?? "") : undefined;
+    if (sandbox !== undefined) {
+      log(`sandbox for ${s.sessionId ?? s.id}: bwrap, writable ${[scope?.root, SHARED_DIR, ...sandbox].join(", ")}`);
+    }
     const client = new RpcClient({
       cliPath: cfg.piCli,
       cwd: s.cwd,
       args,
-      env: { ...childEnv(s, SOCK, process.env, scope), ...this.delegationEnv(s) },
+      env: { ...childEnv(s, SOCK, process.env, scope, { sharedDir: SHARED_DIR, sandboxWritable: sandbox }), ...this.delegationEnv(s) },
     });
     client.onEvent((event) => this.onEvent(s, event as Record<string, unknown>));
     this.launching.add(client);

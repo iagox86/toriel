@@ -146,6 +146,9 @@ export function runSummarizer(opts: SummarizerOptions): Promise<string> {
     // a daemon started inside a scoped session must not leak its scope into these side children
     delete childEnvVars.TORIEL_SCOPE_ROOT;
     delete childEnvVars.TORIEL_SCOPE_MODE;
+    delete childEnvVars.TORIEL_SANDBOX;
+    delete childEnvVars.TORIEL_SANDBOX_RW;
+    delete childEnvVars.TORIEL_SHARED_DIR;
     const child = spawn(
       process.execPath,
       [

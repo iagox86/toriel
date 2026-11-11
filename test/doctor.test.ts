@@ -33,6 +33,7 @@ describe("doctor checks", () => {
       setup({ gitMcp: "none" }).opts,
       setup({ gdbMcp: "none", ghidraMcp: "codemode" }).opts,
       setup({ config: { authorizerChain: ["toriel-grants"], permission: { "*": "allow", path: { "*": "allow", [GRANTS_RULE]: "ask" } } } }).opts,
+      { ...setup({ settings: '{"sandbox":"bwrap"}' }).opts, probeBwrap: () => "bwrap is not installed (the bubblewrap package)" },
       setup({ scopePatch: "absent" }).opts,
       setup({ scopePatch: "absent", config: { authorizerChain: ["toriel-grants"], permission: { "*": "allow", external_directory_write: { "/tmp/*": "allow" }, path: { "*": "ask", [GRANTS_RULE]: "ask" } } }, settings: JSON.stringify({ scopeGuardAcceptedAllows: [{ surface: "external_directory_write", pattern: "/tmp/*" }, { surface: "*", pattern: "*" }] }) }).opts,
     ];
@@ -155,6 +156,17 @@ describe("doctor checks", () => {
     assert.deepEqual(grade("mcp-git-direct", { gdbMcp: "codemode", ghidraMcp: "none" }), [], "one server's problem is not another's");
   });
 
+  it("checks that bwrap works only when the sandbox setting asks for it", () => {
+    const broken = () => "bwrap is not installed (the bubblewrap package)";
+    const on = collectFindings({ ...setup({ settings: '{"sandbox":"bwrap"}' }).opts, probeBwrap: broken });
+    assert.deepEqual(on.map((x) => [x.id, x.level]), [["sandbox-bwrap", "feature"]]);
+    assert.match(on[0]?.message ?? "", /"sandbox" is "bwrap" but bwrap is not installed.*refuse every bash command.*"sandbox": "off"/);
+    assert.equal(on[0]?.fix, undefined, "installing a package is not an automatic edit");
+    assert.deepEqual(collectFindings({ ...setup({ settings: '{"sandbox":"bwrap"}' }).opts, probeBwrap: () => undefined }), [], "a working bwrap is fine");
+    assert.deepEqual(collectFindings({ ...setup({}).opts, probeBwrap: broken }), [], "the default is off: nothing to check");
+    assert.deepEqual(collectFindings({ ...setup({ settings: '{"sandbox":"off"}' }).opts, probeBwrap: broken }), []);
+  });
+
   it("asks for the sleep lock only on linux, and only when preventSleep is not off", () => {
     assert.deepEqual(collectFindings(setup({ noInhibit: true }).opts).map((x) => [x.id, x.level]), [["sleep-lock", "feature"]]);
     assert.deepEqual(collectFindings({ ...setup({ noInhibit: true }).opts, platform: "darwin" }), []);
@@ -176,7 +188,7 @@ describe("doctor report", () => {
     assert.match(text, /Required: all 5 ok/);
     assert.match(text, /Recommended: all 2 ok/);
     assert.doesNotMatch(text, / ok {7}/);
-    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(7 ok\)/);
+    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(8 ok\)/);
   });
 });
 
@@ -205,7 +217,7 @@ describe("doctor report colours", () => {
   it("colours the compact report too, with the passing checks' count dim", () => {
     const coloured = renderDoctor(checks(), { compact: true, style: ANSI_STYLE });
     assert.match(coloured, /Required\x1b\[22m: \x1b\[32mall 5 ok\x1b\[39m/);
-    assert.match(coloured, /\x1b\[2m {2}\(7 ok\)\x1b\[22m/);
+    assert.match(coloured, /\x1b\[2m {2}\(8 ok\)\x1b\[22m/);
   });
 });
 

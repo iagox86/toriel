@@ -5,6 +5,25 @@
 import { delimiter, join } from "node:path";
 import { piAgentDir } from "./pi-dir.ts";
 import type { ScopeAssignment } from "./scope-root.ts";
+import { DEFAULT_SANDBOX_WRITABLE, type TorielSettings } from "./settings.ts";
+
+/** The daemon-owned variables that must never come from the daemon's own environment. */
+const OWNED_KEYS = ["TORIEL_SCOPE_ROOT", "TORIEL_SCOPE_MODE", "TORIEL_SANDBOX", "TORIEL_SANDBOX_RW", "TORIEL_SHARED_DIR"];
+
+/** What a child gets beyond its scope: the shared directory, and (only when set) the sandbox switch with its extra writable roots. */
+export interface ChildExtras {
+  sharedDir?: string;
+  /** Present = run the child's bash commands in the sandbox; the list is the extra writable roots (caches). */
+  sandboxWritable?: string[];
+}
+
+/**
+ * The extra writable roots for a sandboxed child: the sandboxWritable setting (or its default),
+ * `~/` expanded against `home`. Only meaningful with a scope, so the caller passes it only then.
+ */
+export function sandboxWritableRoots(settings: Pick<TorielSettings, "sandboxWritable">, home: string): string[] {
+  return (settings.sandboxWritable ?? [...DEFAULT_SANDBOX_WRITABLE]).map((p) => (p.startsWith("~/") ? join(home, p.slice(2)) : p));
+}
 
 export interface EnvSession {
   sessionId?: string;
@@ -14,15 +33,16 @@ export interface EnvSession {
 /**
  * What the pi child process is started with. `scope` (optional) becomes
  * TORIEL_SCOPE_ROOT + TORIEL_SCOPE_MODE, the write scope pair for the scope link;
- * both are daemon-owned. A `!command` runs in the daemon, not in pi, so it must
- * never receive either variable: `bangEnv` calls this without a scope, and a
- * TORIEL_SCOPE_ROOT or TORIEL_SCOPE_MODE already in `base` is dropped (a daemon
- * started inside a scoped session must not leak its own scope into every child).
+ * both are daemon-owned. `extras` adds TORIEL_SHARED_DIR and, for a sandboxed child, TORIEL_SANDBOX
+ * and TORIEL_SANDBOX_RW. A `!command` runs in the daemon, not in pi, so it must never receive any
+ * of them: `bangEnv` calls this without a scope, and any of these already in `base` is dropped (a
+ * daemon started inside a scoped session must not leak its own scope or sandbox into every child -
+ * an invalid sandbox would refuse every command).
  */
-export function childEnv(s: EnvSession, sock: string, base: NodeJS.ProcessEnv = process.env, scope?: ScopeAssignment): Record<string, string> {
+export function childEnv(s: EnvSession, sock: string, base: NodeJS.ProcessEnv = process.env, scope?: ScopeAssignment, extras: ChildExtras = {}): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(base)) {
-    if (key === "TORIEL_SCOPE_ROOT" || key === "TORIEL_SCOPE_MODE") {
+    if (OWNED_KEYS.includes(key)) {
       continue;
     }
     if (value !== undefined) {
@@ -37,6 +57,13 @@ export function childEnv(s: EnvSession, sock: string, base: NodeJS.ProcessEnv = 
   if (scope !== undefined) {
     env.TORIEL_SCOPE_ROOT = scope.root;
     env.TORIEL_SCOPE_MODE = scope.mode;
+  }
+  if (extras.sharedDir !== undefined) {
+    env.TORIEL_SHARED_DIR = extras.sharedDir;
+  }
+  if (scope !== undefined && extras.sandboxWritable !== undefined) {
+    env.TORIEL_SANDBOX = "bwrap";
+    env.TORIEL_SANDBOX_RW = extras.sandboxWritable.join(delimiter);
   }
   return env;
 }

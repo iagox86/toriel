@@ -11,6 +11,7 @@ import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFil
 import { constants as osConstants, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { createBashToolDefinition, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { makeWrap, readSandbox, type Spawnable, sandboxNote } from "./lib/sandbox.ts";
 
 export const CUSTOM_TYPE = "toriel-job";
 export const STATUS_KEY = "toriel-jobs";
@@ -75,6 +76,11 @@ export interface RegistryOptions {
   /** Called whenever the set of running jobs changes. */
   onChange?(): void;
   now?: () => number;
+  /**
+   * What to spawn for a command instead of plain `bash -c` (the per-command sandbox, lib/sandbox.ts).
+   * It may throw to refuse the command; the command is then not run at all, never run unwrapped.
+   */
+  wrap?(command: string, cwd: string): Spawnable;
 }
 
 /** Jobs started by one session: spawn, log, stop. */
@@ -103,9 +109,11 @@ export class JobRegistry {
   }
 
   private launch(command: string, cwd: string, env: NodeJS.ProcessEnv, fg: Foreground | undefined, id: string): Job {
+    // before anything exists: a refusing wrapper leaves no log file and no job behind
+    const spec: Spawnable = this.opts.wrap?.(command, cwd) ?? { file: "bash", args: ["-c", command] };
     const logPath = join(this.opts.dir, `${id}.log`);
     writeFileSync(logPath, "");
-    const child = spawn("bash", ["-c", command], { cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(spec.file, spec.args, { cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     const job: Job = { id, command, pid: child.pid, startedAt: this.now(), state: "running", logPath };
     const state: Running = { child, logged: 0, truncated: false, fg };
     if (!fg) {
@@ -129,7 +137,9 @@ export class JobRegistry {
     };
     child.stdout?.on("data", log);
     child.stderr?.on("data", log);
-    child.on("error", (err) => {
+    child.on("error", (spawnError) => {
+      // a sandbox that cannot start must say so: the command did not run, and was not run unsandboxed
+      const err = this.opts.wrap ? new Error(`sandbox: could not start ${spec.file} (${spawnError.message}); the command was not run. Install bubblewrap, or set "sandbox": "off" in the toriel settings.`) : spawnError;
       appendFileSync(logPath, `${err.message}\n`);
       this.finish(job, "exited", 127, null, err);
     });
@@ -450,8 +460,11 @@ export default function (pi: Pi) {
   }
   const dir = mkdtempSync(join(tmpdir(), "toriel-jobs-"));
   let ui: Ctx["ui"] | undefined;
+  // the per-command sandbox (board 190): off unless the daemon set TORIEL_SANDBOX for this scoped child
+  const sandbox = readSandbox(process.env);
   const registry: JobRegistry = new JobRegistry({
     dir,
+    wrap: makeWrap(sandbox),
     onChange: () => {
       const n = registry.runningCount();
       ui?.setStatus(STATUS_KEY, JSON.stringify({ v: 1, running: n }));
@@ -488,7 +501,7 @@ export default function (pi: Pi) {
   };
   pi.registerTool({
     ...base,
-    description: base.description + BASH_ADDENDUM,
+    description: base.description + BASH_ADDENDUM + sandboxNote(sandbox),
     parameters: {
       type: "object",
       properties: {
