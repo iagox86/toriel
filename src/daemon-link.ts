@@ -88,8 +88,9 @@ export class DaemonLink {
           }
         };
         setTimeout(done, FIRST_LIST_TIMEOUT_MS).unref?.();
-        socket.on("data", (chunk: Buffer) => {
-          for (const line of splitter.push(chunk.toString("utf8"))) {
+        socket.setEncoding("utf8");
+        socket.on("data", (chunk: string) => {
+          for (const line of splitter.push(chunk)) {
             try {
               this.receive(JSON.parse(line) as DaemonMessage);
             } catch (err) {

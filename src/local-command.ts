@@ -58,12 +58,15 @@ export function runLocal(command: string, cwd: string, signal?: AbortSignal, tim
     };
     const timer = setTimeout(stop, timeoutMs);
     signal?.addEventListener("abort", stop, { once: true });
-    const take = (chunk: Buffer) => {
+    const take = (chunk: string) => {
       // keep memory bounded for a command that never stops printing
       if (raw.length < 4 * (HEAD_CHARS + TAIL_CHARS)) {
-        raw += chunk.toString("utf8");
+        raw += chunk;
       }
     };
+    // setEncoding decodes across chunk boundaries; a per-chunk toString would corrupt a split multi-byte character
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
     child.stdout.on("data", take);
     child.stderr.on("data", take);
     child.on("error", (err) => {

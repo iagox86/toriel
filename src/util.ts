@@ -65,3 +65,15 @@ export function readJsonOr<T>(file: string, fallback: T): T {
     return fallback;
   }
 }
+
+/** Whether `name` is an executable in one of `dirs`. */
+export function onPathDirs(name: string, dirs: readonly string[]): boolean {
+  return dirs.some((dir) => {
+    try {
+      fs.accessSync(path.join(dir, name), fs.constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}

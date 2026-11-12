@@ -6,6 +6,7 @@
 // messages meant to be shown, each saying what to type instead.
 import { CronExpressionParser } from "cron-parser";
 import { fmtAge } from "./format.ts";
+import { errText } from "./util.ts";
 
 export type Trigger =
   | { kind: "once"; at: number }
@@ -256,7 +257,7 @@ function cronSpec(words: string[], now: Date): Step<Trigger> {
   try {
     CronExpressionParser.parse(expr, { currentDate: now });
   } catch (err) {
-    return fail(`not a valid cron expression (${expr}): ${err instanceof Error ? err.message : String(err)}`);
+    return fail(`not a valid cron expression (${expr}): ${errText(err)}`);
   }
   return { ok: true, value: { kind: "cron", expr }, used: 5 };
 }

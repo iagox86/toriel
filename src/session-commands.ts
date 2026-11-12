@@ -72,7 +72,11 @@ export class SessionCommands {
         this.h.notify(`/${parsed.spec.name}: ${parsed.message} (/${parsed.spec.name} --help)`);
         return true;
       case "run":
-        void this.handlers()[parsed.spec.name as SessionCommandName](parsed.call);
+        // a handler that throws (a failed saveGroups, say) must show a notice, not become an unhandled rejection
+        // the executor form, so a synchronous throw from a handler rejects the promise too
+        new Promise<void>((resolve) => resolve(this.handlers()[parsed.spec.name as SessionCommandName](parsed.call))).catch((err: unknown) => {
+          this.h.notify(`/${parsed.spec.name} failed: ${errText(err)}`);
+        });
         if (parsed.spec.name === "exit") {
           return true;
         }

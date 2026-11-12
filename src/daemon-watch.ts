@@ -10,6 +10,7 @@
 import { type FileWatcher, type WatchSpec, watchedDir } from "./file-watch.ts";
 import { log } from "./log.ts";
 import type { Schedule } from "./scheduler.ts";
+import { errText } from "./util.ts";
 
 export const RETRY_MS = 30_000;
 /** Most watches at once: every one is an inotify instance's worth of kernel memory and a user limit is shared with everything else. */
@@ -117,7 +118,7 @@ export class WatchManager {
           this.say(`file watch #${id} is watching ${spec.path} again`);
         }
       } catch (err) {
-        this.fail(id, err instanceof Error ? err.message : String(err));
+        this.fail(id, errText(err));
       }
     }
     this.keepTimer(wanted.size > 0);

@@ -24,13 +24,24 @@ export interface Fix {
   edit(config: Record<string, unknown>): Record<string, unknown>;
 }
 
+/**
+ * How a finding is resolved: with an automatic `fix`, or with `manual`, the stated reason there is none
+ * (a package install, a machine-specific value, a deliberate security posture, ...). The type demands one
+ * of the two, so a new check cannot silently ship without either. The report prints whichever it is.
+ */
+export type Resolution = { fix: Fix; manual?: undefined } | { fix?: undefined; manual: string };
+
+/** `fix` when there is one, else `manual`: for a check whose fix only exists when the config has the usual shape. */
+export function resolution(fix: Fix | undefined, manual: string): Resolution {
+  return fix ? { fix } : { manual };
+}
+
 /** One thing wrong with the setup. `id` names a check in the doctor catalog (src/doctor.ts); `message` says how to fix it. */
-export interface Finding {
+export type Finding = {
   id: string;
   level: Level;
   message: string;
-  fix?: Fix;
-}
+} & Resolution;
 
 export interface Resource {
   kind: "extension" | "skill" | "theme";
@@ -239,10 +250,12 @@ function grantsFindings(agentDir: string, grantsFile: string): Finding[] {
       id: "grants-chain",
       level: "feature",
       message: `permission grants are inactive: add "${GRANTS_LINK}" to "authorizerChain" in ${file} (for example "authorizerChain": ["${GRANTS_LINK}"])`,
-      fix:
+      ...resolution(
         chain === undefined || Array.isArray(chain)
           ? { file, summary: `add "${GRANTS_LINK}" to "authorizerChain"`, edit: (c) => ({ ...c, authorizerChain: [...(Array.isArray(c.authorizerChain) ? c.authorizerChain : []), GRANTS_LINK] }) }
           : undefined,
+        '"authorizerChain" in that file is not a list, so an automatic edit could clobber what it holds; fix it by hand',
+      ),
     });
   }
   const action = pathAction(json, grantsFile);
@@ -254,18 +267,21 @@ function grantsFindings(agentDir: string, grantsFile: string): Finding[] {
       id: "grants-path-rule",
       level: "hardening",
       message: `nothing stops an agent editing the permission grants file: add "${shown}": "ask" to the "permission" > "path" rules in ${file} (last matching rule wins: put it after any catch-all allow entry)`,
-      fix: fixable
-        ? {
-            file,
-            summary: `make writes to ${shown} ask first`,
-            edit: (c) => {
-              const perm = isObject(c.permission) ? c.permission : {};
-              const path = isObject(perm.path) ? perm.path : {};
-              const others = Object.entries(path).filter(([key]) => key !== shown && key !== grantsFile);
-              return { ...c, permission: { ...perm, path: { ...Object.fromEntries(others), [shown]: "ask" } } };
-            },
-          }
-        : undefined,
+      ...resolution(
+        fixable
+          ? {
+              file,
+              summary: `make writes to ${shown} ask first`,
+              edit: (c) => {
+                const perm = isObject(c.permission) ? c.permission : {};
+                const path = isObject(perm.path) ? perm.path : {};
+                const others = Object.entries(path).filter(([key]) => key !== shown && key !== grantsFile);
+                return { ...c, permission: { ...perm, path: { ...Object.fromEntries(others), [shown]: "ask" } } };
+              },
+            }
+          : undefined,
+        '"permission" or its "path" rules in that file are not objects, so an automatic edit could clobber what they hold; fix it by hand',
+      ),
     });
   }
   return findings;
@@ -330,6 +346,7 @@ export function scopeGuardFindings(config: unknown, accepted?: Array<{ surface: 
       id: "scope-guard-short-circuit",
       level: "hardening",
       message: `config allows outside-scope writes outright (${[...new Set(labels)].join(", ")}): an ask these match is allowed before the authorizer chain runs, so the scope guard cannot deny it for directory-scoped sessions (TORIEL_SCOPE_ROOT); set them to "ask" - an explicit "*": "ask" on external_directory_write also makes the "*" fallback unreachable - if you want directory scoping to hold (deliberate allows can be recorded in the toriel settings as scopeGuardAcceptedAllows so they are not flagged)`,
+      manual: "narrowing your allow rules changes the security posture you chose, so doctor will not do it; either edit them or record the deliberate ones as scopeGuardAcceptedAllows",
     },
   ];
 }
@@ -348,20 +365,20 @@ export function auditFindings(agentDir: string, root = PI_RESOURCES_DIR, opts: A
   const out: Finding[] = [];
   const setup = piSetupProblem(agentDir);
   if (setup) {
-    out.push({ id: "pi-setup", level: "required", message: setup });
+    out.push({ id: "pi-setup", level: "required", message: setup, manual: "pi's own setup (installing pi, signing in to a provider) is yours to do" });
   }
   const missing = missingResources(root);
   if (missing.length > 0) {
-    out.push({ id: "toriel-files", level: "required", message: `toriel files missing from ${root}: ${missing.map((r) => r.path).join(", ")} - the checkout is incomplete` });
+    out.push({ id: "toriel-files", level: "required", message: `toriel files missing from ${root}: ${missing.map((r) => r.path).join(", ")} - the checkout is incomplete`, manual: "files are missing from the toriel checkout; restore them from git" });
   }
   const stale = staleInstalls(agentDir, root);
   if (stale.length > 0) {
-    out.push({ id: "stale-links", level: "required", message: `old toriel links in the pi agent dir load twice: remove them with rm ${stale.map((f) => f.replace(/ /g, "\\ ")).join(" ")}` });
+    out.push({ id: "stale-links", level: "required", message: `old toriel links in the pi agent dir load twice: remove them with rm ${stale.map((f) => f.replace(/ /g, "\\ ")).join(" ")}`, manual: "doctor --fix only edits JSON config files, not links on disk; run the rm command shown" });
   }
   if (opts.permissionSystem !== false) {
     const permission = permissionSystemProblem(agentDir);
     if (permission) {
-      out.push({ id: "permission-package", level: "recommended", message: permission });
+      out.push({ id: "permission-package", level: "recommended", message: permission, manual: "installing pi-permission-system (a package install) or repairing its config.json is yours to do; doctor does not run installs" });
     } else {
       out.push(...grantsFindings(agentDir, opts.grantsFile ?? PERMISSIONS_FILE));
       out.push(...scopeGuardFindings(permissionConfig(agentDir), opts.scopeGuardAcceptedAllows));

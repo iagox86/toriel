@@ -9,14 +9,14 @@
 // changes or goes away, change or remove its check. test/doctor.test.ts fails when a finding
 // carries an id the catalog does not list.
 import { spawnSync } from "node:child_process";
-import { accessSync, constants, copyFileSync, existsSync, readFileSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, readFileSync, statSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { mcpWarnings, mergeMcpServers, loadAgents } from "./agents.ts";
 import { piAgentDir } from "./pi-dir.ts";
 import { startupProblems } from "./preflight.ts";
-import { type AuditOptions, auditFindings, type Finding, type Fix, type Level, PI_RESOURCES_DIR, piPackageListed } from "./resources.ts";
+import { type AuditOptions, auditFindings, type Finding, type Fix, type Level, PI_RESOURCES_DIR, piPackageListed, resolution } from "./resources.ts";
 import { loadSettings, resolveChildConfig } from "./settings.ts";
-import { writeFileAtomic } from "./util.ts";
+import { onPathDirs as onPath, writeFileAtomic } from "./util.ts";
 
 const WEB_PACKAGE = "pi-web-access";
 /** "a", "a and b", "a, b and c". */
@@ -106,17 +106,6 @@ export function probeBwrap(): string | undefined {
   return undefined;
 }
 
-function onPath(name: string, dirs: readonly string[]): boolean {
-  return dirs.some((dir) => {
-    try {
-      accessSync(join(dir, name), constants.X_OK);
-      return true;
-    } catch {
-      return false;
-    }
-  });
-}
-
 /**
  * Locate the installed @gotgenes/pi-permission-system package (the copy pi loads raw src
  * from): the tree pi's cli.js lives in, then the running node's global modules (an nvm
@@ -139,16 +128,16 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
   const env = opts.env ?? process.env;
   const out: Finding[] = [];
   for (const message of opts.startup ?? startupProblems(env, opts.nodeVersion)) {
-    out.push({ id: "startup", level: "required", message });
+    out.push({ id: "startup", level: "required", message, manual: "node, the dependencies and the runtime directory belong to the machine, not to a config file doctor edits" });
   }
   const loaded = loadSettings(opts.settingsFile);
   out.push(...auditFindings(opts.agentDir ?? piAgentDir(), opts.root ?? PI_RESOURCES_DIR, { ...opts, scopeGuardAcceptedAllows: loaded.settings.scopeGuardAcceptedAllows }));
   for (const problem of loaded.problems) {
-    out.push({ id: "settings", level: "recommended", message: `toriel settings: ${problem}` });
+    out.push({ id: "settings", level: "recommended", message: `toriel settings: ${problem}`, manual: "the settings file is yours; doctor will not guess which value you meant" });
   }
   const piCli = opts.piCli ?? resolveChildConfig(loaded.settings, env).piCli;
   if (!existsSync(piCli)) {
-    out.push({ id: "pi-cli", level: "required", message: `pi's cli.js is not at ${piCli}: run npm install in the toriel checkout, or set piCli in the toriel settings` });
+    out.push({ id: "pi-cli", level: "required", message: `pi's cli.js is not at ${piCli}: run npm install in the toriel checkout, or set piCli in the toriel settings`, manual: "needs npm install in the checkout (a package install) or a piCli path only you know" });
   }
   // the scope patch: a trusted project config inside a scoped session's directory can
   // re-allow outside-scope writes (project policy outranks global and lives INSIDE the
@@ -160,6 +149,7 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
       id: "permission-package-scope-patch",
       level: "hardening",
       message: `the installed pi-permission-system at ${pkgSrc} lacks the toriel scope patch: a trusted project config inside a scoped session's directory could re-allow outside-scope writes; apply the two-site patch from pi/patches/scope-config-patch.md in the toriel checkout (package updates overwrite it; this check flags it again then)`,
+      manual: "the patch edits the installed package's source, which a package update overwrites; apply it by hand from pi/patches/scope-config-patch.md",
     });
   }
   // shipped agents that name mcp__<server>__* tools: pi gives an agent an MCP tool only when its server is exposed directly
@@ -171,13 +161,17 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
     const problems = users.flatMap((a) => mcpWarnings(a, servers));
     if (users.length > 0 && problems.length > 0) {
       // fixable only when the entry is here with the wrong exposure; a missing entry needs the
-      // server's own command/args, which doctor cannot invent for the user
+      // server's own command/args, which are machine-specific (where it is installed, which runner),
+      // so doctor does not invent them and says so
       const info = servers[server.name];
       out.push({
         id: `mcp-${server.name}-direct`,
         level: "feature",
-        message: `the ${nameList(users.map((a) => a.name))} ${users.length > 1 ? "agents need" : "agent needs"} an MCP server named "${server.name}" (${server.hint}) with "exposure": "direct" in ${mcpFile}; without it ${users.length > 1 ? "they have" : "it has"} no ${server.name} tool (${problems[0]})`,
-        fix:
+        message:
+          info === undefined
+            ? `the "${server.name}" MCP server is missing from ${mcpFile}: the ${nameList(users.map((a) => a.name))} ${users.length > 1 ? "agents need" : "agent needs"} it (${server.hint}) with "exposure": "direct"; without it ${users.length > 1 ? "they have" : "it has"} no ${server.name} tool`
+            : `the ${nameList(users.map((a) => a.name))} ${users.length > 1 ? "agents need" : "agent needs"} the "${server.name}" MCP server (${server.hint}) with "exposure": "direct" in ${mcpFile}; without it ${users.length > 1 ? "they have" : "it has"} no ${server.name} tool (${problems[0]})`,
+        ...resolution(
           info !== undefined && info.exposure !== "direct"
             ? {
                 file: mcpFile,
@@ -190,6 +184,8 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
                 },
               }
             : undefined,
+          `there is no "${server.name}" entry to fix, and its command depends on where the server is installed on this machine, so add it by hand (${server.hint}) with "exposure": "direct"`,
+        ),
       });
     }
   }
@@ -200,29 +196,30 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
       id: "web-package",
       level: "feature",
       message: `the ${nameList(webAgents.map((a) => a.name))} ${webAgents.length > 1 ? "agents need" : "agent needs"} ${WEB_PACKAGE} in the packages of ${join(opts.agentDir ?? piAgentDir(env), "settings.json")} (pi install npm:${WEB_PACKAGE}) and a search provider set up for it; without it the agent has no web tools`,
+      manual: "installing a pi package and choosing a search provider are yours to do; doctor does not run installs",
     });
   }
   // the per-command sandbox (board 190) refuses to run a command rather than run it unsandboxed, so a setting that asks for bwrap without a working bwrap would stop every scoped session's bash
   if (loaded.settings.sandbox === "bwrap") {
     const why = (opts.probeBwrap ?? probeBwrap)();
     if (why !== undefined) {
-      out.push({ id: "sandbox-bwrap", level: "feature", message: `the toriel setting "sandbox" is "bwrap" but ${why}; scoped sessions would refuse every bash command (install bubblewrap and enable user namespaces, or set "sandbox": "off")` });
+      out.push({ id: "sandbox-bwrap", level: "feature", message: `the toriel setting "sandbox" is "bwrap" but ${why}; scoped sessions would refuse every bash command (install bubblewrap and enable user namespaces, or set "sandbox": "off")`, manual: 'installing bubblewrap is a system package install, and switching the sandbox off would drop protection you asked for' });
     }
   }
   const dirs = opts.pathDirs ?? (env.PATH ?? "").split(delimiter).filter(Boolean);
   if ((opts.platform ?? process.platform) === "linux" && loaded.settings.preventSleep !== false && !onPath("systemd-inhibit", dirs)) {
-    out.push({ id: "sleep-lock", level: "feature", message: 'systemd-inhibit is not on PATH, so the machine can sleep through a scheduled run (install systemd, or set "preventSleep": false in the toriel settings to stop asking)' });
+    out.push({ id: "sleep-lock", level: "feature", message: 'systemd-inhibit is not on PATH, so the machine can sleep through a scheduled run (install systemd, or set "preventSleep": false in the toriel settings to stop asking)', manual: "installing systemd is a system package install; the alternative setting turns off a feature you may want" });
   }
   const display = env.WAYLAND_DISPLAY ? "wayland" : env.DISPLAY ? "x11" : undefined;
   if (display === "wayland" && !(onPath("wl-paste", dirs) && onPath("wl-copy", dirs))) {
-    out.push({ id: "clipboard", level: "feature", message: "wl-clipboard is not on PATH, so paste and /btw's copy have no clipboard (install wl-clipboard; copying may still work through the terminal)" });
+    out.push({ id: "clipboard", level: "feature", message: "wl-clipboard is not on PATH, so paste and /btw's copy have no clipboard (install wl-clipboard; copying may still work through the terminal)", manual: "installing wl-clipboard is a system package install" });
   } else if (display === "x11" && !onPath("xclip", dirs)) {
-    out.push({ id: "clipboard", level: "feature", message: "xclip is not on PATH, so paste and /btw's copy have no clipboard (install xclip; copying may still work through the terminal)" });
+    out.push({ id: "clipboard", level: "feature", message: "xclip is not on PATH, so paste and /btw's copy have no clipboard (install xclip; copying may still work through the terminal)", manual: "installing xclip is a system package install" });
   }
   if (opts.tty === true) {
     const term = `${env.COLORTERM ?? ""} ${env.TERM ?? ""}`;
     if (!/truecolor|24bit/i.test(term) && !/kitty|ghostty|wezterm|contour|foot/i.test(term)) {
-      out.push({ id: "truecolor", level: "feature", message: "the terminal does not advertise truecolor (COLORTERM/TERM), so toriel's theme colors are approximated; a terminal with truecolor support shows them as intended" });
+      out.push({ id: "truecolor", level: "feature", message: "the terminal does not advertise truecolor (COLORTERM/TERM), so toriel's theme colors are approximated; a terminal with truecolor support shows them as intended", manual: "the terminal emulator's capability, not a config file" });
     }
   }
   return out;
@@ -301,7 +298,7 @@ export function renderDoctor(checks: readonly Check[], opts: { compact?: boolean
         lines.push(`           ${c.note}`);
       }
       for (const f of c.findings) {
-        lines.push(`           ${f.message}${f.fix ? `  [fixable: ${f.fix.summary}]` : ""}`);
+        lines.push(`           ${f.message}  ${f.fix ? `[fixable: ${f.fix.summary}]` : `[manual: ${f.manual}]`}`);
       }
     }
     if (opts.compact && passing > 0) {
@@ -314,7 +311,12 @@ export function renderDoctor(checks: readonly Check[], opts: { compact?: boolean
   if (problems === 0) {
     lines.push(st.ok("Everything checks out."));
   } else {
-    lines.push(`${st.problem(`${problems} problem${problems === 1 ? "" : "s"}`)}${fixable > 0 ? `, ${fixable} fixable automatically (toriel doctor --fix, or /doctor --fix)` : ""}.`);
+    const manual = problems - fixable;
+    const parts = [
+      fixable > 0 ? `${fixable} fixable automatically (toriel doctor --fix, or /doctor --fix)` : "",
+      manual > 0 ? `${manual} need${manual === 1 ? "s" : ""} you (see "manual" above)` : "",
+    ].filter(Boolean);
+    lines.push(`${st.problem(`${problems} problem${problems === 1 ? "" : "s"}`)}${parts.length > 0 ? `, ${parts.join(", ")}` : ""}.`);
   }
   return lines.join("\n");
 }

@@ -60,6 +60,15 @@ describe("background jobs", () => {
     assert.equal(jobs.output("nope"), undefined);
   });
 
+  it("does not cut a multi-byte character when it returns only the tail", async () => {
+    const jobs = make();
+    const job = jobs.start("printf 'ab🙂cd'", dir); // 2 + 4 + 2 bytes
+    await until(() => ended.length === 1);
+    // a 4-byte limit lands inside the emoji: its remaining bytes are skipped, not decoded to U+FFFD
+    assert.deepEqual(jobs.output(job.id, 0, 4), { text: "cd", next: 8, skipped: 6 });
+    assert.deepEqual(jobs.output(job.id, 0, 6), { text: "🙂cd", next: 8, skipped: 2 });
+  });
+
   it("stops the whole process group and does not report it as an exit", async () => {
     const jobs = make();
     const job = jobs.start("sleep 30 & sleep 30 & wait", dir);

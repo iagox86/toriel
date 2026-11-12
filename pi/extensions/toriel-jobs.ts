@@ -7,7 +7,7 @@
 // is told with a message that wakes an idle session. Runs only in children the
 // toriel daemon starts (TORIEL_CHILD), so plain pi keeps its own `bash`.
 import { type ChildProcess, spawn } from "node:child_process";
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, fstatSync, mkdtempSync, openSync, readSync, rmSync, writeFileSync } from "node:fs";
 import { constants as osConstants, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { createBashToolDefinition, getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -335,10 +335,32 @@ export class JobRegistry {
     if (!job) {
       return undefined;
     }
-    const all = readFileSync(job.logPath);
-    const from = Math.min(Math.max(0, since), all.length);
-    const start = Math.max(from, all.length - limit);
-    return { text: all.subarray(start).toString("utf8"), next: all.length, skipped: start - from };
+    // read only the tail that will be returned, not the whole log (a long job's log can be large and this is polled)
+    const fd = openSync(job.logPath, "r");
+    try {
+      const size = fstatSync(fd).size;
+      const from = Math.min(Math.max(0, since), size);
+      const start = Math.max(from, size - limit);
+      const buf = Buffer.alloc(size - start);
+      let got = 0;
+      while (got < buf.length) {
+        const n = readSync(fd, buf, got, buf.length - got, start + got);
+        if (n === 0) {
+          break;
+        }
+        got += n;
+      }
+      // a cut that lands inside a multi-byte character would decode to U+FFFD: skip to the next character start
+      let skip = 0;
+      if (start > from) {
+        while (skip < got && skip < 3 && (buf[skip] & 0xc0) === 0x80) {
+          skip++;
+        }
+      }
+      return { text: buf.subarray(skip, got).toString("utf8"), next: size, skipped: start + skip - from };
+    } finally {
+      closeSync(fd);
+    }
   }
 
   /** Session shutdown: SIGKILL every running job's process group at once, with no notices. */

@@ -50,6 +50,14 @@ describe("bin/toriel launcher", () => {
     const { link, env } = fixture("v26.12.0", ["v24.1.0"]);
     const r = spawnSync(link, [], { env, encoding: "utf8" });
     assert.equal(r.status, 1);
-    assert.match(r.stderr, /needs node 26 or newer \(found: 20\); install it with: nvm install 26/);
+    assert.match(r.stderr, /needs node 26\.12\.0 or newer \(found: 20\.1\); install it with: nvm install 26/);
+  });
+
+  it("compares the minor version too, so a node older than the floor within its major is not accepted", () => {
+    // PATH's node is v20; the only nvm node of the wanted major is below the floor (26.3 < 26.12)
+    const { link, env } = fixture("v26.12.0", ["v26.3.0"]);
+    const r = spawnSync(link, [], { env, encoding: "utf8" });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /needs node 26\.12\.0 or newer/);
   });
 });

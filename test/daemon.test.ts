@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
+import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
@@ -80,6 +81,25 @@ describe("daemon: sessions", () => {
       (m) => m.type === "event" && m.event?.type === "message_end" && m.event.message?.role === "assistant",
     );
     assert.equal(reply.event.message.content[0].text, "echo: hello");
+  });
+
+  it("keeps a multi-byte character whole when a command's bytes arrive in two writes", async () => {
+    harness = await startDaemon();
+    const c = await harness.connect();
+    const { sessionId } = await c.request({ type: "spawn", cwd: harness.dir });
+    await c.waitFor((m) => m.type === "history");
+    const bytes = Buffer.from(`${JSON.stringify({ type: "prompt", session: sessionId, message: "smile 🙂 done", id: "split" })}\n`);
+    const cut = bytes.indexOf(Buffer.from("🙂")) + 2; // inside the 4-byte emoji
+    const raw = net.connect(harness.sock);
+    await new Promise<void>((resolve) => raw.once("connect", resolve));
+    raw.write(bytes.subarray(0, cut));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    raw.write(bytes.subarray(cut));
+    const reply = await c.waitFor(
+      (m) => m.type === "event" && m.event?.type === "message_end" && m.event.message?.role === "assistant",
+    );
+    raw.destroy();
+    assert.equal(reply.event.message.content[0].text, "echo: smile 🙂 done");
   });
 
   it("streams events to every connected controller", async () => {
@@ -693,6 +713,27 @@ describe("daemon: lifecycle", () => {
     const all = c.sessions();
     assert.equal(all.find((s) => s.id === sessionId)?.active, true);
     assert.equal(all.find((s) => s.id === forked.sessionId)?.active, true);
+  });
+
+  it("gives a fork of a profiled session the same profile, and keeps it across a respawn", async () => {
+    harness = await startDaemon({ TORIEL_AGENTS_DIR: path.join(os.tmpdir(), "toriel-no-user-agents") });
+    const c = await harness.connect();
+    const { sessionId } = await c.request({ type: "spawn", cwd: harness.dir, agent: "explore" });
+    await c.waitFor((m) => m.type === "history");
+    await c.request({ type: "prompt", session: sessionId, message: "base" });
+    await c.waitFor(isSettled);
+    const file = c.sessions().find((s) => s.id === sessionId)?.sessionFile as string;
+    const forked = await c.request({ type: "adopt", path: file, cwd: harness.dir, fork: true });
+    const fork = (): Msg | undefined => c.sessions().find((s) => s.id === forked.sessionId);
+    const argv = (): string[] => JSON.parse(fs.readFileSync(`${fork()?.sessionFile}.argv.json`, "utf8")) as string[];
+    assert.equal(fork()?.agent, "explore");
+    assert.deepEqual(argv().slice(argv().indexOf("--tools"), argv().indexOf("--tools") + 2), ["--tools", "read,grep,find,ls"]);
+    await c.request({ type: "prompt", session: forked.sessionId, message: "hi" });
+    await c.waitFor(isSettled);
+    await c.request({ type: "deactivate", session: forked.sessionId });
+    await c.request({ type: "prompt", session: forked.sessionId, message: "again" });
+    await c.waitFor(isSettled);
+    assert.equal(fork()?.agent, "explore", "the profile survives a respawn of the fork");
   });
 
   it("names a fork and tells it about its parent, leaving the parent alone", async () => {

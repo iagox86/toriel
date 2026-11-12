@@ -5,6 +5,7 @@
 // dies without cleaning up does not leave the machine awake forever.
 import { type ChildProcess, spawn as nodeSpawn } from "node:child_process";
 import type { Schedule } from "./scheduler.ts";
+import { errText } from "./util.ts";
 
 /** A scheduled run closer than this keeps the machine awake; a later one does not (a long wait should not hold a laptop open). */
 export const AWAKE_BEFORE_FIRE_MS = 30 * 60_000;
@@ -78,7 +79,7 @@ export class SleepInhibitor {
     try {
       child = this.spawn("systemd-inhibit", ["--what=idle:sleep", "--who=toriel", "--why=an agent is working or a scheduled run is due soon", "--mode=block", "sh", "-c", watch]);
     } catch (err) {
-      this.giveUp(err instanceof Error ? err.message : String(err));
+      this.giveUp(errText(err));
       return;
     }
     this.child = child;

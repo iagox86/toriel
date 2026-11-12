@@ -5,7 +5,7 @@
 // clock. Rules: a fire never interrupts (it waits until the host says ready),
 // at most one fire per schedule is waiting (missed ones are dropped, not
 // stacked), and a schedule never vanishes silently (every end is an event).
-import { readJsonOr, writeJsonAtomic } from "./util.ts";
+import { errText, readJsonOr, writeJsonAtomic } from "./util.ts";
 import { nextFire, type Trigger } from "./when.ts";
 
 export interface Schedule {
@@ -460,7 +460,7 @@ export class Scheduler {
       if (watching && s.nextFire === undefined) {
         s.nextFire = due; // not delivered: still due, retried after RETRY_MS
       }
-      this.failed(s, err instanceof Error ? err.message : String(err), t);
+      this.failed(s, errText(err), t);
       return;
     }
     if (!this.schedules.has(s.id)) {

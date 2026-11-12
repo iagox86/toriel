@@ -28,7 +28,7 @@ pi/ resources. Everything is tested against a fake pi (test/fixtures/fake-pi
 .mjs, incl. FAKE_PI_SLOW=1); real-model runs are the remaining verification.
 Also built 2026-10-22 (night): ctrl-r history search (switcher rename moved to f2), /command autocomplete (registries in commands.ts; pi commands via daemon `commands`), plain text in the switcher starts a session.
 
-Findings below were validated against pi's shipped code (pi 1.3.x era).
+Findings below were validated against pi's shipped code (pi 1.3.x era). The ones that matter for the pi 1.4.0 bump (the steering/queue paths, RpcClient `send()` corrupting dialog replies) have not been systematically re-run; node_modules now holds 1.4.0 and the daemon tests pass on it.
 M0/M1 corrections to earlier assumptions are in "M0 findings".
 
 ## Refactor round (2026-10-22)
@@ -140,10 +140,9 @@ Steps, each independently shippable, in order:
    incident (watch for it recurring - the log line above will show it); pi's
    exit race where a steer arriving between the run's final queue drain and
    _isAgentRunActive=false is stranded until the next prompt (pi-side, benign:
-   the strip is honest and the next run delivers it); toriel pins
-   pi-coding-agent 1.4.0 in package.json while node_modules holds 1.3.0
-   (installed 2026-10-18) - run npm install and re-verify the queue paths on
-   1.4.0.
+   the strip is honest and the next run delivers it). OPEN: toriel pins
+   pi-coding-agent 1.4.0 and node_modules now holds it too, but the queue
+   paths have not been re-verified on 1.4.0 against a real model.
 4. (BUILT 2026-10-22; per-item expand PARKED - not useful without mouse selection: tool-run.ts groups consecutive tool
    calls into one collapsed summary line, ctrl-o toggles all sessions; ctrl-t
    toggles thinking, starting from pi's hideThinkingBlock setting. Step 5: pi's
@@ -205,9 +204,9 @@ Risk: Loader/diff components are interactive-mode internals, not all exported
   enums/namespaces either. Run files directly with node (>= 22.18; .nvmrc
   pins the floor; nvm default alias is v20, which will NOT run this).
 - RpcClient: extension_ui_request records fall through to onEvent
-  listeners; answer with (client as any).send({type:
-  "extension_ui_response", id, ...}) (send is typed-private, present at
-  runtime). cliPath defaults to cwd-relative "dist/cli.js" - always pass
+  listeners. Do NOT answer them with `client.send(...)` (it corrupts the
+  reply, see "RpcClient.send() corrupts extension_ui_response" below); write
+  the reply raw to the child's stdin (`handleUiResponse`). cliPath defaults to cwd-relative "dist/cli.js" - always pass
   the absolute path. RpcClient spawns `node` from PATH: daemon must be
   launched with a node >= 22.18 first in PATH (bin/toriel does this).
 - message_update deltas: text_end/thinking_end carry authoritative
@@ -376,6 +375,12 @@ set_model / cycle_model / get_available_models; set_thinking_level /
 cycle_thinking_level; compact / set_auto_compaction; bash / abort_bash;
 export_html; get_commands.
 
+- pi 1.4.0's `RpcClient` also has `fork(entryId)`, `clone()`, `getTree()`, `getEntries(since)` and
+  `getForkMessages()`, and pi exports `parseSessionEntries`/`loadEntriesFromFile`/`migrateSessionEntries`.
+  toriel still rewrites session files by hand for /rewind, /clear and the fork snapshot, and nine modules
+  parse the session JSONL themselves. That predates these RPCs and has NOT been decided against them;
+  it is tracked as Vikunja 183 (unify on pi's parser first, then evaluate the RPCs). Do not treat the
+  hand-rolled code as a deliberate choice.
 - Extension commands execute via `prompt` server-side (disposition
   "handled"), even mid-stream: `/group foo`, `/skill:...`, templates.
 - Extension UI forwarding: select / confirm / input dialogs arrive as
@@ -1324,9 +1329,10 @@ Parked (out of this ticket):
 The sandboxing program (docs/file-handling-proposal.md, "Toriel - Sandboxing" board) ran its
 verification-first phase: pi-permission-system 42.0.0 source is unpacked at
 `~/projects/pi-permission-system-src` (npm tarball; raw TS, no dist, pi loads it via jiti). Probes
-live in worktree `~/projects/toriel-worktrees/phase1-scope-probes` @ `eb434f5`
-(`FINDINGS-148-phase1.md` + `probes/` scripts and outputs); findings also in
-`~/projects/toriel-worktrees/SPEC-148-phase1.md`/`SPEC-148-scope.md`.
+live in the (uncommitted, outside this repo) worktree `~/projects/toriel-worktrees/phase1-scope-probes`
+@ `eb434f5` (`FINDINGS-148-phase1.md` + `probes/` scripts and outputs), together with
+`SPEC-148-phase1.md`/`SPEC-148-scope.md`. The conclusions are inlined below; the later specs
+(`SPEC-163-T1.md` ... `SPEC-177-clean-worktree.md`) are in `docs/specs/`.
 
 Findings that shape everything downstream:
 - The guard is ask-path only: a config ALLOW on the covered surfaces short-circuits the authorizer
@@ -1349,8 +1355,7 @@ Follow-ups filed: 163 (T1 scope deny link via TORIEL_SCOPE_ROOT in child env), 1
 `scope` field, default-on), 165 (T3 doctor), 166 (T6 sandbox spike), 167 (T7 read jail), 168-171
 (T4a-d parser gaps). T1 is the keystone: 165 and 166 are blocked on it.
 
-Addendum (2026-11-07): T1 is implemented on branch `phase1-scope-deny` (spec: `SPEC-163-T1.md`
-in the worktree, built from a step-0 probe of the real gate stack). The link's COVERED set is
+Addendum (2026-11-07): T1 is implemented on branch `phase1-scope-deny` (spec: `docs/specs/SPEC-163-T1.md`, built from a step-0 probe of the real gate stack). The link's COVERED set is
 `external_directory_write`, bare `external_directory` (the edit-tool family fold - discovered by
 the probe: an edit outside the cwd surfaces as the bare family, not a directional surface) and
 `path_write` defensively; in-cwd asks carry bare `write`/`bash`/`read` surfaces and defer. The

@@ -48,8 +48,10 @@ function releaseAttaches(ctx: DaemonContext, socket: net.Socket): void {
 export function createServer(ctx: DaemonContext): net.Server {
   return net.createServer((socket) => {
     const splitter = new LineSplitter();
-    socket.on("data", (chunk: Buffer) => {
-      for (const line of splitter.push(chunk.toString("utf8"))) {
+    // setEncoding keeps a multi-byte character that straddles two chunks whole (a per-chunk toString would corrupt it)
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk: string) => {
+      for (const line of splitter.push(chunk)) {
         let cmd: ClientCommand;
         try {
           cmd = JSON.parse(line) as ClientCommand;

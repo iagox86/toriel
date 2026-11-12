@@ -321,7 +321,7 @@ describe("scope guard audit", () => {
 });
 
 describe("start-up summary", () => {
-  const f = (id: string, level: Finding["level"], message: string): Finding => ({ id, level, message });
+  const f = (id: string, level: Finding["level"], message: string): Finding => ({ id, level, message, manual: "test" });
 
   it("shows required and recommended problems in full and only counts the rest", () => {
     assert.equal(summarizeFindings([]), undefined);

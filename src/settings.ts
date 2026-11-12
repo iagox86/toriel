@@ -44,7 +44,12 @@ export interface TorielSettings {
   sandbox?: "off" | "bwrap";
   /** Extra places a sandboxed command may write, absolute or ~/ paths, mainly package caches (default ~/.npm and ~/.cache; [] = none). */
   sandboxWritable?: string[];
+  /** Deleted sessions (and rewind/clear backups) stay in the trash this many days (default 90; 0 = keep forever; read daily by the daemon). */
+  trashRetentionDays?: number;
 }
+
+/** How long the trash keeps a deleted session unless the settings say otherwise. */
+export const DEFAULT_TRASH_RETENTION_DAYS = 90;
 
 /** The caches sandboxed commands may write when the settings do not say. */
 export const DEFAULT_SANDBOX_WRITABLE: readonly string[] = ["~/.npm", "~/.cache"];
@@ -72,10 +77,10 @@ export function settingsMtime(file: string = settingsFile()): number | null {
   }
 }
 
-const NUMBER_KEYS = ["summaryIntervalMinutes", "summaryMinNewMessages", "scheduleUsagePause", "scheduleDailyLimit", "permissionGrantLimit"] as const;
+const NUMBER_KEYS = ["summaryIntervalMinutes", "summaryMinNewMessages", "scheduleUsagePause", "scheduleDailyLimit", "permissionGrantLimit", "trashRetentionDays"] as const;
 const BOOLEAN_KEYS = ["warnNoPermissionSystem", "preventSleep"] as const;
 /** Number settings where 0 is a meaningful "off". */
-const ZERO_OK: readonly string[] = ["summaryIntervalMinutes", "scheduleUsagePause"];
+const ZERO_OK: readonly string[] = ["summaryIntervalMinutes", "scheduleUsagePause", "trashRetentionDays"];
 const STRING_KEYS = ["provider", "model", "thinking", "piCli", "summaryModel"] as const;
 /** The surfaces a scopeGuardAcceptedAllows entry may name ("*" is the config fallback). */
 const SCOPE_GUARD_SURFACES = ["external_directory_write", "external_directory", "*"] as const;

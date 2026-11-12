@@ -132,3 +132,37 @@ export function restoreTrashedSession(trashedTo: string, trashDir: string): stri
   fs.unlinkSync(manifest);
   return originalPath;
 }
+
+/**
+ * Remove trashed files (and their manifests) that went in more than `days` ago. The age is the
+ * manifest's `trashedAt`; an entry without a readable date is kept. Returns how many files went.
+ */
+export function pruneTrash(trashDir: string, days: number, now: Date = new Date()): number {
+  if (days <= 0) {
+    return 0;
+  }
+  let names: string[];
+  try {
+    names = fs.readdirSync(trashDir).filter((n) => n.endsWith(".jsonl.json"));
+  } catch {
+    return 0;
+  }
+  const cutoff = now.getTime() - days * 86_400_000;
+  let removed = 0;
+  for (const name of names) {
+    try {
+      const manifest = path.join(trashDir, name);
+      const m = JSON.parse(fs.readFileSync(manifest, "utf8")) as { trashedAt?: unknown };
+      const at = typeof m.trashedAt === "string" ? Date.parse(m.trashedAt) : Number.NaN;
+      if (Number.isNaN(at) || at >= cutoff) {
+        continue;
+      }
+      fs.rmSync(manifest.slice(0, -".json".length), { force: true });
+      fs.rmSync(manifest, { force: true });
+      removed++;
+    } catch {
+      // an unreadable manifest is left alone
+    }
+  }
+  return removed;
+}
