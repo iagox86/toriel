@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
-import { errText, moveFile, readJsonOr, rotateLog, writeFileAtomic, writeJsonAtomic } from "../src/util.ts";
+import { errText, fireAndReport, moveFile, readJsonOr, rotateLog, writeFileAtomic, writeJsonAtomic } from "../src/util.ts";
 
 const tmp = (): string => fs.mkdtempSync(path.join(os.tmpdir(), "toriel-util-"));
 
@@ -98,5 +98,15 @@ describe("moveFile", () => {
       throw Object.assign(new Error("EACCES"), { code: "EACCES" });
     }), /EACCES/);
     assert.equal(fs.existsSync(path.join(dir, "a")), true);
+  });
+});
+
+describe("fireAndReport", () => {
+  it("turns a rejection into a notice naming what failed, and says nothing on success", async () => {
+    const notes: string[] = [];
+    fireAndReport(Promise.reject(new Error("disk full")), "saving the group", (t) => notes.push(t));
+    fireAndReport(Promise.resolve(1), "fine", (t) => notes.push(t));
+    await new Promise((r) => setImmediate(r));
+    assert.deepEqual(notes, ["saving the group failed: disk full"]);
   });
 });

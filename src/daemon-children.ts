@@ -280,10 +280,30 @@ export class ChildManager {
 
   /** Restart an idle session's child on the same file, keeping its input attach. */
   async restart(s: DaemonSession): Promise<void> {
+    await this.restartAround(s);
+  }
+
+  /**
+   * Stop a live session's child, let `mutate` change its file while no process holds it, and start the
+   * child again on that file, keeping the input attach. With `keepModel`, the model and thinking level in
+   * use are put back afterwards: pi restores them only from a file that has messages, so a cleared (or
+   * just-restored) file would otherwise start on the defaults.
+   */
+  async restartAround(s: DaemonSession, mutate?: () => void, opts: { keepModel?: boolean; file?: string } = {}): Promise<void> {
+    const file = opts.file ?? s.sessionFile;
+    const before = opts.keepModel && s.child ? await s.child.getState() : undefined;
     const attached = s.attachedTo;
     await this.deactivate(s);
+    mutate?.();
     s.attachedTo = attached;
-    await this.start(s, { sessionFile: s.sessionFile });
+    await this.start(s, { sessionFile: file });
+    if (before && s.child) {
+      if (before.model) {
+        await s.child.setModel(before.model.provider, before.model.id);
+      }
+      await s.child.setThinkingLevel(before.thinkingLevel);
+      await this.refreshMeta(s);
+    }
   }
 
   async refreshMeta(s: DaemonSession): Promise<void> {

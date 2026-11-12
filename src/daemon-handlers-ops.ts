@@ -274,20 +274,16 @@ export async function handleClear(
     throw new Error("nothing to clear yet (no session file)");
   }
   requireNotInPi(ctx, file);
-  // pi restores a session's model and thinking level only when the file has
-  // messages, so an emptied one would start on the defaults: carry them over.
-  const before = await s.child!.getState();
-  const attached = s.attachedTo;
-  await ctx.children.deactivate(s);
-  const result = clearFile(file, TRASH_DIR);
-  log(`cleared ${file}: ${result.removed} entries -> ${result.trashedTo}`);
-  s.attachedTo = attached;
-  await ctx.children.start(s, { sessionFile: file });
-  if (before.model) {
-    await s.child!.setModel(before.model.provider, before.model.id);
-  }
-  await s.child!.setThinkingLevel(before.thinkingLevel);
-  await ctx.children.refreshMeta(s);
+  let result!: ReturnType<typeof clearFile>;
+  // an emptied file starts on pi's defaults, so the model and thinking level in use are carried over
+  await ctx.children.restartAround(
+    s,
+    () => {
+      result = clearFile(file, TRASH_DIR);
+      log(`cleared ${file}: ${result.removed} entries -> ${result.trashedTo}`);
+    },
+    { keepModel: true },
+  );
   ctx.hub.broadcastSessions();
   await sendHistory(ctx, socket, s);
   res(true, undefined, { removed: result.removed });
@@ -313,24 +309,16 @@ export async function handleRestoreClear(
   if (!backup) {
     throw new Error("nothing to restore");
   }
-  const wasLive = Boolean(s?.child);
-  const attached = s?.attachedTo;
-  const before = wasLive ? await s!.child!.getState() : undefined;
+  const doRestore = () => {
+    restoreClear(file, backup);
+    log(`restored ${file} from ${backup.trashedTo}`);
+  };
   if (s?.child) {
-    await ctx.children.deactivate(s);
-  }
-  restoreClear(file, backup);
-  log(`restored ${file} from ${backup.trashedTo}`);
-  if (s && wasLive) {
-    s.attachedTo = attached;
-    await ctx.children.start(s, { sessionFile: file });
-    // the restored file has messages again, so pi resumes its own model; keep the one in use now
-    if (before?.model) {
-      await s.child!.setModel(before.model.provider, before.model.id);
-      await s.child!.setThinkingLevel(before.thinkingLevel);
-      await ctx.children.refreshMeta(s);
-    }
+    // the restored file has messages again, so pi would resume its own model; keep the one in use now
+    await ctx.children.restartAround(s, doRestore, { keepModel: true, file });
     await sendHistory(ctx, socket, s);
+  } else {
+    doRestore();
   }
   ctx.hub.broadcastSessions();
   res(true, undefined, { entries: backup.entries });
