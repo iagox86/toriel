@@ -3,8 +3,8 @@
 // wl-clipboard on Wayland, xclip on X11. Neither is a hard dependency; without
 // one, `available` is false and callers say so.
 import { execFile, spawn } from "node:child_process";
-import * as fs from "node:fs";
 import * as path from "node:path";
+import { onPathDirs } from "./util.ts";
 
 export type Selection = "clipboard" | "primary";
 
@@ -70,14 +70,7 @@ export function imageTypeOf(types: readonly string[]): string | undefined {
 
 /** Whether `cmd` is an executable on the PATH. */
 export function onPath(cmd: string, env: NodeJS.ProcessEnv = process.env): boolean {
-  return (env.PATH ?? "").split(path.delimiter).some((dir) => {
-    try {
-      fs.accessSync(path.join(dir, cmd), fs.constants.X_OK);
-      return true;
-    } catch {
-      return false;
-    }
-  });
+  return onPathDirs(cmd, (env.PATH ?? "").split(path.delimiter));
 }
 
 const TOOLS = {

@@ -8,10 +8,9 @@ AGENTS.md (imported above) holds the commands, layout, conventions and job-board
 
 ## Running a single test
 
-Node v26 is required and is not the default (`~/.nvm/versions/node/v26.12.0/bin`). In fish:
+Any node >= 22.18 on PATH works; do not prefix PATH. (`bin/toriel` finds an nvm node for toriel itself, but `node --test` and `npm test` use whatever is on PATH, so on a machine whose default node is older, put a suitable nvm node first on PATH for those.)
 
 ```fish
-set -x PATH ~/.nvm/versions/node/v26.12.0/bin $PATH
 node --test test/commands.test.ts
 node --test --test-name-pattern="some behavior" test/daemon.test.ts
 ```

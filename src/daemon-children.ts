@@ -37,7 +37,6 @@ export interface StartOptions {
   agent?: AgentProfile;
 }
 
-const errorText = (err: unknown): string => (errText(err));
 
 export class ChildManager {
   private readonly hub: ClientHub;
@@ -134,7 +133,7 @@ export class ChildManager {
     try {
       await client.setSteeringMode(cfg.steeringMode);
     } catch (err) {
-      log(`setSteeringMode(${cfg.steeringMode}) failed: ${errorText(err)}`);
+      log(`setSteeringMode(${cfg.steeringMode}) failed: ${errText(err)}`);
     }
     return client;
   }
@@ -184,7 +183,8 @@ export class ChildManager {
     // installed since never reach the model. +name entries join them to that loadout. A
     // profile that lists tools owns the loadout (pi forbids mixing the two forms).
     if (!agent?.tools) {
-      args.push("--tools", TORIEL_TOOLS.filter((t) => this.mayDelegate(s) || !SPAWN_TOOLS.includes(t.slice(1))).join(","));
+      const mayDelegate = this.mayDelegate(s); // reads lineage.json: once per start, not once per tool
+      args.push("--tools", TORIEL_TOOLS.filter((t) => mayDelegate || !SPAWN_TOOLS.includes(t.slice(1))).join(","));
     }
     if (isNew && cfg.thinking && !agent?.thinking) {
       args.push("--thinking", cfg.thinking);
@@ -331,7 +331,7 @@ export class ChildManager {
       const commands = await s.child.getCommands();
       s.sessionBridge = commands.some((c) => c.name === INJECT_COMMAND);
     } catch (err) {
-      log(`session ${s.id}: could not look for the session bridge: ${errorText(err)}`);
+      log(`session ${s.id}: could not look for the session bridge: ${errText(err)}`);
       s.sessionBridge = false;
     }
     return s.sessionBridge === true;
@@ -372,7 +372,7 @@ export class ChildManager {
         this.announceQueue(s);
         if (lost && s.child) {
           // it never entered the transcript: hand it to pi's own queue so it is not lost
-          s.child.prompt(lost.text, undefined, "steer").catch((err: unknown) => log(`session ${s.id}: steering fallback failed: ${errorText(err)}`));
+          s.child.prompt(lost.text, undefined, "steer").catch((err: unknown) => log(`session ${s.id}: steering fallback failed: ${errText(err)}`));
         }
         break;
       }
@@ -389,7 +389,7 @@ export class ChildManager {
       try {
         this.lastCommands = await s.child.getCommands();
       } catch (err) {
-        log(`get_commands failed: ${errorText(err)}`);
+        log(`get_commands failed: ${errText(err)}`);
       }
     }
     return this.lastCommands;

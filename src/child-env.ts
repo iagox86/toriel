@@ -3,12 +3,13 @@
 // are); a `!command` runs in the daemon, not in pi, so it must be given the same
 // ones or it would see the daemon's environment instead (#100).
 import { delimiter, join } from "node:path";
+import { SCOPE_ENV, SCOPE_MODE_ENV } from "../pi/extensions/lib/scope-root.ts";
 import { piAgentDir } from "./pi-dir.ts";
 import type { ScopeAssignment } from "./scope-root.ts";
 import { DEFAULT_SANDBOX_WRITABLE, type TorielSettings } from "./settings.ts";
 
 /** The daemon-owned variables that must never come from the daemon's own environment. */
-const OWNED_KEYS = ["TORIEL_SCOPE_ROOT", "TORIEL_SCOPE_MODE", "TORIEL_SANDBOX", "TORIEL_SANDBOX_RW", "TORIEL_SHARED_DIR"];
+const OWNED_KEYS = [SCOPE_ENV, SCOPE_MODE_ENV, "TORIEL_SANDBOX", "TORIEL_SANDBOX_RW", "TORIEL_SHARED_DIR"];
 
 /** What a child gets beyond its scope: the shared directory, and (only when set) the sandbox switch with its extra writable roots. */
 export interface ChildExtras {
@@ -55,8 +56,8 @@ export function childEnv(s: EnvSession, sock: string, base: NodeJS.ProcessEnv = 
     env.TORIEL_SESSION_ID = s.sessionId;
   }
   if (scope !== undefined) {
-    env.TORIEL_SCOPE_ROOT = scope.root;
-    env.TORIEL_SCOPE_MODE = scope.mode;
+    env[SCOPE_ENV] = scope.root;
+    env[SCOPE_MODE_ENV] = scope.mode;
   }
   if (extras.sharedDir !== undefined) {
     env.TORIEL_SHARED_DIR = extras.sharedDir;

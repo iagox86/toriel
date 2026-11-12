@@ -33,12 +33,8 @@ import { DIALOG_METHODS, HISTORY_FILE, KEY_LOG, PROFILE } from "./config.ts";
 import { DaemonLink } from "./daemon-link.ts";
 import { buildLayouts } from "./layout.ts";
 
-/** Reconnect tries (backoff 0.5s doubling to 5s) before the controller gives up and exits. */
 import { dialogOwner } from "./dialog-route.ts";
 import { DEFAULT_GRANT_DURATIONS, type DialogRequest, DialogPanel, isTextDialog, withGrantRows, withOrigin } from "./dialogs.ts";
-
-// How long a reason typed on the select waits for the chained input dialog.
-const REASON_FRESH_MS = 10_000;
 import { configureEditorKeys, InputEditor, } from "./editor.ts";
 import { lastLine } from "./format.ts";
 import { RewindPicker } from "./rewind-picker.ts";
@@ -105,6 +101,8 @@ function markLatestRun(view: SessionView): void {
 }
 
 const SWITCHER_HISTORY = "<switcher>";
+// How long a reason typed on the select waits for the chained input dialog.
+const REASON_FRESH_MS = 10_000;
 
 class Controller {
   tui: TuiAltScreen;
@@ -1002,6 +1000,11 @@ function main(): void {
   const controller = new Controller();
   process.on("SIGINT", () => controller.dispose());
   process.on("SIGTERM", () => controller.dispose());
+  // A promise nobody awaited that rejects (a failed save, a dead socket) is reported, not fatal: node's default would
+  // turn it into an uncaught exception and take the whole TUI down.
+  process.on("unhandledRejection", (reason) => {
+    controller.notify(`something went wrong: ${errText(reason)}`);
+  });
   process.on("uncaughtException", (err) => {
     try {
       controller.tui.stop();

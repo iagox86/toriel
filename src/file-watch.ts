@@ -19,6 +19,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { WatchEvents } from "./when.ts";
+import { errText } from "./util.ts";
 
 export interface WatchSpec {
   /** Absolute path of the file or directory. */
@@ -122,7 +123,7 @@ export class FileWatcher {
       watcher = this.deps.watch(dir, (event, filename) => this.onEvent(id, event, filename));
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
-      throw new Error(code === "ENOENT" ? `${dir} does not exist` : code === "ENOSPC" ? "the system's limit on file watches is reached (fs.inotify.max_user_watches)" : `cannot watch ${dir}: ${err instanceof Error ? err.message : String(err)}`);
+      throw new Error(code === "ENOENT" ? `${dir} does not exist` : code === "ENOSPC" ? "the system's limit on file watches is reached (fs.inotify.max_user_watches)" : `cannot watch ${dir}: ${errText(err)}`);
     }
     const entry: Armed = { spec, dir, ino: this.deps.inode(dir), watcher, onChange };
     watcher.on("error", (err) => {

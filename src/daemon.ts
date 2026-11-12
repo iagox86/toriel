@@ -17,7 +17,8 @@
 import "./migrate-on-start.ts";
 import * as fs from "node:fs";
 import { buildInfo } from "./build-id.ts";
-import { LOG, PERMISSIONS_FILE, PID_FILE, PROFILE, SCHEDULES_FILE, SHARED_DIR, SOCK } from "./config.ts";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { LOG, PERMISSIONS_FILE, PID_FILE, PROFILE, SCHEDULES_FILE, SHARED_DIR, SOCK, TRASH_DIR } from "./config.ts";
 import { BridgeTracker } from "./daemon-bridge.ts";
 import { ChildManager } from "./daemon-children.ts";
 import type { DaemonContext } from "./daemon-context.ts";
@@ -36,10 +37,12 @@ import { Presence } from "./presence.ts";
 import { DEFAULT_LIMITS, Scheduler } from "./scheduler.ts";
 import { SubagentManager } from "./daemon-subagents.ts";
 import { PollBackoff } from "./poll-backoff.ts";
+import { pruneSessionState } from "./state-prune.ts";
+import { pruneTrash } from "./trash.ts";
 import { DEFAULT_SUBAGENT_LIMITS, keepMsFrom } from "./subagents.ts";
 import { needsAwake, SleepInhibitor } from "./sleep-inhibit.ts";
 import { collectFindings } from "./doctor.ts";
-import { loadSettings } from "./settings.ts";
+import { DEFAULT_TRASH_RETENTION_DAYS, loadSettings } from "./settings.ts";
 import { PROTOCOL, type UsageReport } from "./shared.ts";
 import { errText, rotateLog } from "./util.ts";
 
@@ -92,6 +95,24 @@ function createContext(shutdown: () => void): DaemonContext {
   children.onAssistantMessage = (s, message) => ctx.subagents.onMessage(s, message);
   children.onStopped = (s) => ctx.subagents.onStopped(s);
   return ctx;
+}
+
+async function pruneStartupState(): Promise<void> {
+  try {
+    const infos = await SessionManager.listAll();
+    // trash first, so a profile whose trash entry just expired is dropped in the same pass
+    const expired = pruneTrash(TRASH_DIR, loadSettings().settings.trashRetentionDays ?? DEFAULT_TRASH_RETENTION_DAYS);
+    if (expired > 0) {
+      log(`trash: removed ${expired} file(s) older than the retention period`);
+    }
+    const trashed = fs.existsSync(TRASH_DIR) ? fs.readdirSync(TRASH_DIR).filter((f) => f.endsWith(".jsonl")) : [];
+    const dropped = pruneSessionState({ files: infos.map((i) => ({ path: i.path, id: i.id })), trashed });
+    if (dropped.agents > 0 || dropped.handled > 0) {
+      log(`pruned stale state: ${dropped.agents} session profile(s), ${dropped.handled} handled path(s)`);
+    }
+  } catch (err) {
+    log(`pruning stale state failed: ${errText(err)}`);
+  }
 }
 
 async function main(): Promise<void> {
@@ -186,6 +207,10 @@ async function main(): Promise<void> {
 
   // the log lives for as long as the daemon does; keep it bounded
   rotateLog(LOG);
+  // drop state keyed by sessions that no longer exist (profiles, handled paths): once per start, a while after it, so the
+  // scan of every session file never competes with the first attach
+  setTimeout(() => void pruneStartupState(), 30_000).unref();
+  setInterval(() => void pruneStartupState(), 24 * 3_600_000).unref();
   const logKeeper = setInterval(() => rotateLog(LOG), 10 * 60_000);
   logKeeper.unref();
 

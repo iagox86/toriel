@@ -102,11 +102,13 @@ function run(args: string[], opts: { cwd?: string; timeoutMs?: number }): Promis
       child.kill("SIGKILL");
       reject(new Error(`no answer after ${Math.round(limit / 1000)}s`));
     }, limit);
-    child.stdout.on("data", (d: Buffer) => {
-      out += d.toString();
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (d: string) => {
+      out += d;
     });
-    child.stderr.on("data", (d: Buffer) => {
-      err += d.toString();
+    child.stderr.on("data", (d: string) => {
+      err += d;
     });
     child.on("error", (e) => {
       clearTimeout(timer);

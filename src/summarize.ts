@@ -174,11 +174,13 @@ export function runSummarizer(opts: SummarizerOptions): Promise<string> {
       child.kill("SIGKILL");
       reject(new Error(`${opts.model} timed out after ${Math.round((opts.timeoutMs ?? SUMMARY_TIMEOUT_MS) / 1000)}s`));
     }, opts.timeoutMs ?? SUMMARY_TIMEOUT_MS);
-    child.stdout.on("data", (d: Buffer) => {
-      out += d.toString();
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (d: string) => {
+      out += d;
     });
-    child.stderr.on("data", (d: Buffer) => {
-      err += d.toString();
+    child.stderr.on("data", (d: string) => {
+      err += d;
     });
     child.on("error", (e) => {
       clearTimeout(timer);

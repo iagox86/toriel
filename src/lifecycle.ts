@@ -43,8 +43,9 @@ export function probeDaemon(timeoutMs = 1500): Promise<{ up: boolean; hello?: He
     socket.setTimeout(timeoutMs, () => done({ up: false }));
     socket.once("error", () => done({ up: false }));
     socket.once("connect", () => socket.write(encodeLine({ type: "list" })));
-    socket.on("data", (chunk: Buffer) => {
-      for (const line of splitter.push(chunk.toString("utf8"))) {
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk: string) => {
+      for (const line of splitter.push(chunk)) {
         try {
           const msg = JSON.parse(line) as DaemonMessage;
           if (msg.type === "hello") {

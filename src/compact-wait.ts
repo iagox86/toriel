@@ -1,4 +1,5 @@
 // Manual compaction that survives pi's RPC client giving up on slow replies.
+import { errText } from "./util.ts";
 
 /** The slice of pi's RpcClient that compaction needs. */
 export interface CompactingChild {
@@ -36,7 +37,7 @@ export async function compactAndWait(
   try {
     return await child.compact(instructions);
   } catch (err) {
-    if (!/^Timeout waiting for response to compact/.test(err instanceof Error ? err.message : "")) {
+    if (!/^Timeout waiting for response to compact/.test(errText(err))) {
       throw err;
     }
     const end = await ended;

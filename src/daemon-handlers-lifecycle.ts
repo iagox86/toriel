@@ -11,6 +11,7 @@ import type { DaemonSession } from "./daemon-session.ts";
 import { forkSnapshot } from "./fork-snapshot.ts";
 import { forkNote, recordFork, sessionIdOfFile } from "./lineage.ts";
 import { wasHandled } from "./handled-files.ts";
+import { profileOfSession } from "./session-agents.ts";
 import { log } from "./log.ts";
 import { restoreTrashedSession, trashSessionFile } from "./trash.ts";
 import { errText } from "./util.ts";
@@ -109,8 +110,6 @@ export async function handleSpawn(
     ? ctx.registry.byFile(cmd.sessionFile)
     : undefined;
   const s = existing ?? ctx.registry.create(cmd.cwd, cmd.sessionFile);
-  if (!existing) {
-  }
   if (s.child && s.attachedTo && s.attachedTo !== socket) {
     throw new Error("session is attached to another controller");
   }
@@ -350,19 +349,23 @@ export async function handleAdopt(
     // the same arguments as any other start (extensions, tools, profile): a fork built by hand
     // loaded none of toriel's extensions, so the inherited toriel_* tools were dropped
     // the fork learns its parent now; its own id is not known until it starts
-    const { args, cfg } = ctx.children.startArgs(s, {
+    // through start(), so a fork comes up the way every other session does (recorded as handled, bridge detected)
+    await ctx.children.start(s, {
       forkPath: snapshot?.path ?? cmd.path,
       name: cmd.name,
+      // a fork of a profiled session (a subagent, say) is the same kind of agent: same tools and scope, kept across respawns
+      agent: cmd.fork ? profileOfSession(parentId) : undefined,
       appendSystemPrompt: parentId ? forkNote({ id: parentId, name: parentName, file: parentFile }) : undefined,
     });
-    const client = await ctx.children.launch(s, args, cfg);
-    s.child = client;
-    s.dead = false;
     if (cmd.name) {
-      await client.setSessionName(cmd.name);
+      await s.child?.setSessionName(cmd.name);
+      await ctx.children.refreshMeta(s);
     }
-    await ctx.children.refreshMeta(s);
     log(`session ${s.id} adopted (forked from ${cmd.path}${snapshot && snapshot.dropped > 0 ? `, without its last ${snapshot.dropped} unfinished entries` : ""})`);
+  } catch (err) {
+    // do not leave a half-registered session (attached, no child) behind
+    s.attachedTo = undefined;
+    throw err;
   } finally {
     snapshot?.cleanup();
     s.spawning = false;

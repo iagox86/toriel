@@ -129,9 +129,9 @@ describe("doctor checks", () => {
     for (const bad of ["default", "codemode", "deferred"]) {
       const [f] = grade(bad);
       assert.equal(f?.level, "feature", bad);
-      assert.match(f?.message ?? "", /advisory-diff, code-review and git-archaeology agents need an MCP server named "git".*"exposure": "direct"/, bad);
+      assert.match(f?.message ?? "", /advisory-diff, code-review and git-archaeology agents need the "git" MCP server.*"exposure": "direct"/, bad);
     }
-    assert.match(grade("none")[0]?.message ?? "", /MCP server "git" is not configured/);
+    assert.match(grade("none")[0]?.message ?? "", /the "git" MCP server is missing from .*mcp\.json/);
   });
 
   it("asks for pi-web-access when it is missing from pi's packages, since the research-web agent has no web tools without it", () => {
@@ -148,10 +148,10 @@ describe("doctor checks", () => {
     assert.deepEqual(grade("mcp-ghidra-direct", {}), []);
     const [gdb] = grade("mcp-gdb-direct", { gdbMcp: "codemode" });
     assert.equal(gdb?.level, "feature");
-    assert.match(gdb?.message ?? "", /crash-analysis and debug agents need an MCP server named "gdb".*"exposure": "direct"/);
+    assert.match(gdb?.message ?? "", /crash-analysis and debug agents need the "gdb" MCP server.*"exposure": "direct"/);
     assert.match(gdb?.fix?.summary ?? "", /set "exposure": "direct" on the "gdb" entry/, "the entry exists, only its exposure is wrong: fixable");
     const [missing] = grade("mcp-ghidra-direct", { ghidraMcp: "none" });
-    assert.match(missing?.message ?? "", /binary-diff, re-explain, re-find and re-trace agents need an MCP server named "ghidra".*MCP server "ghidra" is not configured/);
+    assert.match(missing?.message ?? "", /^the "ghidra" MCP server is missing from .*mcp\.json: the binary-diff, re-explain, re-find and re-trace agents need it/);
     assert.equal(missing?.fix, undefined, "a missing entry needs the user's own command and args: no automatic fix");
     assert.deepEqual(grade("mcp-git-direct", { gdbMcp: "codemode", ghidraMcp: "none" }), [], "one server's problem is not another's");
   });
@@ -181,6 +181,26 @@ describe("doctor report", () => {
     assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants are switched on[\s\S]*\[fixable: add "toriel-grants" to "authorizerChain"\]/);
     assert.match(text, /Hardening[\s\S]*PROBLEM {2}an agent cannot edit the permission grants file/);
     assert.match(text, /2 problems, 2 fixable automatically \(toriel doctor --fix, or \/doctor --fix\)\.$/);
+  });
+
+  it("says for every problem whether it is fixable or manual, with the reason, and counts the manual ones", () => {
+    const text = renderDoctor(runDoctor({ ...setup({ noInhibit: true, config: {} }).opts }));
+    assert.match(text, /systemd-inhibit is not on PATH[^\n]*\[manual: installing systemd is a system package install/);
+    assert.match(text, /\[fixable: add "toriel-grants" to "authorizerChain"\]/);
+    assert.match(text, /3 problems, 2 fixable automatically \(toriel doctor --fix, or \/doctor --fix\), 1 needs you \(see "manual" above\)\.$/);
+    // nothing in the report is left without one of the two labels
+    for (const line of text.split("\n").filter((l) => /^ {11}\S/.test(l))) {
+      assert.match(line, /\[(fixable|manual): /, line);
+    }
+  });
+
+  it("gives every finding a fix or a stated reason there is none", () => {
+    // the Finding type demands one of the two at compile time; this catches an empty reason or a fix that has no summary
+    const findings = collectFindings({ ...setup({ noInhibit: true, config: {} }).opts, probeBwrap: () => "bwrap is not installed" });
+    assert.ok(findings.length > 0);
+    for (const f of findings) {
+      assert.ok(f.fix ? f.fix.summary.length > 0 : (f.manual ?? "").length > 0, `${f.id} has neither a fix nor a manual reason`);
+    }
   });
 
   it("leaves the passing checks out of the compact report and counts them", () => {

@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { clearFile, rewindFile } from "../src/rewind.ts";
-import { listTrashedSessions, restoreTrashedSession, trashSessionFile } from "../src/trash.ts";
+import { listTrashedSessions, pruneTrash, restoreTrashedSession, trashSessionFile } from "../src/trash.ts";
 
 let dir: string;
 
@@ -100,5 +100,34 @@ describe("deleted sessions", () => {
     fs.writeFileSync(file, "new session\n");
     assert.throws(() => restoreTrashedSession(trashed, trash), /already exists/);
     assert.throws(() => restoreTrashedSession(file, trash), /not a file in the trash/);
+  });
+});
+
+describe("pruneTrash", () => {
+  it("removes trashed files older than the retention and keeps newer ones", () => {
+    const trash = path.join(dir, "trash");
+    const old = path.join(dir, "old.jsonl");
+    const fresh = path.join(dir, "fresh.jsonl");
+    fs.writeFileSync(old, "{}\n");
+    fs.writeFileSync(fresh, "{}\n");
+    const oldTo = trashSessionFile(old, trash);
+    const freshTo = trashSessionFile(fresh, trash);
+    fs.writeFileSync(`${oldTo}.json`, JSON.stringify({ originalPath: old, trashedAt: "2026-06-01T00:00:00.000Z" }));
+    assert.equal(pruneTrash(trash, 90, new Date("2026-11-12T00:00:00.000Z")), 1);
+    assert.equal(fs.existsSync(oldTo), false);
+    assert.equal(fs.existsSync(`${oldTo}.json`), false);
+    assert.equal(fs.existsSync(freshTo), true);
+  });
+
+  it("keeps everything when the retention is 0 or the manifest has no date", () => {
+    const trash = path.join(dir, "trash");
+    const file = path.join(dir, "a.jsonl");
+    fs.writeFileSync(file, "{}\n");
+    const to = trashSessionFile(file, trash);
+    fs.writeFileSync(`${to}.json`, JSON.stringify({ originalPath: file }));
+    assert.equal(pruneTrash(trash, 90, new Date("2030-01-01")), 0);
+    fs.writeFileSync(`${to}.json`, JSON.stringify({ originalPath: file, trashedAt: "2000-01-01T00:00:00Z" }));
+    assert.equal(pruneTrash(trash, 0), 0);
+    assert.equal(fs.existsSync(to), true);
   });
 });

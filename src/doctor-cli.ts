@@ -90,6 +90,7 @@ export async function doctorMain(args: readonly string[], io: DoctorIo, opts: Do
     try {
       io.write(`${doctor.previewFixes(file, fixes)}\n`);
     } catch (err) {
+      // not errText from util.ts: this file may import nothing but node modules and preflight (see the header)
       io.write(`  cannot change this file: ${err instanceof Error ? err.message : err}\n`);
       continue;
     }

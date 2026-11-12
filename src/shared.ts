@@ -357,20 +357,24 @@ export function encodeLine(obj: unknown): string {
 
 export class LineSplitter {
   private buf = "";
+  /** Where the last scan for a newline stopped, so a long line arriving in many chunks is scanned once, not once per chunk. */
+  private scanned = 0;
 
   push(chunk: string): string[] {
     this.buf += chunk;
     const lines: string[] = [];
-    for (let idx = this.buf.indexOf("\n"); idx !== -1; idx = this.buf.indexOf("\n")) {
+    for (let idx = this.buf.indexOf("\n", this.scanned); idx !== -1; idx = this.buf.indexOf("\n", this.scanned)) {
       let line = this.buf.slice(0, idx);
       if (line.endsWith("\r")) {
         line = line.slice(0, -1);
       }
       this.buf = this.buf.slice(idx + 1);
+      this.scanned = 0;
       if (line.length > 0) {
         lines.push(line);
       }
     }
+    this.scanned = this.buf.length;
     return lines;
   }
 }

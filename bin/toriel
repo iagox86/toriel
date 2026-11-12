@@ -1,23 +1,35 @@
 #!/bin/sh
 # Launcher, so toriel runs from any directory: symlink this file onto PATH
 # (ln -s ~/projects/toriel/bin/toriel ~/.local/bin/toriel). toriel is TypeScript
-# run directly by node and needs the major version in .nvmrc; when the node on
-# PATH is older (nvm's default often is), use that version from nvm's directory
-# and put it first on PATH, since the daemon starts pi through PATH too.
-# The working directory is left alone: it is where new sessions start.
+# run directly by node and needs at least the version in .nvmrc (a floor, not a
+# pin); when the node on PATH is older (nvm's default often is), use the newest
+# nvm version of that major or later and put it first on PATH, since the daemon
+# starts pi through PATH too. The working directory is left alone: it is where
+# new sessions start.
 root=$(dirname "$(dirname "$(readlink -f "$0")")")
-want=$(tr -d 'v \n' < "$root/.nvmrc" 2>/dev/null | cut -d. -f1)
-want=${want:-26}
+floor=$(tr -d 'v \n' < "$root/.nvmrc" 2>/dev/null)
+floor=${floor:-22.18.0}
+want=${floor%%.*}
 
-major() {
-  "$1" --version 2>/dev/null | sed -n 's/^v\([0-9][0-9]*\)\..*/\1/p'
+# "major minor" of a node binary, or nothing when it does not run
+version() {
+  "$1" --version 2>/dev/null | sed -n 's/^v\([0-9][0-9]*\)\.\([0-9][0-9]*\)\..*/\1 \2/p'
 }
 
-have=$(major node)
-if [ -z "$have" ] || [ "$have" -lt "$want" ]; then
+# succeeds when "major minor" ($1 $2) is at least the floor
+meets() {
+  floor_minor=${floor#*.}
+  floor_minor=${floor_minor%%.*}
+  [ "$1" -gt "$want" ] || { [ "$1" -eq "$want" ] && [ "$2" -ge "${floor_minor:-0}" ]; }
+}
+
+have=$(version node)
+# shellcheck disable=SC2086
+if [ -z "$have" ] || ! meets $have; then
   found=$(ls -d "${NVM_DIR:-$HOME/.nvm}/versions/node/v$want."*/bin 2>/dev/null | sort -V | tail -n 1)
-  if [ -z "$found" ]; then
-    echo "toriel needs node $want or newer (found: ${have:-none}); install it with: nvm install $want" >&2
+  # shellcheck disable=SC2086
+  if [ -z "$found" ] || ! meets $(version "$found/node"); then
+    echo "toriel needs node $floor or newer (found: $(echo "${have:-none}" | tr ' ' .)); install it with: nvm install $want" >&2
     exit 1
   fi
   PATH="$found:$PATH"

@@ -45,9 +45,14 @@ export function ask(sock: string, cmd: Record<string, unknown>, timeoutMs = TIME
     }
     signal?.addEventListener("abort", () => done(() => reject(new Error("cancelled"))), { once: true });
     s.on("connect", () => s.write(`${JSON.stringify({ ...cmd, id })}\n`));
-    s.on("data", (chunk) => {
-      buf += chunk.toString("utf8");
-      for (const line of buf.split("\n")) {
+    // setEncoding keeps a multi-byte character that straddles two chunks whole; only complete lines are parsed, once each
+    // (extensions cannot import src/shared.ts, so this is LineSplitter's job done inline)
+    s.setEncoding("utf8");
+    s.on("data", (chunk: string) => {
+      buf += chunk;
+      for (let idx = buf.indexOf("\n"); idx !== -1; idx = buf.indexOf("\n")) {
+        const line = buf.slice(0, idx);
+        buf = buf.slice(idx + 1);
         try {
           const msg = JSON.parse(line) as { type?: string; id?: string; ok?: boolean; error?: string; data?: Record<string, unknown> };
           if (msg.type === "response" && msg.id === id) {
@@ -55,7 +60,7 @@ export function ask(sock: string, cmd: Record<string, unknown>, timeoutMs = TIME
             return;
           }
         } catch {
-          // a partial line; wait for more
+          // not JSON (a blank line); skip it
         }
       }
     });
