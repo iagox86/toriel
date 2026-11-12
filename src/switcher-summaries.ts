@@ -1,5 +1,6 @@
 // One-line session summaries in the switcher: the unattended pass that runs
 // while toriel is open, and the /summarize command.
+import * as fs from "node:fs";
 import type { Invocation } from "./cli.ts";
 import type { GroupsFile } from "./groups.ts";
 import { loadGroups, saveGroups } from "./groups.ts";
@@ -25,6 +26,7 @@ export class SwitcherSummaries {
   /** The reason the last unattended summary pass failed, so it is announced once. */
   private autoError: string | null = null;
   private autoLast = 0;
+  private readonly counts = new Map<string, { stamp: string; messages: number }>();
 
   private readonly h: Host;
   private readonly deps: SummaryDeps;
@@ -50,6 +52,19 @@ export class SwitcherSummaries {
     timer.unref?.();
   }
 
+  /** Messages in a session file as the summaries count them. Parsing is the cost, so a file that has not changed (size, mtime) is not parsed again. */
+  private messageCount(file: string): number {
+    const st = fs.statSync(file);
+    const stamp = `${st.mtimeMs}:${st.size}`;
+    const hit = this.counts.get(file);
+    if (hit?.stamp === stamp) {
+      return hit.messages;
+    }
+    const messages = transcriptOf(file, 1).messages;
+    this.counts.set(file, { stamp, messages });
+    return messages;
+  }
+
   private async autoTick(): Promise<void> {
     const cfg = loadSettings().settings;
     const minutes = cfg.summaryIntervalMinutes ?? DEFAULT_INTERVAL_MINUTES;
@@ -63,7 +78,7 @@ export class SwitcherSummaries {
       try {
         return needsResummary({
           entry: saved[info.id],
-          messages: transcriptOf(info.path, 1).messages,
+          messages: this.messageCount(info.path),
           modifiedMs: info.modified,
           now: Date.now(),
           streaming: live.get(info.path)?.streaming ?? false,
