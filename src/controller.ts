@@ -84,7 +84,7 @@ import {
   type SessionView,
   showRawError,
 } from "./transcript.ts";
-import { errText } from "./util.ts";
+import { errText, fireAndReport } from "./util.ts";
 
 configureEditorKeys();
 const editorTheme: EditorTheme = {
@@ -240,8 +240,8 @@ class Controller {
 
     this.switcher.heightProvider = () => this.tui.terminal.rows || 24;
     this.switcher.debugLog = KEY_LOG;
-    this.switcher.onShiftSession = (delta, s) => void this.switching.moveSession(delta, s);
-    this.switcher.onShiftGroup = (delta, title) => void this.switching.moveGroup(delta, title);
+    this.switcher.onShiftSession = (delta, s) => fireAndReport(this.switching.moveSession(delta, s), "moving the session", (t) => this.notify(t));
+    this.switcher.onShiftGroup = (delta, title) => fireAndReport(this.switching.moveGroup(delta, title), "moving the group", (t) => this.notify(t));
   }
 
   async run(): Promise<void> {

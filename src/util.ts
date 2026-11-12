@@ -7,6 +7,15 @@ export function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/**
+ * Start `work` without waiting for it, and say so through `notify` if it fails. For a key press or command
+ * that kicks off async work: a rejection nobody handles would otherwise reach the controller's catch-all
+ * (a generic "something went wrong") or, for the daemon, end the process.
+ */
+export function fireAndReport(work: Promise<unknown>, what: string, notify: (text: string) => void): void {
+  work.catch((err: unknown) => notify(`${what} failed: ${errText(err)}`));
+}
+
 /** Replace `file` in one step (temp file in the same directory, then rename), so a crash never leaves it half written. */
 export function writeFileAtomic(file: string, text: string, mode?: number): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });

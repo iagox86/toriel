@@ -32,7 +32,7 @@ import { itemsFromFile, newView } from "./transcript.ts";
 import { runDoctorCommand } from "./doctor-commands.ts";
 import { runPermissions } from "./permission-commands.ts";
 import { operateSchedule, showSchedules } from "./schedule-commands.ts";
-import { errText } from "./util.ts";
+import { errText, fireAndReport } from "./util.ts";
 
 const LOCK_BITS = 64 | 128; // kitty caps_lock / num_lock, reported in the modifier field
 
@@ -82,6 +82,11 @@ export class SwitcherActions {
     this.h = host;
     this.filter = new SwitcherFilter(host, () => this.refresh());
     this.summaries = new SwitcherSummaries(host, { refresh: () => this.refresh(), isOpen: () => this.isOpen, groups: () => this.groups });
+  }
+
+  /** Run key-press work in the background; a failure becomes a notice. */
+  private fire(work: Promise<unknown>, what: string): void {
+    fireAndReport(work, what, (t) => this.h.notify(t));
   }
 
   /** `rescan` re-reads the session files on open: the controller no longer polls them while the switcher is closed. */
@@ -682,7 +687,7 @@ export class SwitcherActions {
       if (target && (target.descendants ?? 0) > 0 && this.isFolded(target)) {
         this.setSessionFolded(target, false);
       } else if (target) {
-        void this.enter(target);
+        this.fire(this.enter(target), "opening the session");
       } else if (this.h.switcher.currentIsHeader()) {
         this.setCollapsed(this.h.switcher.currentHeaderTitle(), false);
       } else {
@@ -692,24 +697,24 @@ export class SwitcherActions {
       return true;
     }
     if (matchesKey(data, Key.ctrl("n"))) {
-      void this.newSession();
+      this.fire(this.newSession(), "new session");
       return true;
     }
     if (matchesKey(data, Key.ctrl("x"))) {
       if (this.h.switcher.currentIsHeader()) {
-        void this.deleteGroupIfEmpty(this.h.switcher.currentHeaderTitle());
+        this.fire(this.deleteGroupIfEmpty(this.h.switcher.currentHeaderTitle()), "deleting the group");
         return true;
       }
       const target = this.h.switcher.current();
       if (target) {
-        void this.remove(target);
+        this.fire(this.remove(target), "removing the session");
       }
       return true;
     }
     if (matchesKey(data, Key.ctrl("k"))) {
       const target = this.sessionRow("stop");
       if (target) {
-        void this.stop(target);
+        this.fire(this.stop(target), "stopping the session");
       }
       return true;
     }
@@ -797,18 +802,18 @@ export class SwitcherActions {
     // The chat box doubles as the switcher's command line.
     this.h.editor.setText("");
     if (trimmed.startsWith("/")) {
-      void this.runCommand(trimmed, this.h.switcher.current());
+      this.fire(this.runCommand(trimmed, this.h.switcher.current()), "the command");
       return;
     }
     // plain text = the first message of a new session
     if (trimmed.length > 0) {
-      void this.newSession(trimmed);
+      this.fire(this.newSession(trimmed), "new session");
       return;
     }
     // enter opens the highlighted session; on a group header it folds or unfolds the group
     const target = this.h.switcher.current();
     if (target) {
-      void this.enter(target);
+      this.fire(this.enter(target), "opening the session");
       return;
     }
     const folded = this.h.switcher.currentHeaderFolded();
