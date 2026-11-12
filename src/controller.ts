@@ -369,7 +369,7 @@ class Controller {
       case "digest": {
         const key = this.keyById(msg.session);
         if (key && drifted(this.views.get(key)?.messages, msg)) {
-          this.send({ type: "resync", session: msg.session });
+          this.send({ type: "resync", session: msg.session, seen: this.views.get(key)?.messages });
         }
         return;
       }

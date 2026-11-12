@@ -6,7 +6,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { findAgent } from "./agents.ts";
 import { TRASH_DIR } from "./config.ts";
 import type { Cmd, DaemonContext, Responder } from "./daemon-context.ts";
-import { sendHistory } from "./daemon-history.ts";
+import { historyOf, sendHistory } from "./daemon-history.ts";
 import type { DaemonSession } from "./daemon-session.ts";
 import { forkSnapshot } from "./fork-snapshot.ts";
 import { forkNote, recordFork, sessionIdOfFile } from "./lineage.ts";
@@ -229,8 +229,15 @@ export async function handleRename(
 /** Replace one controller's view of a live session with its current history. Needs a running child; changes nothing in the session. */
 export async function handleResync(ctx: DaemonContext, cmd: Cmd<"resync">, socket: net.Socket, res: Responder): Promise<void> {
   const s = ctx.registry.live(cmd.session);
-  log(`session ${s.id}: controller asked for a resync (its view drifted from pi's message count)`);
-  await sendHistory(ctx, socket, s);
+  const history = await historyOf(s);
+  // both counts and what the history is made of, so the cause of a drift can be read off the log (board 181)
+  const roles: Record<string, number> = {};
+  for (const m of history as Array<{ role?: string; outOfContext?: boolean }>) {
+    const key = `${m.role ?? "?"}${m.outOfContext ? "(old)" : ""}`;
+    roles[key] = (roles[key] ?? 0) + 1;
+  }
+  log(`session ${s.id}: controller asked for a resync (its view drifted from pi's message count): view saw ${cmd.seen ?? "?"}, history has ${history.length} ${JSON.stringify(roles)}, pi's own count ${s.messageCount ?? "?"}`);
+  ctx.hub.send(socket, { type: "history", session: s.id, messages: history });
   res(true);
 }
 

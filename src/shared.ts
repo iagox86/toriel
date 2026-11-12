@@ -284,7 +284,7 @@ type ClientCommandBody =
    * presence heartbeat) and requests the current session list. */
   | { type: "list" }
   /** Send this controller the session's current history again (drift cure). */
-  | { type: "resync"; id?: string; session: number };
+  | { type: "resync"; id?: string; session: number; /** how many messages the controller's view counted, for the daemon's log (diagnosis only) */ seen?: number };
 
 /** A surface and pattern pair, in the shape of pi-permission-system's `sessionApproval.grants`. */
 export interface PermissionGrantSpec {
