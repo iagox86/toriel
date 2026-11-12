@@ -8,7 +8,7 @@ import type { Scheduler } from "./scheduler.ts";
 import type { SubagentBook } from "./subagents.ts";
 import type { SessionMeta, UsageReport } from "./shared.ts";
 
-function metaFor(s: DaemonSession, socket: net.Socket, presence: Presence, usage: ReadonlyMap<string, UsageReport>, scheduler?: Scheduler, grants?: GrantStore, subagents?: SubagentBook): SessionMeta {
+function metaFor(s: DaemonSession, socket: net.Socket, presence: Presence, usage: ReadonlyMap<string, UsageReport>, scheduler?: Scheduler, grants?: GrantStore, subagents?: SubagentBook, watchProblem?: (id: number) => string | undefined): SessionMeta {
   const granted = s.sessionId && grants ? grants.active(s.sessionId).length : 0;
   const saved = s.sessionId && grants ? grants.dormantCount(s.sessionId) : 0;
   const sub = subagents?.bySession(s.id);
@@ -42,7 +42,7 @@ function metaFor(s: DaemonSession, socket: net.Socket, presence: Presence, usage
     attachedElsewhere: s.attachedTo !== undefined && s.attachedTo !== socket,
     externallyLive: s.sessionFile !== undefined && presence.has(s.sessionFile),
     schedules: active.length > 0 ? active.length : undefined,
-    scheduleLines: active.length > 0 && scheduler ? scheduleStripLines(active, new Date(), (id) => scheduler.heldReason(id)) : undefined,
+    scheduleLines: active.length > 0 && scheduler ? scheduleStripLines(active, new Date(), (id) => scheduler.heldReason(id) ?? watchProblem?.(id)) : undefined,
     nextFire: s.sessionId && scheduler ? scheduler.soonest(s.sessionId) : undefined,
     grants: granted > 0 ? granted : undefined,
     nextGrantExpiry: s.sessionId && grants ? grants.soonestExpiry(s.sessionId) : undefined,
@@ -60,8 +60,9 @@ export function sessionMetas(
   scheduler?: Scheduler,
   grants?: GrantStore,
   subagents?: SubagentBook,
+  watchProblem?: (id: number) => string | undefined,
 ): SessionMeta[] {
-  const metas = registry.all().map((s) => metaFor(s, socket, presence, usage, scheduler, grants, subagents));
+  const metas = registry.all().map((s) => metaFor(s, socket, presence, usage, scheduler, grants, subagents, watchProblem));
   const tracked = new Set(metas.map((m) => m.sessionFile).filter((f): f is string => !!f));
   return [...metas, ...presence.pseudoMetas(tracked)];
 }

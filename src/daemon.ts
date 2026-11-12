@@ -26,7 +26,7 @@ import { ClientHub } from "./daemon-hub.ts";
 import { announceExpired } from "./daemon-permissions.ts";
 import { sessionMetas } from "./daemon-meta.ts";
 import { schedulerHost } from "./daemon-schedule.ts";
-import { WatchManager } from "./daemon-watch.ts";
+import { WatchManager, watchHeldReason } from "./daemon-watch.ts";
 import { FileWatcher } from "./file-watch.ts";
 import { createServer } from "./daemon-server.ts";
 import { SessionRegistry } from "./daemon-session.ts";
@@ -48,7 +48,7 @@ function createContext(shutdown: () => void): DaemonContext {
   const registry = new SessionRegistry();
   const presence = new Presence();
   const usage = new Map<string, UsageReport>();
-  const hub = new ClientHub((socket) => sessionMetas(registry, presence, usage, socket, ctx.scheduler, ctx.grants, ctx.subagents.book), {
+  const hub = new ClientHub((socket) => sessionMetas(registry, presence, usage, socket, ctx.scheduler, ctx.grants, ctx.subagents.book, (id) => watchHeldReason(ctx.watches?.problem(id))), {
     type: "hello",
     protocol: PROTOCOL,
     build: buildInfo(),

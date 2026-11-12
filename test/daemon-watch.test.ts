@@ -2,7 +2,7 @@
 // watch schedule, retried when it cannot start, reported rather than silently dropped.
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { MAX_WATCHES, RETRY_MS, specOf, WatchManager, type WatchTimers } from "../src/daemon-watch.ts";
+import { MAX_WATCHES, RETRY_MS, specOf, WatchManager, watchHeldReason, type WatchTimers } from "../src/daemon-watch.ts";
 import type { WatchSpec } from "../src/file-watch.ts";
 import type { Schedule } from "../src/scheduler.ts";
 
@@ -173,5 +173,10 @@ describe("the watch manager", () => {
     assert.equal(specOf(sched(1, { trigger: { kind: "once", at: 1 } })), undefined);
     assert.equal(specOf(sched(1))?.path, "/d/f1");
     assert.equal(RETRY_MS, 30_000);
+  });
+
+  it("watchHeldReason words a watch that cannot arm the same everywhere it is shown", () => {
+    assert.equal(watchHeldReason(undefined), undefined);
+    assert.equal(watchHeldReason("/d does not exist"), "cannot watch (/d does not exist)");
   });
 });

@@ -5,6 +5,7 @@
 import type { Cmd, DaemonContext, Responder } from "./daemon-context.ts";
 import { deliverToTarget } from "./daemon-handlers-messages.ts";
 import { findSession } from "./daemon-resolve.ts";
+import { watchHeldReason } from "./daemon-watch.ts";
 import { execFile } from "node:child_process";
 import { log } from "./log.ts";
 import { formatScheduled } from "./schedule-label.ts";
@@ -175,7 +176,7 @@ export function viewOf(ctx: DaemonContext, s: Schedule, now: Date = new Date()):
     lastError: s.lastError,
     until: s.until,
     while: s.while,
-    held: ctx.scheduler.heldReason(s.id) ?? (ctx.watches?.problem(s.id) === undefined ? undefined : `cannot watch (${ctx.watches.problem(s.id)})`),
+    held: ctx.scheduler.heldReason(s.id) ?? watchHeldReason(ctx.watches?.problem(s.id)),
   };
 }
 

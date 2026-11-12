@@ -49,6 +49,11 @@ export function specOf(s: Schedule): WatchSpec | undefined {
   return s.trigger.kind === "watch" && s.state === "active" ? { path: s.trigger.path, dir: s.trigger.dir, events: s.trigger.events, cooldownMs: s.trigger.cooldownMs } : undefined;
 }
 
+/** The held-reason text for a watch that cannot arm, worded the same in /schedules and the status strip. */
+export function watchHeldReason(problem: string | undefined): string | undefined {
+  return problem === undefined ? undefined : `cannot watch (${problem})`;
+}
+
 export class WatchManager {
   private readonly problems = new Map<number, string>();
   private timer: unknown;

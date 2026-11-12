@@ -1397,3 +1397,18 @@ maxTurns 120). `/performance` flow final shape: review session opens at command 
 delivered into it as a message (f1ca255, ticket 158 closed). Delegation rule of record: briefs
 never teach permission bypasses; scripts spawn gated binaries only when execution is the test
 subject; workers' own repo ops go through the MCP git verbs.
+
+## File triggers (/watch, board 98, built 2026-11-12)
+
+`/watch <path> <prompt...>` is a schedule whose trigger is a file change
+(`Trigger` kind `watch`, no clock slot at all) instead of a time. Design of
+record: it rides the scheduler unchanged - idle-gating, caps, daily limit,
+expiry, retries - and a new `WatchManager` (daemon-watch.ts) turns `fs.watch`
+events into `Scheduler.triggered(id)`. The pending fire is consumed before
+delivery so a change mid-delivery is a new fire, not a lost one; a failed
+delivery restores it. Live-only by design (inotify neither wakes a sleeping
+machine nor replays); user-only in v1 (the agent schedule tool cannot express
+a watch). Details: reference.md "File triggers"; the watcher's traps (atomic
+saves, burst cooldown, replaced directories) are in file-watch.ts's header.
+Parked: recursive watches and globs, a catch-up check on resume, an agent
+tool, and a watch on a special filesystem (/proc, /sys) arms but never fires.
