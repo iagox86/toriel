@@ -186,6 +186,9 @@ export class Scheduler {
     }
     const interval = spec.trigger.kind === "every" ? spec.trigger.ms : spec.trigger.kind === "loop" ? spec.trigger.gapMs : undefined;
     const gated = spec.until !== undefined || spec.while !== undefined;
+    if (gated && spec.trigger.kind === "watch") {
+      throw new Error("--until / --while do not apply to a file watch (it already only runs when the file changes)");
+    }
     if (gated && (spec.trigger.kind === "once" || (spec.trigger.kind === "loop" && spec.trigger.gapMs === undefined))) {
       throw new Error("--until / --while need a repeating schedule with an interval (/every, /cron, or /loop with a gap)");
     }
@@ -200,9 +203,9 @@ export class Scheduler {
       throw new Error(`a schedule named "${spec.name}" already exists in this session`);
     }
     const t = this.host.now();
-    // a loop runs its first pass at once; everything else waits for its first slot
-    const first = spec.trigger.kind === "loop" ? t : nextFire(spec.trigger, t);
-    if (first === undefined) {
+    // a loop runs its first pass at once; a watch waits for a file event (no first slot); everything else waits for its first slot
+    const first = spec.trigger.kind === "loop" ? t : spec.trigger.kind === "watch" ? undefined : nextFire(spec.trigger, t);
+    if (first === undefined && spec.trigger.kind !== "watch") {
       throw new Error("that schedule would never fire");
     }
     const recurring = spec.trigger.kind !== "once";
@@ -258,10 +261,26 @@ export class Scheduler {
     s.state = "active";
     s.failures = undefined;
     s.lastError = undefined;
-    // a one-shot whose time passed while paused fires now; everything else picks up its next slot
-    s.nextFire = s.trigger.kind === "once" ? Math.max(s.trigger.at, t) : (nextFire(s.trigger, t) ?? t);
+    // a one-shot whose time passed while paused fires now; a watch waits for its next file event (a change made while it was paused is not replayed); everything else picks up its next slot
+    s.nextFire = s.trigger.kind === "once" ? Math.max(s.trigger.at, t) : s.trigger.kind === "watch" ? undefined : (nextFire(s.trigger, t) ?? t);
     this.changed();
     return s;
+  }
+
+  /**
+   * A watched file changed (the daemon's file watcher, after its quiet time): make the watch
+   * schedule due now. Everything else about firing is the ordinary schedule machinery - it waits
+   * for an idle session, never interrupts, counts against the daily limit, retries a failed
+   * delivery. Changes while it is already due, paused or gone change nothing: at most one fire
+   * waits, like any schedule.
+   */
+  triggered(id: number): void {
+    const s = this.schedules.get(id);
+    if (s === undefined || s.trigger.kind !== "watch" || s.state !== "active" || s.nextFire !== undefined) {
+      return;
+    }
+    s.nextFire = this.host.now();
+    this.changed();
   }
 
   /** Run it now without disturbing its schedule (the `/fire` command). */
@@ -430,9 +449,17 @@ export class Scheduler {
         return;
       }
     }
+    // a watch's pending fire is consumed before delivery, so a file event that arrives while the prompt is being delivered is a new fire, not lost
+    const watching = s.trigger.kind === "watch";
+    if (watching) {
+      s.nextFire = undefined;
+    }
     try {
       await this.host.deliver(s, { run, lateBy: Math.max(0, t - due) });
     } catch (err) {
+      if (watching && s.nextFire === undefined) {
+        s.nextFire = due; // not delivered: still due, retried after RETRY_MS
+      }
       this.failed(s, err instanceof Error ? err.message : String(err), t);
       return;
     }
@@ -450,6 +477,8 @@ export class Scheduler {
       this.end(s, "completed");
     } else if (s.max !== undefined && run >= s.max) {
       this.end(s, "max");
+    } else if (watching) {
+      this.changed(); // keeps waiting for the next change (nextFire stays whatever an event during delivery made it)
     } else {
       // a gap loop waits for the run to finish (runFinished); the rest take their next slot, skipping any that were missed
       s.nextFire = s.trigger.kind === "loop" ? undefined : nextFire(s.trigger, t);

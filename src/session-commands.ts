@@ -25,7 +25,7 @@ import { INIT_PROMPT } from "./init-prompt.ts";
 import type { SessionMeta } from "./shared.ts";
 import { runDoctorCommand } from "./doctor-commands.ts";
 import { runPermissions } from "./permission-commands.ts";
-import { addSchedule, operateSchedule, showSchedules } from "./schedule-commands.ts";
+import { addSchedule, addWatch, operateSchedule, showSchedules } from "./schedule-commands.ts";
 import { errText } from "./util.ts";
 
 const COMPACT_TIMEOUT_MS = 10 * 60_000;
@@ -121,6 +121,7 @@ export class SessionCommands {
       every: (c) => addSchedule(this.h, "every", "every", c, this.viewedMeta()?.id),
       loop: (c) => addSchedule(this.h, "loop", "loop", c, this.viewedMeta()?.id),
       cron: (c) => addSchedule(this.h, "cron", "cron", c, this.viewedMeta()?.id),
+      watch: (c) => addWatch(this.h, c, this.viewedMeta()?.id),
       schedules: (c) => showSchedules(this.h, c.opts.all === true ? undefined : this.viewedMeta()?.id),
       cancel: (c) => operateSchedule(this.h, "cancel", c, this.viewedMeta()?.id),
       pause: (c) => operateSchedule(this.h, "pause", c, this.viewedMeta()?.id),

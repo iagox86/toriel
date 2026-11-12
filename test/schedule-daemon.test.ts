@@ -137,3 +137,136 @@ describe("daemon: schedules", () => {
     assert.deepEqual((await c.request({ type: "schedule_list" })).schedules, []);
   });
 });
+
+describe("daemon: file triggers (board 98)", () => {
+  const fires = (c: Client): number => c.messages.filter((m) => m.type === "event" && m.event?.type === "message_end" && m.event.message?.role === "assistant" && JSON.stringify(m.event.message).includes("[scheduled #1")).length;
+  const until = async (cond: () => boolean, ms = 8000): Promise<void> => {
+    const end = Date.now() + ms;
+    while (!cond()) {
+      if (Date.now() > end) {
+        throw new Error("timed out waiting");
+      }
+      await new Promise((r) => setTimeout(r, 25));
+    }
+  };
+  const quiet = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  it("delivers a labelled prompt naming the file when it changes, once per burst, and keeps watching", async () => {
+    const { writeFileSync, appendFileSync } = await import("node:fs");
+    harness = await startDaemon();
+    const { c, session } = await savedSession(harness);
+    const target = `${harness.dir}/review.md`;
+    const added = await c.request({ type: "watch_add", session, path: "review.md", prompt: "read it and summarize", name: "review", cooldown: "1s" });
+    assert.match(added.echo, /^#1 review: on change: .*review\.md, waiting for a change \(quiet 1s first\), expires /);
+    assert.equal(added.schedule.when, `on change: ${target}`);
+    for (let i = 0; i < 4; i++) {
+      appendFileSync(target, `line ${i}\n`);
+      await quiet(20);
+    }
+    writeFileSync(target, "done\n");
+    const reply = await c.waitFor((m) => m.type === "event" && m.event?.type === "message_end" && m.event.message?.role === "assistant" && JSON.stringify(m.event.message).includes("[scheduled #1"));
+    assert.match(JSON.stringify(reply.event.message), /\[scheduled #1 \\"review\\", run 1\]: \(File trigger: .*review\.md changed\.\)\\n\\nread it and summarize/);
+    await quiet(2500);
+    assert.equal(fires(c), 1, "one burst of writes is one prompt");
+    appendFileSync(target, "again\n");
+    await until(() => fires(c) === 2);
+    const listed = (await c.request({ type: "schedule_list", session })).schedules[0];
+    assert.equal(listed.fired, 2);
+    assert.equal(listed.state, "active", "a watch keeps waiting after it fires");
+  });
+
+  it("sees an atomic save (a temp file renamed over the target)", async () => {
+    const { writeFileSync, renameSync } = await import("node:fs");
+    harness = await startDaemon();
+    const { c, session } = await savedSession(harness);
+    writeFileSync(`${harness.dir}/doc.md`, "old");
+    await c.request({ type: "watch_add", session, path: `${harness.dir}/doc.md`, prompt: "reread", cooldown: "1s" });
+    writeFileSync(`${harness.dir}/.doc.md.tmp`, "new");
+    renameSync(`${harness.dir}/.doc.md.tmp`, `${harness.dir}/doc.md`);
+    await until(() => fires(c) === 1);
+  });
+
+  it("--once ends after the first fire", async () => {
+    const { writeFileSync } = await import("node:fs");
+    harness = await startDaemon();
+    const { c, session } = await savedSession(harness);
+    await c.request({ type: "watch_add", session, path: `${harness.dir}/once.txt`, prompt: "p", once: true, cooldown: "1s" });
+    writeFileSync(`${harness.dir}/once.txt`, "x");
+    await until(() => fires(c) === 1);
+    assert.deepEqual((await c.request({ type: "schedule_list", session })).schedules, []);
+    writeFileSync(`${harness.dir}/once.txt`, "y");
+    await quiet(2500);
+    assert.equal(fires(c), 1, "gone means gone: no watch is left behind");
+  });
+
+  it("stops while paused and picks up again on resume; cancel stops it for good", async () => {
+    const { appendFileSync } = await import("node:fs");
+    harness = await startDaemon();
+    const { c, session } = await savedSession(harness);
+    const target = `${harness.dir}/p.txt`;
+    await c.request({ type: "watch_add", session, path: target, prompt: "p", cooldown: "1s" });
+    await c.request({ type: "schedule_op", op: "pause", ref: "1", session });
+    appendFileSync(target, "a");
+    await quiet(2500);
+    assert.equal(fires(c), 0, "a paused watch does not fire");
+    await c.request({ type: "schedule_op", op: "resume", ref: "1", session });
+    await quiet(300);
+    assert.equal(fires(c), 0, "and does not replay what it missed while paused");
+    appendFileSync(target, "b");
+    await until(() => fires(c) === 1);
+    await c.request({ type: "schedule_op", op: "cancel", ref: "1", session });
+    appendFileSync(target, "c");
+    await quiet(2500);
+    assert.equal(fires(c), 1);
+  });
+
+  it("re-arms the watches of the schedules the file brings back when the daemon starts", async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-watch-seed-"));
+    const seeded = path.join(dir, "schedules.json");
+    const now = Date.now();
+    fs.writeFileSync(
+      seeded,
+      JSON.stringify({
+        version: 1,
+        nextId: 2,
+        schedules: [{ id: 1, session: "00000000-0000-4000-8000-000000000000", prompt: "p", trigger: { kind: "watch", path: `${dir}/watched.txt`, dir: false, events: "write", cooldownMs: 1000 }, fired: 0, createdAt: now, expiresAt: now + 86_400_000, catchup: "once", by: "user", state: "active" }],
+      }),
+    );
+    try {
+      harness = await startDaemon({ TORIEL_SCHEDULES: seeded });
+      const c = await harness.connect();
+      assert.equal((await c.request({ type: "schedule_list" })).schedules[0].when, `on change: ${dir}/watched.txt`);
+      fs.writeFileSync(`${dir}/watched.txt`, "x");
+      // the session does not exist, so the delivery fails: that it was TRIED shows the watch came back with the daemon
+      const end = Date.now() + 8000;
+      let error: string | undefined;
+      while (error === undefined && Date.now() < end) {
+        error = (await c.request({ type: "schedule_list" })).schedules[0]?.lastError;
+        await quiet(100);
+      }
+      assert.ok(error, "the change reached the scheduler after a daemon start");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("watches a directory too, and rejects what it cannot watch in words", async () => {
+    const { writeFileSync } = await import("node:fs");
+    harness = await startDaemon();
+    const { c, session } = await savedSession(harness);
+    await assert.rejects(c.request({ type: "watch_add", session, path: `${harness.dir}/nope/x.md`, prompt: "p" }), /nope does not exist/);
+    await assert.rejects(c.request({ type: "watch_add", session, path: "x.md", prompt: "   " }), /what should it say/);
+    await assert.rejects(c.request({ type: "watch_add", session, path: "x.md", prompt: "p", events: "sometimes" as never }), /--on is "write"/);
+    await assert.rejects(c.request({ type: "watch_add", session, path: "x.md", prompt: "p", cooldown: "0.1s" }), /--cooldown must be between 1s and 10m/);
+    await assert.rejects(c.request({ type: "watch_add", session, path: "x.md", prompt: "p", cooldown: "soon" }), /--cooldown/);
+    await assert.rejects(c.request({ type: "watch_add", session, path: `${harness.dir}/x/`, prompt: "p" }), /not an existing directory/);
+    assert.deepEqual((await c.request({ type: "schedule_list" })).schedules, [], "a refused watch leaves nothing behind");
+    const added = await c.request({ type: "watch_add", session, path: `${harness.dir}/`, prompt: "something changed here", cooldown: "1s" });
+    assert.match(added.schedule.when, /^on change: .*\/$/, "a directory is shown with its trailing slash");
+    writeFileSync(`${harness.dir}/new-file.txt`, "x");
+    await until(() => fires(c) === 1);
+  });
+});

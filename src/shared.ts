@@ -12,7 +12,7 @@
  * older daemon or controller cannot cope with. A mismatch blocks the controller
  * (see version-check.ts); a mere code difference with the same protocol only warns.
  */
-export const PROTOCOL = 3; // 3: agent_spawn's optional cwd (2: the `cd` command and adopt's `keepPermissions`)
+export const PROTOCOL = 4; // 4: the watch_add command (file-trigger schedules) (3: agent_spawn's optional cwd; 2: the `cd` command and adopt's `keepPermissions`)
 
 /** Which toriel code a process runs (build-id.ts). */
 export interface BuildInfo {
@@ -199,6 +199,26 @@ type ClientCommandBody =
       /** Shell checks run by the daemon before each fire (repeating schedules only). */
       until?: string;
       while?: string;
+    }
+  /**
+   * Create a file-trigger schedule (board 98): `prompt` is delivered into the session when `path`
+   * changes. A relative `path` is resolved against the session's directory. `events` "write" (the
+   * default) is a create or modify, "any" also a delete or rename away; `cooldown` is the quiet time
+   * after the last event ("2s" default); `once` ends it after the first fire; `expires` as for
+   * schedule_add. The response is {schedule, echo}. User-only in v1 (`by` is always "user").
+   */
+  | {
+      type: "watch_add";
+      id?: string;
+      session?: number;
+      uuid?: string;
+      path: string;
+      prompt: string;
+      name?: string;
+      events?: "write" | "any";
+      cooldown?: string;
+      once?: boolean;
+      expires?: string;
     }
   /** Schedules of one session, or of all when neither `session` nor `uuid` is given. The response is {schedules: ScheduleView[]}. */
   | { type: "schedule_list"; id?: string; session?: number; uuid?: string }

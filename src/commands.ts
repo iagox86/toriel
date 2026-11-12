@@ -321,6 +321,21 @@ export const SESSION_COMMANDS = [
     },
   },
   {
+    name: "watch",
+    description: "send a prompt to this session when a file or directory changes (/watch notes/review.md ...)",
+    help: `Runs the prompt when the file is created or written, or when anything directly inside the directory changes (not its subdirectories). It is a schedule whose trigger is a file change instead of a time, so everything under /schedules applies: it waits until the session is idle and never interrupts a turn or a permission prompt, wakes a stopped session, counts against the daily run limit, and ends after 7 days unless --expires says otherwise. /schedules lists it, /pause, /resume and /cancel work on it.\n\nA relative path is relative to the session's directory; ~ works; the file need not exist yet but its directory must. One save is one prompt: it fires after --cooldown (default 2s) of quiet, and only once a minute even for a file that never stops changing. The prompt arrives with a first line naming the file; the file's content is not included, the agent reads it.\n\nLive only: changes while the machine sleeps or the daemon is down are not replayed. Anyone who can write the file can steer the session with what it says, as with anything the agent reads; watch paths you trust.\n\nExamples:\n  /watch /tmp/permissions.review.md read the review and apply the fixes\n  /watch --once build/report.txt summarize the report\n  /watch --on any notes/ tell me what changed in notes\n  /watch --cooldown 10s --name logs logs/app.log look for new errors${SCHEDULE_NOTE.replace("Recurring schedules end after 7 days unless --expires says otherwise. ", "")}`,
+    build: (cmd) => {
+      cmd
+        .argument("<path>", "the file or directory to watch (relative to the session's directory, or ~/..)")
+        .argument("<prompt...>", "what to send when it changes")
+        .option("-n, --name <name>", "a name to cancel it by (unique in the session)")
+        .option("--once", "stop after the first time it fires")
+        .option("--on <events>", '"write" (default): created or modified; "any": also deleted or renamed away')
+        .option("--cooldown <time>", "wait this long after the last change before firing, e.g. 5s (default 2s; between 1s and 10m)")
+        .option("--expires <after>", 'end after this long, e.g. 3d or 12h, or "never" (default: 7d)');
+    },
+  },
+  {
     name: "schedules",
     description: "list this session's scheduled prompts with their next run",
     help: "Shows each schedule: id, what it does, the next real run time, how many runs so far, when it expires, and the prompt. Paused ones and failures are marked. In the switcher it lists every session's schedules.\n\nExamples:\n  /schedules\n  /schedules --all       (every session's)\nManage them with /cancel, /pause, /resume and /fire.",

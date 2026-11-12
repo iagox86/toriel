@@ -4,6 +4,7 @@ import type * as net from "node:net";
 import type { BridgeTracker } from "./daemon-bridge.ts";
 import type { ChildManager } from "./daemon-children.ts";
 import type { ClientHub } from "./daemon-hub.ts";
+import type { WatchManager } from "./daemon-watch.ts";
 import type { SessionRegistry } from "./daemon-session.ts";
 import type { GrantStore } from "./permissions.ts";
 import type { Presence } from "./presence.ts";
@@ -21,6 +22,8 @@ export interface DaemonContext {
   bridges: BridgeTracker;
   /** Timed prompts (docs/design.md item 10). */
   scheduler: Scheduler;
+  /** File watches behind the "on change" schedules (board 98); absent in a context built without them. */
+  watches?: WatchManager;
   /** Permission grants (docs/permissions.md). */
   grants: GrantStore;
   /** Subagents started by the toriel_agent tool (docs/design.md item 9). */

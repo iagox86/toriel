@@ -451,3 +451,137 @@ describe("persistence and restarts", () => {
     assert.deepEqual(make().sched.list(), []);
   });
 });
+
+describe("file watches (board 98)", () => {
+  const watch = (over: Partial<{ path: string; dir: boolean; events: "write" | "any"; cooldownMs: number }> = {}) => ({ kind: "watch", path: "/d/review.md", dir: false, events: "write", cooldownMs: 2000, ...over }) as const;
+
+  it("waits with no fire time until a file event, then fires through the ordinary machinery and keeps waiting", async () => {
+    const { host, sched } = make();
+    const s = sched.add({ session: "a", prompt: "review it", trigger: watch() });
+    assert.equal(s.nextFire, undefined, "no clock slot: only a file event makes it due");
+    assert.equal(s.expiresAt, T0 + DEFAULT_LIMITS.defaultExpiryMs, "a forgotten watch dies like any recurring schedule (7 days)");
+    await host.advance(HOUR);
+    assert.equal(host.delivered.length, 0);
+    sched.triggered(s.id);
+    await host.advance(1000);
+    assert.equal(host.delivered.length, 1);
+    assert.equal(host.delivered[0]?.schedule.prompt, "review it");
+    assert.equal(sched.get(s.id)?.nextFire, undefined, "waiting for the next change");
+    assert.deepEqual(host.ended(), []);
+    sched.triggered(s.id);
+    await host.advance(1000);
+    assert.equal(host.delivered.length, 2);
+    assert.equal(sched.get(s.id)?.fired, 2);
+  });
+
+  it("never interrupts: a change while the session is busy waits for it to be idle, and several changes are one fire", async () => {
+    const { host, sched } = make();
+    const s = sched.add({ session: "a", prompt: "p", trigger: watch() });
+    host.busy.add("a");
+    sched.triggered(s.id);
+    sched.triggered(s.id);
+    sched.triggered(s.id);
+    await host.advance(30_000);
+    assert.equal(host.delivered.length, 0);
+    host.busy.delete("a");
+    await host.advance(10_000);
+    assert.equal(host.delivered.length, 1, "at most one fire waits, like any schedule");
+    await host.advance(HOUR);
+    assert.equal(host.delivered.length, 1);
+  });
+
+  it("--once is max 1: it ends after the first fire", async () => {
+    const { host, sched } = make();
+    const s = sched.add({ session: "a", prompt: "p", trigger: watch(), max: 1 });
+    sched.triggered(s.id);
+    await host.advance(1000);
+    assert.equal(host.delivered.length, 1);
+    assert.deepEqual(host.ended(), [[s.id, "max"]]);
+  });
+
+  it("counts against the daily limit, like any scheduled run", async () => {
+    const { host, sched } = make({ ...DEFAULT_LIMITS, dailyFires: 1 });
+    const s = sched.add({ session: "a", prompt: "p", trigger: watch() });
+    sched.triggered(s.id);
+    await host.advance(1000);
+    sched.triggered(s.id);
+    await host.advance(1000);
+    assert.equal(host.delivered.length, 1);
+    assert.match(sched.heldReason(s.id) ?? "", /limit of 1 scheduled runs/);
+  });
+
+  it("a change that arrives while the prompt is being delivered is a new fire, not lost", async () => {
+    const { host, sched } = make();
+    const s = sched.add({ session: "a", prompt: "p", trigger: watch() });
+    let first = true;
+    host.deliver = async (schedule, info) => {
+      host.delivered.push({ schedule: { ...schedule }, info });
+      if (first) {
+        first = false;
+        sched.triggered(s.id);
+      }
+    };
+    sched.triggered(s.id);
+    await host.advance(1000);
+    assert.equal(host.delivered.length, 2, "the second change fired again");
+  });
+
+  it("a failed delivery keeps the change due and retries", async () => {
+    const { host, sched } = make();
+    const s = sched.add({ session: "a", prompt: "p", trigger: watch() });
+    host.failWith = "no such session";
+    sched.triggered(s.id);
+    await host.advance(1000);
+    assert.equal(sched.get(s.id)?.failures, 1);
+    assert.notEqual(sched.get(s.id)?.nextFire, undefined, "still due");
+    host.failWith = undefined;
+    await host.advance(31_000);
+    assert.equal(host.delivered.length, 1);
+    assert.equal(sched.get(s.id)?.failures, undefined);
+  });
+
+  it("ignores changes while paused, and resume waits for the next change instead of firing at once", async () => {
+    const { host, sched } = make();
+    const s = sched.add({ session: "a", prompt: "p", trigger: watch() });
+    sched.pause(s.id);
+    sched.triggered(s.id);
+    await host.advance(HOUR);
+    assert.equal(host.delivered.length, 0);
+    sched.resume(s.id);
+    await host.advance(HOUR);
+    assert.equal(host.delivered.length, 0, "a change made while paused is not replayed");
+    sched.triggered(s.id);
+    await host.advance(1000);
+    assert.equal(host.delivered.length, 1);
+  });
+
+  it("ignores events for schedules that are gone or are not watches", async () => {
+    const { host, sched } = make();
+    const timed = sched.add({ session: "a", prompt: "p", trigger: every(HOUR) });
+    sched.triggered(timed.id);
+    sched.triggered(999);
+    await host.advance(1000);
+    assert.equal(host.delivered.length, 0);
+  });
+
+  it("refuses --until/--while on a watch", () => {
+    const { sched } = make();
+    assert.throws(() => sched.add({ session: "a", prompt: "p", trigger: watch(), until: "true" }), /do not apply to a file watch/);
+  });
+
+  it("survives a daemon restart waiting, and a change that was pending is delivered after it", async () => {
+    const { host, sched } = make();
+    const quiet = sched.add({ session: "a", prompt: "p", trigger: watch() });
+    const pending = sched.add({ session: "a", prompt: "q", trigger: watch({ path: "/d/other.md" }) });
+    host.busy.add("a");
+    sched.triggered(pending.id);
+    sched.stop();
+    const host2 = new FakeHost();
+    host2.t = host.t + MIN;
+    const sched2 = new Scheduler(host2, file);
+    sched2.start();
+    await host2.advance(1000);
+    assert.deepEqual(host2.delivered.map((d) => d.schedule.prompt), ["q"], "the change that was waiting is delivered, the quiet watch is not");
+    assert.equal(sched2.get(quiet.id)?.trigger.kind, "watch");
+  });
+});

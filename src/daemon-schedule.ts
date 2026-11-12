@@ -11,7 +11,14 @@ import { formatScheduled } from "./schedule-label.ts";
 import type { EndReason, Schedule, SchedulerEvent, SchedulerHost } from "./scheduler.ts";
 import { loadSettings } from "./settings.ts";
 import type { ScheduleView, UsageReport } from "./shared.ts";
+import { resolveWatchTarget } from "./watch-path.ts";
 import { describeTrigger, fmtClock, fmtDuration, fmtNext, nextFire, parseDurationText, parseWhen } from "./when.ts";
+
+/** The quiet time after the last change before a file trigger fires, unless --cooldown says otherwise. */
+export const DEFAULT_COOLDOWN_MS = 2000;
+/** Bounds for --cooldown: shorter and one save can become several prompts; longer and the trigger feels broken. */
+export const MIN_COOLDOWN_MS = 1000;
+export const MAX_COOLDOWN_MS = 10 * 60_000;
 
 /** Added to a self-paced /loop's prompt: the loop only continues if the model schedules the next run. */
 const SELF_PACED_FOOTER = '\n\n(Self-paced loop: when this pass is done, if more is needed call toriel_schedule_create with `when` set to how long to wait (for example "in 20m"; prefer long waits) and this same prompt, so the loop continues. If you do not, the loop ends here.)';
@@ -70,7 +77,9 @@ export function schedulerHost(ctx: () => DaemonContext, usage: ReadonlyMap<strin
       const target = await findSession(c, schedule.session);
       const late = info.lateBy > LATE_AFTER_MS ? fmtDuration(info.lateBy) : undefined;
       const paced = schedule.trigger.kind === "loop" && schedule.trigger.gapMs === undefined;
-      await deliverToTarget(c, target, formatScheduled({ id: schedule.id, name: schedule.name, run: info.run, max: schedule.max, late }, paced ? `${schedule.prompt}${SELF_PACED_FOOTER}` : schedule.prompt));
+      // a file trigger tells the agent what fired it; the file's content is NOT included (the agent reads it, like anything else)
+      const prompt = paced ? `${schedule.prompt}${SELF_PACED_FOOTER}` : schedule.trigger.kind === "watch" ? `(File trigger: ${schedule.trigger.path}${schedule.trigger.dir ? "/" : ""} changed.)\n\n${schedule.prompt}` : schedule.prompt;
+      await deliverToTarget(c, target, formatScheduled({ id: schedule.id, name: schedule.name, run: info.run, max: schedule.max, late }, prompt));
     },
     event: (e) => {
       logEvent(e);
@@ -166,13 +175,13 @@ export function viewOf(ctx: DaemonContext, s: Schedule, now: Date = new Date()):
     lastError: s.lastError,
     until: s.until,
     while: s.while,
-    held: ctx.scheduler.heldReason(s.id),
+    held: ctx.scheduler.heldReason(s.id) ?? (ctx.watches?.problem(s.id) === undefined ? undefined : `cannot watch (${ctx.watches.problem(s.id)})`),
   };
 }
 
 /** One line telling someone what a new schedule will do, with its real next fire. */
 function echoOf(s: Schedule, now: Date): string {
-  const first = s.trigger.kind === "loop" ? "first run now" : `next ${s.nextFire === undefined ? "?" : fmtNext(s.nextFire, now)}`;
+  const first = s.trigger.kind === "loop" ? "first run now" : s.trigger.kind === "watch" ? `waiting for a change (quiet ${fmtDuration(s.trigger.cooldownMs)} first)` : `next ${s.nextFire === undefined ? "?" : fmtNext(s.nextFire, now)}`;
   const parts = [`#${s.id}${s.name ? ` ${s.name}` : ""}: ${describeTrigger(s.trigger, now)}, ${first}`];
   parts.push(s.expiresAt === null ? "never expires" : `expires ${fmtClock(s.expiresAt, now)}`);
   if (s.max !== undefined) {
@@ -242,6 +251,71 @@ export async function handleScheduleAdd(ctx: DaemonContext, cmd: Cmd<"schedule_a
   });
   log(`schedule #${s.id} created (${describeTrigger(s.trigger, now)}, ${s.by}) for session ${uuid}`);
   res(true, undefined, { schedule: viewOf(ctx, s, now), notes: parsed.notes, echo: echoOf(s, now) });
+}
+
+/**
+ * /watch: a schedule whose trigger is a file change instead of a time (board 98). It is created
+ * through the same Scheduler as every other schedule, so it waits for an idle session, never
+ * interrupts, counts against the caps and the daily limit, expires after 7 days unless told
+ * otherwise, and is listed, paused, resumed and cancelled like the rest. User-only in v1: an agent
+ * watching a churning directory is a spam risk schedules do not have.
+ */
+export async function handleWatchAdd(ctx: DaemonContext, cmd: Cmd<"watch_add">, res: Responder): Promise<void> {
+  const uuid = scopeOf(ctx, cmd);
+  if (!uuid) {
+    throw new Error("a watch needs a session");
+  }
+  const prompt = cmd.prompt.trim();
+  if (!prompt) {
+    throw new Error("what should it say? Add the prompt after the path, e.g. /watch notes/review.md read the new review and summarize it");
+  }
+  const events = cmd.events ?? "write";
+  if (events !== "write" && events !== "any") {
+    throw new Error('--on is "write" (created or modified, the default) or "any" (also deleted or renamed away)');
+  }
+  let cooldownMs = DEFAULT_COOLDOWN_MS;
+  if (cmd.cooldown !== undefined) {
+    const d = parseDurationText(cmd.cooldown);
+    if (!d.ok) {
+      throw new Error(`--cooldown: ${d.error}`);
+    }
+    if (d.ms < MIN_COOLDOWN_MS || d.ms > MAX_COOLDOWN_MS) {
+      throw new Error(`--cooldown must be between ${fmtDuration(MIN_COOLDOWN_MS)} and ${fmtDuration(MAX_COOLDOWN_MS)} (the quiet time after the last change; shorter and one save can become several prompts)`);
+    }
+    cooldownMs = d.ms;
+  }
+  let expiresIn: number | null | undefined;
+  if (cmd.expires !== undefined) {
+    if (cmd.expires.trim().toLowerCase() === "never") {
+      expiresIn = null;
+    } else {
+      const d = parseDurationText(cmd.expires);
+      if (!d.ok) {
+        throw new Error(d.error);
+      }
+      expiresIn = d.ms;
+    }
+  }
+  const cwd = ctx.registry.all().find((x) => x.sessionId === uuid)?.cwd ?? (await findSession(ctx, uuid).then((f) => f.cwd).catch(() => undefined));
+  const target = resolveWatchTarget(cmd.path, cwd, process.env.HOME);
+  const s = ctx.scheduler.add({
+    session: uuid,
+    prompt,
+    trigger: { kind: "watch", path: target.path, dir: target.dir, events, cooldownMs },
+    name: cmd.name,
+    max: cmd.once ? 1 : undefined,
+    expiresIn,
+    by: "user",
+  });
+  // the scheduler's "changed" event has already armed it; a watch that could not be set up is not left behind looking healthy
+  const problem = ctx.watches?.problem(s.id);
+  if (problem !== undefined) {
+    ctx.scheduler.cancel(s.id);
+    throw new Error(`cannot watch ${target.path}: ${problem}`);
+  }
+  const now = new Date();
+  log(`file watch #${s.id} created (${describeTrigger(s.trigger, now)}, quiet ${cooldownMs}ms) for session ${uuid}`);
+  res(true, undefined, { schedule: viewOf(ctx, s, now), notes: [], echo: echoOf(s, now) });
 }
 
 export async function handleScheduleList(ctx: DaemonContext, cmd: Cmd<"schedule_list">, res: Responder): Promise<void> {
