@@ -100,7 +100,28 @@ function validAcceptedAllows(value: unknown): value is Array<{ surface: string; 
   );
 }
 
+const loadCache = new Map<string, { stamp: string; loaded: LoadedSettings }>();
+
+/** Read and validate the settings file. The daemon asks every few seconds, so an unchanged file (same mtime and size) is served from a cache; callers get their own copy. */
 export function loadSettings(file: string = settingsFile()): LoadedSettings {
+  let stamp = "";
+  try {
+    const st = fs.statSync(file);
+    stamp = `${st.mtimeMs}:${st.size}`;
+  } catch {
+    loadCache.delete(file);
+    return { settings: {}, problems: [] };
+  }
+  const hit = loadCache.get(file);
+  if (hit?.stamp === stamp) {
+    return structuredClone(hit.loaded);
+  }
+  const loaded = parseSettingsFile(file);
+  loadCache.set(file, { stamp, loaded });
+  return structuredClone(loaded);
+}
+
+function parseSettingsFile(file: string): LoadedSettings {
   let raw: string;
   try {
     raw = fs.readFileSync(file, "utf8");

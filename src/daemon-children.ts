@@ -130,6 +130,14 @@ export class ChildManager {
     } finally {
       this.launching.delete(client);
     }
+    // A crash is told by the process exiting, not found by polling it. A deliberate stop clears s.child first (deactivate), so only a child nobody stopped lands here.
+    (client as unknown as { process?: { once(ev: "exit", cb: () => void): void } }).process?.once("exit", () => {
+      if (s.child === client && !s.dead) {
+        log(`session ${s.id} child exited unexpectedly`);
+        this.markDead(s, "the session's process exited");
+        this.hub.broadcastSessions();
+      }
+    });
     try {
       await client.setSteeringMode(cfg.steeringMode);
     } catch (err) {
@@ -210,6 +218,12 @@ export class ChildManager {
       s.sessionBridge = undefined;
       s.child = await this.launch(s, args, cfg);
       s.dead = false;
+      // launch() hooks the exit event, but s.child is only set now: a process that died in between (during the steering-mode call) was missed
+      const proc = (s.child as unknown as { process?: { exitCode?: number | null; signalCode?: string | null } }).process;
+      if (typeof proc?.exitCode === "number" || typeof proc?.signalCode === "string") {
+        this.markDead(s, "the session's process exited");
+        this.hub.broadcastSessions();
+      }
       await this.refreshMeta(s);
       await this.detectBridge(s);
       if (opts.agent && s.sessionId) {
@@ -313,13 +327,17 @@ export class ChildManager {
         log(`session ${s.id} stats failed: ${err}`);
       }
     } catch (err) {
-      s.dead = true;
-      s.streaming = false;
-      s.compacting = false;
-      this.dropBridge(s, "the session's process stopped answering");
-      this.onStopped?.(s);
+      this.markDead(s, "the session's process stopped answering");
       log(`session ${s.id} refreshMeta failed: ${err}`);
     }
+  }
+
+  private markDead(s: DaemonSession, reason: string): void {
+    s.dead = true;
+    s.streaming = false;
+    s.compacting = false;
+    this.dropBridge(s, reason);
+    this.onStopped?.(s);
   }
 
   /** Whether the child has the session bridge extension: it lists the inject command. Remembered on the session. */

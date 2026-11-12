@@ -36,7 +36,6 @@ import { DEFAULT_GRANT_LIMITS, GrantStore } from "./permissions.ts";
 import { Presence } from "./presence.ts";
 import { DEFAULT_LIMITS, Scheduler } from "./scheduler.ts";
 import { SubagentManager } from "./daemon-subagents.ts";
-import { PollBackoff } from "./poll-backoff.ts";
 import { pruneSessionState } from "./state-prune.ts";
 import { pruneTrash } from "./trash.ts";
 import { DEFAULT_SUBAGENT_LIMITS, keepMsFrom } from "./subagents.ts";
@@ -214,25 +213,13 @@ async function main(): Promise<void> {
   const logKeeper = setInterval(() => rotateLog(LOG), 10 * 60_000);
   logKeeper.unref();
 
-  // Liveness poll: refresh metadata, notice crashed children. Also detect
-  // orphaning: if our socket file is deleted (rm -rf of the runtime dir),
+  // Orphaning check: if our socket file is deleted (rm -rf of the runtime dir),
   // no controller can ever reach us again, so exit instead of haunting.
-  const pollBackoff = new PollBackoff();
+  // (A crashed child is noticed by its exit event, not by polling it.)
   const poller = setInterval(() => {
     if (!fs.existsSync(SOCK)) {
       log("socket file removed - orphaned daemon exiting");
       shutdown();
-      return;
-    }
-    for (const s of ctx.registry.all()) {
-      if (!s.child) {
-        pollBackoff.forget(s.id);
-      } else if (pollBackoff.due(s.id)) {
-        void ctx.children.refreshMeta(s).then(() => {
-          pollBackoff.result(s.id, s.dead);
-          ctx.hub.broadcastSessions();
-        });
-      }
     }
   }, 15_000);
   poller.unref();

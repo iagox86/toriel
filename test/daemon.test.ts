@@ -72,6 +72,17 @@ describe("daemon: sessions", () => {
     assert.equal(c.sessions().find((s) => s.id === sessionId)?.active, true);
   });
 
+  it("marks a session dead within a second of its pi process being killed, with no poll", async () => {
+    harness = await startDaemon();
+    const c = await harness.connect();
+    const { sessionId } = await c.request({ type: "spawn", cwd: harness.dir });
+    await c.waitFor((m) => m.type === "history" && m.session === sessionId);
+    const f = c.sessions().find((x) => x.id === sessionId)?.sessionFile as string;
+    const { pid } = JSON.parse(fs.readFileSync(`${f}.env.json`, "utf8")) as { pid: number };
+    process.kill(pid, "SIGKILL");
+    await c.waitFor((m) => m.type === "sessions" && m.sessions.some((s: Msg) => s.id === sessionId && s.dead === true), 1000);
+  });
+
   it("delivers a prompt sent while the child is still starting", async () => {
     harness = await startDaemon({ FAKE_PI_STARTUP_MS: "800" });
     const c = await harness.connect();

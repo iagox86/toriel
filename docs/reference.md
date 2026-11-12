@@ -402,7 +402,7 @@ Pasting and selecting (Linux; `wl-clipboard` on Wayland, `xclip` on X11):
   click out of the input before pi-tui's mouse handling), `attachments.ts`.
 
 Daemon side:
-- `daemon.ts` - entry point: wires the pieces below together, owns startup, polling and shutdown (a session whose child does not answer is probed on a backoff - `poll-backoff.ts`)
+- `daemon.ts` - entry point: wires the pieces below together, owns startup, periodic housekeeping and shutdown (a crashed pi child is noticed by its process `exit` event in `daemon-children.ts`; the 15s tick only checks that the socket file still exists)
 - `daemon-session.ts` (session record + registry), `daemon-hub.ts` (connected controllers, fan-out),
   `daemon-children.ts` (starting/stopping pi children, their events), `daemon-meta.ts` (session list per
   controller), `daemon-history.ts` (what a controller shows for a session)
