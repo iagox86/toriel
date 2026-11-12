@@ -26,6 +26,8 @@ import { ClientHub } from "./daemon-hub.ts";
 import { announceExpired } from "./daemon-permissions.ts";
 import { sessionMetas } from "./daemon-meta.ts";
 import { schedulerHost } from "./daemon-schedule.ts";
+import { WatchManager, watchHeldReason } from "./daemon-watch.ts";
+import { FileWatcher } from "./file-watch.ts";
 import { createServer } from "./daemon-server.ts";
 import { SessionRegistry } from "./daemon-session.ts";
 import { log } from "./log.ts";
@@ -46,7 +48,7 @@ function createContext(shutdown: () => void): DaemonContext {
   const registry = new SessionRegistry();
   const presence = new Presence();
   const usage = new Map<string, UsageReport>();
-  const hub = new ClientHub((socket) => sessionMetas(registry, presence, usage, socket, ctx.scheduler, ctx.grants, ctx.subagents.book), {
+  const hub = new ClientHub((socket) => sessionMetas(registry, presence, usage, socket, ctx.scheduler, ctx.grants, ctx.subagents.book, (id) => watchHeldReason(ctx.watches?.problem(id))), {
     type: "hello",
     protocol: PROTOCOL,
     build: buildInfo(),
@@ -65,7 +67,20 @@ function createContext(shutdown: () => void): DaemonContext {
   const children = new ChildManager(hub, usage, bridges, DEFAULT_SUBAGENT_LIMITS);
   // the scheduler's host reads the context lazily, so it can be built inside it
   const grants = new GrantStore(PERMISSIONS_FILE, Date.now, { perSession: loadSettings().settings.permissionGrantLimit ?? DEFAULT_GRANT_LIMITS.perSession });
-  const ctx: DaemonContext = { registry, hub, children, presence, bridges, scheduler: new Scheduler(schedulerHost(() => ctx, usage), SCHEDULES_FILE, { ...DEFAULT_LIMITS, dailyFires: loadSettings().settings.scheduleDailyLimit ?? DEFAULT_LIMITS.dailyFires }), grants, subagents: new SubagentManager(() => ctx, DEFAULT_SUBAGENT_LIMITS, keepMsFrom(process.env.TORIEL_SUBAGENT_KEEP_MS)), shutdown };
+  // every scheduler event may have changed the set of schedules, so the file watches ("on change" schedules, board 98) follow it
+  const host = schedulerHost(() => ctx, usage);
+  const scheduler = new Scheduler(
+    {
+      ...host,
+      event: (e) => {
+        host.event(e);
+        ctx.watches?.sync();
+      },
+    },
+    SCHEDULES_FILE,
+    { ...DEFAULT_LIMITS, dailyFires: loadSettings().settings.scheduleDailyLimit ?? DEFAULT_LIMITS.dailyFires },
+  );
+  const ctx: DaemonContext = { registry, hub, children, presence, bridges, scheduler, watches: new WatchManager(scheduler, new FileWatcher()), grants, subagents: new SubagentManager(() => ctx, DEFAULT_SUBAGENT_LIMITS, keepMsFrom(process.env.TORIEL_SUBAGENT_KEEP_MS)), shutdown };
   // a session going idle is what a waiting schedule is looking for, and what starts a gap loop's countdown
   children.onSettled = (s) => {
     ctx.subagents.onSettled(s);
@@ -92,6 +107,7 @@ async function main(): Promise<void> {
     log("daemon shutting down");
     server.close();
     ctx.scheduler.stop();
+    ctx.watches?.stop();
     inhibitor.stop();
     ctx.children.stopAll(ctx.registry.all());
     fs.rmSync(SOCK, { force: true });
@@ -135,6 +151,7 @@ async function main(): Promise<void> {
   fs.chmodSync(SOCK, 0o600);
   log(`listening on ${SOCK} (pid ${process.pid})`);
   ctx.scheduler.start();
+  ctx.watches?.sync(); // re-arm the file watches of the schedules the file brought back
   ctx.grants.load();
   // timed grants lapse by themselves (the store never matches an expired one); this only says so
   const grantKeeper = setInterval(() => announceExpired(ctx, ctx.grants.sweep()), 30_000);

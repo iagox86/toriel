@@ -37,7 +37,7 @@ import { handleMessage } from "./daemon-handlers-messages.ts";
 import { handleAgentSpawn, handleAgentsOp } from "./daemon-subagents.ts";
 import { handlePermissionAdd, handlePermissionCheck, handlePermissionList, handlePermissionRestore, handlePermissionRevoke } from "./daemon-permissions.ts";
 import { handleResolve } from "./daemon-resolve.ts";
-import { handleScheduleAdd, handleScheduleList, handleScheduleOp } from "./daemon-schedule.ts";
+import { handleScheduleAdd, handleScheduleList, handleScheduleOp, handleWatchAdd } from "./daemon-schedule.ts";
 import type { ClientCommand } from "./shared.ts";
 
 export async function dispatch(ctx: DaemonContext, cmd: ClientCommand, socket: net.Socket, res: Responder): Promise<void> {
@@ -84,6 +84,8 @@ export async function dispatch(ctx: DaemonContext, cmd: ClientCommand, socket: n
       return handleAgentsOp(ctx, cmd, socket, res);
     case "schedule_add":
       return handleScheduleAdd(ctx, cmd, res);
+    case "watch_add":
+      return handleWatchAdd(ctx, cmd, res);
     case "schedule_list":
       return handleScheduleList(ctx, cmd, res);
     case "schedule_op":

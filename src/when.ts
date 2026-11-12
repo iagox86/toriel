@@ -13,7 +13,17 @@ export type Trigger =
   | { kind: "every"; ms: number; anchor: number }
   | { kind: "cron"; expr: string }
   /** Re-run after the previous run finishes; no gap means the model picks the next delay itself. */
-  | { kind: "loop"; gapMs?: number };
+  | { kind: "loop"; gapMs?: number }
+  /**
+   * Fires when a file (or, with `dir`, anything directly inside a directory) changes: no clock time
+   * at all, the daemon's file watcher says when (src/file-watch.ts). `events` "write" is a create or
+   * a modification, "any" also a delete or a rename away. `cooldownMs` is the quiet time after the
+   * last event before it fires, so one save is one prompt.
+   */
+  | { kind: "watch"; path: string; dir: boolean; events: WatchEvents; cooldownMs: number };
+
+/** Which changes count: "write" = created or modified (the default), "any" = also deleted or renamed away. */
+export type WatchEvents = "write" | "any";
 
 /** Which command is asking: it decides what shapes are accepted. "auto" works it out (the agent tool). */
 export type WhenMode = "auto" | "in" | "at" | "every" | "cron" | "loop";
@@ -339,6 +349,8 @@ export function nextFire(trigger: Trigger, from: number): number | undefined {
       return cronNext(trigger.expr, from);
     case "loop":
       return trigger.gapMs === undefined ? undefined : from + trigger.gapMs;
+    case "watch":
+      return undefined; // no clock: a file event makes it due (Scheduler.triggered)
   }
 }
 
@@ -366,6 +378,8 @@ export function describeTrigger(trigger: Trigger, now: Date = new Date()): strin
       return `cron ${trigger.expr}`;
     case "loop":
       return trigger.gapMs === undefined ? "loop, self-paced" : `loop, ${fmtDuration(trigger.gapMs)} after each run`;
+    case "watch":
+      return `on change: ${trigger.path}${trigger.dir ? "/" : ""}${trigger.events === "any" ? " (any change)" : ""}`;
   }
 }
 

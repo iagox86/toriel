@@ -57,6 +57,8 @@ export async function startDaemon(extraEnv: Record<string, string> = {}): Promis
     TORIEL_TRASH: path.join(dir, "trash"),
     TORIEL_SCHEDULES: path.join(dir, "schedules.json"),
     TORIEL_PERMISSIONS: path.join(dir, "permissions.json"),
+    // settings come from XDG_CONFIG_HOME, so pin it too: a test daemon must not read the user's real settings file
+    XDG_CONFIG_HOME: path.join(dir, "config"),
     // a test daemon must not take real logind sleep locks
     TORIEL_NO_INHIBIT: "1",
     TORIEL_PI_CLI: FAKE_PI,

@@ -48,6 +48,36 @@ export async function addSchedule(h: Host, command: string, mode: WhenMode, call
   }
 }
 
+/** /watch <path> <prompt...>: a schedule that fires when the file changes (board 98). Needs a saved session, like any schedule. */
+export async function addWatch(h: Host, call: Invocation, session: number | undefined): Promise<void> {
+  if (session === undefined) {
+    h.notify("/watch: send a message first - a watch needs a saved session");
+    return;
+  }
+  const [path, ...words] = call.args;
+  const on = call.opts.on as string | undefined;
+  if (on !== undefined && on !== "write" && on !== "any") {
+    h.notify('/watch: --on is "write" (created or modified) or "any" (also deleted or renamed away)');
+    return;
+  }
+  try {
+    const r = (await h.request({
+      type: "watch_add",
+      session,
+      path: path ?? "",
+      prompt: words.join(" "),
+      name: call.opts.name as string | undefined,
+      events: on,
+      cooldown: call.opts.cooldown as string | undefined,
+      once: call.opts.once === true,
+      expires: call.opts.expires as string | undefined,
+    })) as { echo: string };
+    h.notify(r.echo);
+  } catch (err) {
+    h.notify(`/watch: ${errText(err)}`);
+  }
+}
+
 /** pause / resume / cancel / fire the schedule named in the call; `session` narrows it to one session's. */
 export async function operateSchedule(h: Host, command: Op, call: Invocation, session: number | undefined): Promise<void> {
   if (call.args[0] === undefined && call.opts.all !== true) {

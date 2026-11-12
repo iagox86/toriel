@@ -15,7 +15,7 @@ function runs(s: ScheduleView): string {
 
 /** One line for a pick list: "#3 poll - every 30m, next 14:30 (in 23m)" (with the session when listing across sessions). */
 export function scheduleChoice(s: ScheduleView, now: Date, showSession: boolean): string {
-  const state = s.state === "paused" ? "paused" : s.next === undefined ? "waiting for a run" : `next ${fmtNext(s.next, now)}`;
+  const state = s.state === "paused" ? "paused" : s.next === undefined ? (s.when.startsWith("on change") ? "watching" : "waiting for a run") : `next ${fmtNext(s.next, now)}`;
   const session = showSession ? ` [${s.sessionName ?? s.session.slice(0, 8)}]` : "";
   return `${scheduleLabel(s)} - ${s.when}, ${state}${session}: ${oneLineFlat(s.prompt, 40)}`;
 }
@@ -29,7 +29,7 @@ function entry(s: ScheduleView, now: Date, showSession: boolean): string[] {
         ? "PAUSED after repeated failures"
         : "paused"
       : s.next === undefined
-        ? s.when.startsWith("loop") ? "waiting for the current run to finish" : "-"
+        ? s.when.startsWith("loop") ? "waiting for the current run to finish" : s.when.startsWith("on change") ? "watching" : "-"
         : `next ${fmtNext(s.next, now)}`;
   const expiry = s.expiresAt === null ? "never expires" : `expires ${fmtClock(s.expiresAt, now)}`;
   const head = [scheduleLabel(s), s.when, state, runs(s), expiry];
@@ -60,7 +60,7 @@ export function scheduleStripLines(schedules: Schedule[], now: Date, held: (id: 
   const active = schedules.filter((s) => s.state === "active").sort((a, b) => (a.nextFire ?? Number.MAX_SAFE_INTEGER) - (b.nextFire ?? Number.MAX_SAFE_INTEGER));
   const lines = active.slice(0, 3).map((s) => {
     const why = held(s.id);
-    const when = why ? `waiting: ${why}` : s.nextFire === undefined ? "after the current run" : `next ${fmtClockShort(s.nextFire, now)}`;
+    const when = why ? `waiting: ${why}` : s.nextFire === undefined ? (s.trigger.kind === "watch" ? "watching" : "after the current run") : `next ${fmtClockShort(s.nextFire, now)}`;
     return `scheduled: ${s.name ?? `#${s.id}`}, ${describeTrigger(s.trigger, now)}, ${when} - ${oneLineFlat(s.prompt, 50)}`;
   });
   if (active.length > 3) {
