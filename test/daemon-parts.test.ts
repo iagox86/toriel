@@ -61,11 +61,12 @@ describe("ClientHub", () => {
   const a = fakeSocket();
   const b = fakeSocket();
 
-  it("sends each controller its own view of the session list", () => {
+  it("sends each controller its own view of the session list", async () => {
     const h = hub();
     h.addController(a.socket);
     h.addController(b.socket);
     h.broadcastSessions();
+    await Promise.resolve(); // the send is coalesced to the end of the turn
     const nameSeenBy = (s: ReturnType<typeof fakeSocket>) => {
       const sessions = (s.messages().at(-1) ?? { sessions: [] }).sessions as Array<{ sessionName: string }>;
       return sessions[0]?.sessionName;

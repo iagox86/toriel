@@ -84,7 +84,8 @@ export class SwitcherActions {
     this.summaries = new SwitcherSummaries(host, { refresh: () => this.refresh(), isOpen: () => this.isOpen, groups: () => this.groups });
   }
 
-  open(): void {
+  /** `rescan` re-reads the session files on open: the controller no longer polls them while the switcher is closed. */
+  open(rescan = true): void {
     // Release input on the session we were driving; re-enter re-attaches.
     if (this.h.viewing) {
       const meta = this.h.metaForPath(this.h.viewing);
@@ -110,6 +111,13 @@ export class SwitcherActions {
     this.h.syncHistory();
     this.h.renderChrome();
     this.h.tui.requestRender(true);
+    if (rescan) {
+      void this.h.loadLocal().then(() => {
+        if (this.isOpen) {
+          this.refresh();
+        }
+      });
+    }
   }
 
   close(): void {

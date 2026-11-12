@@ -9,7 +9,7 @@ pending Ron's approval, like docs/file-handling-proposal.md. Ticket: 156.
 
 Facts from the code that shape everything below:
 - A fork's file is a copy of the parent's, so it carries the parent's `session_info` entries. Until the fork's own entry is written, "latest session_info" is the parent's name. That is the Vikunja 156 symptom, and it explains why the one-shot `--name` / `set_session_name` write is never verified.
-- `refreshMeta` (daemon-children.ts:264) blindly copies `state.sessionName` into `s.sessionName` (:274). The registry is therefore a cache of pi's view and never an authority. It runs on every `agent_settled` (:515), every 15s per live session (daemon.ts:182, with `PollBackoff`), and after most ops handlers.
+- `refreshMeta` (daemon-children.ts:264) blindly copies `state.sessionName` into `s.sessionName` (:274). The registry is therefore a cache of pi's view and never an authority. It runs on every `agent_settled` (:515), and after most ops handlers.
 - The existing uniqueness primitive is `uniqueName(wanted, taken)` (session-id.ts:53). It is case-insensitive and appends ` #2`, ` #3`. Callers: controller.ts:706-718 (over `sessions` plus `local` file names) and daemon-subagents.ts:277-278 (over registry names only).
 - Both uniqueness callers check, then spawn, with the name registered only after pi answers. There is a check-then-act window in both.
 

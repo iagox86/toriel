@@ -10,6 +10,7 @@ export class ClientHub {
    * never become controllers: no initial sync, no attach accounting.
    */
   private readonly presenceOnly = new Set<net.Socket>();
+  private sessionsDirty = false;
   private readonly metasFor: (socket: net.Socket) => SessionMeta[];
 
   private readonly hello?: DaemonMessage;
@@ -23,7 +24,7 @@ export class ClientHub {
   /** Sent before anything else to a new controller, so it can compare versions before it relies on the daemon. */
   sendHello(socket: net.Socket): void {
     if (this.hello) {
-      this.send(socket, this.hello);
+      this.write(socket, this.hello); // not send(): a pending session list must not go ahead of the version check
     }
   }
 
@@ -56,6 +57,11 @@ export class ClientHub {
   }
 
   send(socket: net.Socket, msg: DaemonMessage): void {
+    this.flushSessions(); // a list that was asked for first reaches the controller first
+    this.write(socket, msg);
+  }
+
+  private write(socket: net.Socket, msg: DaemonMessage): void {
     if (!socket.destroyed) {
       socket.write(encodeLine(msg));
     }
@@ -63,18 +69,38 @@ export class ClientHub {
 
   /** The same message to every controller. */
   broadcast(msg: DaemonMessage): void {
+    this.flushSessions();
     for (const socket of this.controllers) {
-      this.send(socket, msg);
+      this.write(socket, msg);
     }
   }
 
   sendSessions(socket: net.Socket): void {
-    this.send(socket, { type: "sessions", sessions: this.metasFor(socket) });
+    this.flushSessions();
+    this.write(socket, { type: "sessions", sessions: this.metasFor(socket) });
   }
 
+  /**
+   * Ask every controller to be sent the session list. Many call sites fire for one change
+   * (a start broadcasts on entry, on exit and in its caller), and each send rebuilds the whole list per
+   * controller, so the requests of one turn of the event loop are served by one send. Any other message
+   * flushes a pending list first, so the order controllers see is the order things were asked for.
+   */
   broadcastSessions(): void {
+    if (this.sessionsDirty) {
+      return;
+    }
+    this.sessionsDirty = true;
+    queueMicrotask(() => this.flushSessions());
+  }
+
+  private flushSessions(): void {
+    if (!this.sessionsDirty) {
+      return;
+    }
+    this.sessionsDirty = false;
     for (const socket of this.controllers) {
-      this.sendSessions(socket);
+      this.write(socket, { type: "sessions", sessions: this.metasFor(socket) });
     }
   }
 

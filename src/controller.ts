@@ -255,8 +255,12 @@ class Controller {
       // component draws into (below short transcripts, around boxes) match.
       process.stdout.write(OSC_SET_BG);
       process.on("exit", () => process.stdout.write(OSC_RESET_BG));
-      this.switching.open();
+      this.switching.open(false); // loadLocal ran just above
+      // The scan parses every session file on disk, and only the switcher shows what it finds: scan while it is open (and once on each open).
       this.listTimer = setInterval(() => {
+        if (!this.switching.isOpen) {
+          return;
+        }
         void this.loadLocal().then(() => {
           if (this.switching.isOpen) {
             this.switching.refresh();
