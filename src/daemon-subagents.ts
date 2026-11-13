@@ -91,7 +91,7 @@ export class SubagentManager {
       }
       const s = ctx.registry.all().find((x) => x.sessionId === uuid);
       const file = s?.sessionFile ?? ((entry.parent ? lineage[entry.parent.id]?.forks?.find((f) => f.id === uuid)?.file : undefined) || undefined);
-      cands.push({ uuid, file, mtime: mtime(file), live: s?.child !== undefined || s?.spawning === true, record: this.book.byChild(uuid) });
+      cands.push({ uuid, file, mtime: mtime(file), live: s?.child !== undefined || s?.spawning === true, attached: s?.attachedTo !== undefined, record: this.book.byChild(uuid) });
     }
     let swept = false;
     for (const c of expiredSubagents(cands, now, this.keepMs)) {

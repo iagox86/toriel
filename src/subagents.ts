@@ -196,6 +196,8 @@ export interface SweepCandidate {
   mtime: number;
   /** A pi process is running for it (someone reopened it, or it is still working). */
   live: boolean;
+  /** A controller is attached to it: someone is looking at it, so deleting it would break their view. */
+  attached?: boolean;
   /** The in-memory record, when this daemon run started it. */
   record?: Pick<SubagentRecord, "state" | "endedAt" | "deliveredAt">;
 }
@@ -204,11 +206,12 @@ export interface SweepCandidate {
  * The subagents whose grace window has ended. The window starts when the parent had the result
  * (background: delivery; foreground: the answered call), or at the last change to the file if that
  * is later, so a subagent someone kept talking to is not swept; with no record (a daemon restart
- * since) the file alone dates it. Anything live or still running stays.
+ * since) the file alone dates it. Anything live, still running or attached to a controller stays;
+ * an attached one is swept after the controller leaves, since the window is long past by then.
  */
 export function expiredSubagents(cands: readonly SweepCandidate[], now: number, keepMs: number): SweepCandidate[] {
   return cands.filter((c) => {
-    if (c.live || c.record?.state === "running") {
+    if (c.live || c.attached || c.record?.state === "running") {
       return false;
     }
     const settled = c.record ? (c.record.deliveredAt ?? c.record.endedAt ?? 0) : 0;

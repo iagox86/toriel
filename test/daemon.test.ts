@@ -526,6 +526,9 @@ describe("daemon: lifecycle", () => {
     const c = await harness.connect();
     const { sessionId } = await c.request({ type: "spawn", cwd: harness.dir });
     await c.waitFor((m) => m.type === "history");
+    // a reload needs a session file, which a session has only once it holds a message
+    await c.request({ type: "prompt", session: sessionId, message: "something to compact" });
+    await c.waitFor(isSettled);
     const compact = c.request({ type: "compact", session: sessionId });
     await new Promise((r) => setTimeout(r, 150));
     for (const type of ["reload", "clear", "compact"] as const) {
@@ -636,6 +639,19 @@ describe("daemon: lifecycle", () => {
     const meta = c.sessions().find((s) => s.id === sessionId);
     assert.equal(meta?.sessionFile, file);
     assert.equal(meta?.active, true);
+  });
+
+  it("refuses to reload a session that has no file yet, and keeps it usable (ticket 155)", async () => {
+    harness = await startDaemon();
+    const c = await harness.connect();
+    const { sessionId } = await c.request({ type: "spawn", cwd: harness.dir });
+    await c.waitFor((m) => m.type === "history");
+    const file = c.sessions().find((s) => s.id === sessionId)?.sessionFile;
+    assert.ok(file && !fs.existsSync(file), "a fresh session has a path but no file");
+    await assert.rejects(c.request({ type: "reload", session: sessionId }), /nothing to reload yet/);
+    await c.request({ type: "prompt", session: sessionId, message: "still works" });
+    await c.waitFor(isSettled);
+    assert.equal(c.sessions().find((s) => s.id === sessionId)?.sessionFile, file);
   });
 
   it("resumes a stopped session from its file and answers only once the child can take commands", async () => {
