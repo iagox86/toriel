@@ -8,9 +8,12 @@ import { Key, matchesKey } from "@earendil-works/pi-tui";
 import { type Invocation, listing, parseCommandLine } from "./cli.ts";
 import { SWITCHER_COMMANDS, type SwitcherCommandName } from "./commands.ts";
 import type { Host } from "./host.ts";
+import { loadHandled } from "./handled-files.ts";
+import { loadSettings } from "./settings.ts";
 import { loadGroups, pruneStale, resolveGroup, saveGroups, type GroupsFile, withComment, withParked } from "./groups.ts";
 import {
   buildSessionList,
+  isExternalRow,
   appendUnranked,
   deleteEmptyGroup,
   moveGroup,
@@ -136,6 +139,13 @@ export class SwitcherActions {
     this.h.tui.requestRender(true);
   }
 
+  /** This run's /external choice, else the showExternalSessions setting. */
+  private externalOverride: boolean | undefined;
+
+  private showExternal(): boolean {
+    return this.externalOverride ?? loadSettings().settings.showExternalSessions === true;
+  }
+
   refresh(): void {
     this.groups = loadGroups();
     let list = buildSessionList({
@@ -169,11 +179,21 @@ export class SwitcherActions {
         // debug only
       }
     }
+    let hidden = 0;
+    if (!this.showExternal()) {
+      const handled = loadHandled();
+      const keep = new Set(this.h.viewing ? [this.h.viewing] : []);
+      const before = list.length;
+      list = list.filter((x) => !isExternalRow(x, handled, keep));
+      hidden = before - list.length;
+    }
     const filter = this.filter.current;
     const shown = filter ? list.filter((x) => filter.test(x)) : list;
-    this.h.switcher.filterNote = filter
+    const filterNote = filter
       ? `filter${filter.regex ? " (regex)" : ""}: ${filter.text}  -  ${shown.length} of ${list.length}  -  /filter clears`
       : "";
+    const hiddenNote = hidden > 0 ? `${hidden} outside session${hidden === 1 ? "" : "s"} hidden  -  /external show` : "";
+    this.h.switcher.filterNote = [filterNote, hiddenNote].filter(Boolean).join("   ");
     this.h.switcher.groupMatches = filter ? (title) => filter.testGroup(title) : undefined;
     this.h.switcher.sessions = shown;
     this.h.switcher.groups = this.groups.groups;
@@ -521,7 +541,7 @@ export class SwitcherActions {
   }
 
   /** Commands that file sessions and shape the list: groups, parking, notes, the filter, summaries. */
-  private groupCommands(): Pick<Record<SwitcherCommandName, CommandHandler>, "group" | "ungroup" | "park" | "comment" | "filter" | "summarize"> {
+  private groupCommands(): Pick<Record<SwitcherCommandName, CommandHandler>, "group" | "ungroup" | "park" | "comment" | "filter" | "summarize" | "external"> {
     const needsTarget = this.needsTarget.bind(this);
     return {
       group: needsTarget("group", async (t, arg) => {
@@ -591,6 +611,16 @@ export class SwitcherActions {
         this.h.switcher.hint = error ? `filter: ${error}` : "";
       },
       summarize: async (call, target) => this.summaries.run(call, target),
+      external: async (call) => {
+        const arg = (call.args[0] ?? "").toLowerCase();
+        if (arg !== "" && arg !== "show" && arg !== "hide") {
+          this.h.switcher.hint = "external: say show or hide";
+          return;
+        }
+        this.externalOverride = arg === "" ? !this.showExternal() : arg === "show";
+        this.refresh();
+        this.h.switcher.hint = this.externalOverride ? "showing sessions toriel never ran" : "hiding sessions toriel never ran";
+      },
     };
   }
 

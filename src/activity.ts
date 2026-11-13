@@ -14,7 +14,16 @@ export interface Activity {
   pausedMs?: number;
   /** When the current dialog block began; set and cleared while rendering. */
   pausedAt?: number;
+  /**
+   * The open provider request: an assistant message_start with no message_end
+   * yet. `last` is when it last produced anything (start or a streamed delta).
+   * Tool and MCP time sits between messages, so it is never inside a span.
+   */
+  inference?: { last: number };
 }
+
+/** Silence inside an inference span before the strip says the provider is slow. */
+export const SLOW_AFTER_MS = 30_000;
 
 export interface ActivityState {
   activity?: Activity;
@@ -29,6 +38,7 @@ export function reduceActivity(state: ActivityState, ev: Record<string, unknown>
   const set = (label: string) => {
     state.activity = { since: now, ...state.activity, label };
   };
+  const isAssistant = (ev.message as { role?: string } | undefined)?.role === "assistant";
   switch (ev.type as string) {
     case "agent_start":
       set("working");
@@ -36,7 +46,22 @@ export function reduceActivity(state: ActivityState, ev: Record<string, unknown>
     case "agent_settled":
       state.activity = undefined;
       break;
+    case "message_start":
+      if (state.activity && isAssistant) {
+        state.activity.inference = { last: now };
+      }
+      break;
+    case "message_end":
+      // any role: a non-assistant message_end mid-run would disarm the hint until the next assistant
+      // message_start, which errs on the quiet side
+      if (state.activity) {
+        state.activity.inference = undefined;
+      }
+      break;
     case "message_update": {
+      if (state.activity?.inference) {
+        state.activity.inference.last = now;
+      }
       const kind = String((ev.assistantMessageEvent as { type?: string } | undefined)?.type ?? "");
       if (kind.startsWith("thinking")) {
         set("thinking");
@@ -63,6 +88,9 @@ export function reduceActivity(state: ActivityState, ev: Record<string, unknown>
       }
       break;
     case "compaction_start":
+      if (state.activity) {
+        state.activity.inference = undefined;
+      }
       set("compacting context");
       break;
     case "auto_retry_start":
@@ -123,7 +151,11 @@ export function activityLines(state: ActivityState, width: number, now: number):
     const { ms, waiting } = runElapsed(state, state.activity, now);
     const label = waiting ? "waiting on you" : state.activity.label;
     // a shell command the agent waits for can be moved to the background: say how
-    const hint = !waiting && state.activity.label === "running bash" ? dim("  ctrl-b: run in background") : "";
+    let hint = !waiting && state.activity.label === "running bash" ? dim("  ctrl-b: run in background") : "";
+    const silent = state.activity.inference ? now - state.activity.inference.last : 0;
+    if (!waiting && silent >= SLOW_AFTER_MS) {
+      hint = dim(`  slower than usual - ${formatElapsed(silent)}`);
+    }
     lines.push(truncateToWidth(` ${spinner(spinnerFrame(now))} ${label} ${dim(formatElapsed(ms))}${hint}`, width));
   }
   return lines;

@@ -92,7 +92,7 @@ function createContext(shutdown: () => void): DaemonContext {
     ctx.scheduler.poke();
   };
   children.onAssistantMessage = (s, message) => ctx.subagents.onMessage(s, message);
-  children.onStopped = (s) => ctx.subagents.onStopped(s);
+  children.onStopped = (s, crash) => ctx.subagents.onStopped(s, crash);
   return ctx;
 }
 

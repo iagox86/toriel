@@ -183,6 +183,14 @@ export const SWITCHER_COMMANDS = [
     },
   },
   {
+    name: "external",
+    description: "show or hide sessions toriel never ran (plain pi, other instances)",
+    help: "The list hides session files toriel has never run a child on (sessions from plain pi or another toriel instance), unless they are in a group or open right now. /external show lists them; /external hide hides them again; with no word it flips the current state. The change lasts until toriel exits; set showExternalSessions in the settings file to change the default. /adopt on a visible one makes it an ordinary session.\n\nExamples:\n  /external show\n  /external hide",
+    build: (cmd) => {
+      cmd.argument("[show|hide]", "show or hide them (leave out to flip)");
+    },
+  },
+  {
     name: "feedback",
     description: "record a note about a harness or extension problem, with this session and turn attached, for later investigation",
     help: "Saves a note (with this session and the last turn attached) to toriel's feedback log so a harness or extension problem can be looked at later. -l lists recent notes.\n\nExample: /feedback -c tool-quirk the grep tool ignored my path",

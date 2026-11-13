@@ -4,7 +4,7 @@
 // layout engine can shrink the text to the screen and the user scrolls it: the
 // padding and the footer with its keys always stay in view.
 import type { Component, KeyId } from "@earendil-works/pi-tui";
-import { Key, matchesKey, ScrollView, VStack, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { Key, matchesKey, ScrollView, visibleWidth, VStack, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { dim, panelInnerWidth, panelRowPainter } from "./theme.ts";
 
 export interface PanelAction {
@@ -16,11 +16,67 @@ export interface PanelAction {
 /** A line's own indent and list marker ("  - ", "1. "), which wrapped lines hang under. */
 const LEADING = /^( *)((?:[-*] |\d+[.)] )?)/;
 
+/** Least width a hung description column may leave for its text; narrower and the row wraps the old way. */
+const MIN_DESCRIPTION_ROOM = 20;
+
+/** The escape sequences the width math skips: CSI (colours) and OSC (links, ended by BEL or ST). */
+const ESCAPE = /^(?:\x1b\[[0-9;:?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\))/;
+
+/**
+ * Split a "name  description" row at its first run of two or more spaces between
+ * visible characters. `col` is the visible column where the description starts;
+ * `before` is the text up to the run (styles intact), `after` the description
+ * with the styles that were still open at the split restored. The run is found
+ * by visible position, because styled rows carry escapes that shift string indexes.
+ */
+export function splitColumns(row: string): { before: string; after: string; col: number } | undefined {
+  let visible = 0;
+  let spaces = 0;
+  let runStart = -1; // string index where the current run of spaces began
+  let seenText = false;
+  let open: string[] = []; // sequences since the last reset
+  for (let i = 0; i < row.length; ) {
+    const esc = ESCAPE.exec(row.slice(i));
+    if (esc) {
+      open = /^\x1b\[0?m$/.test(esc[0]) ? [] : [...open, esc[0]];
+      i += esc[0].length;
+      continue;
+    }
+    const ch = row[i] as string;
+    if (ch === " ") {
+      if (seenText && spaces === 0) {
+        runStart = i;
+      }
+      spaces++;
+    } else {
+      if (seenText && spaces >= 2) {
+        const col = visible;
+        return { before: row.slice(0, runStart), after: open.join("") + row.slice(i), col };
+      }
+      spaces = 0;
+      seenText = true;
+    }
+    visible++;
+    i++;
+  }
+  return undefined;
+}
+
 /** One space of gutter, then `line` wrapped to `width` with continuation lines under the text, not under the marker. */
 export function wrapHanging(line: string, width: number): string[] {
   const [lead = "", spaces = "", marker = ""] = LEADING.exec(line) ?? [];
   const prefix = ` ${spaces}${marker}`;
   const hang = " ".repeat(prefix.length);
+  const columns = marker === "" && visibleWidth(line) > width - 1 ? splitColumns(line.slice(lead.length)) : undefined;
+  if (columns) {
+    // "name   description" rows: the description hangs under its own column, when that leaves room to read it
+    const room = width - prefix.length - columns.col;
+    if (room >= MIN_DESCRIPTION_ROOM) {
+      const wrapped = wrapTextWithAnsi(columns.after, room);
+      const gap = " ".repeat(columns.col - visibleWidth(columns.before));
+      return (wrapped.length > 0 ? wrapped : [""]).map((w, i) => (i === 0 ? `${prefix}${columns.before}${gap}` : `${hang}${" ".repeat(columns.col)}`) + w);
+    }
+  }
   const wrapped = wrapTextWithAnsi(line.slice(lead.length), Math.max(1, width - prefix.length));
   return (wrapped.length > 0 ? wrapped : [""]).map((w, i) => (i === 0 ? prefix : hang) + w);
 }

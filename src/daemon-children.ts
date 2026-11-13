@@ -12,6 +12,7 @@ import type { DaemonSession } from "./daemon-session.ts";
 import { randomUUID } from "node:crypto";
 import { type AgentProfile, loadAgents, profileArgs } from "./agents.ts";
 import { recordHandled } from "./handled-files.ts";
+import { exitNote, stderrTail } from "./subagent-exit.ts";
 import { historyOf } from "./daemon-history.ts";
 import { resourceArgs, SPAWN_TOOLS, TORIEL_TOOLS } from "./resources.ts";
 import { lineageArgs, loadLineage, parentMap, subagentDepth } from "./lineage.ts";
@@ -59,7 +60,8 @@ export class ChildManager {
   /** The limits that decide which sessions get the toriel_agent tools: the same object the subagent manager enforces. */
   private readonly subagentLimits: SubagentLimits;
   /** Called when a session's process is stopped or found dead (subagents end with their session; foreground ones with their parent). */
-  onStopped?: (s: DaemonSession) => void;
+  /** A session's process went away; `crash` says why when nobody asked it to stop. */
+  onStopped?: (s: DaemonSession, crash?: string) => void;
 
   /** The grant store, which answers file-path prompts it covers (see `answerCovered`). */
   private readonly grants: GrantStore | undefined;
@@ -137,10 +139,11 @@ export class ChildManager {
       this.launching.delete(client);
     }
     // A crash is told by the process exiting, not found by polling it. A deliberate stop clears s.child first (deactivate), so only a child nobody stopped lands here.
-    (client as unknown as { process?: { once(ev: "exit", cb: () => void): void } }).process?.once("exit", () => {
+    (client as unknown as { process?: { once(ev: "exit", cb: (code: number | null, signal: string | null) => void): void } }).process?.once("exit", (code, signal) => {
       if (s.child === client && !s.dead) {
-        log(`session ${s.id} child exited unexpectedly`);
-        this.markDead(s, "the session's process exited");
+        const note = exitNote(code, signal, client.getStderr());
+        log(`session ${s.id} child exited unexpectedly: ${exitNote(code, signal)}; stderr tail: ${stderrTail(client.getStderr()) || "(none)"}`);
+        this.markDead(s, "the session's process exited", note);
         this.hub.broadcastSessions();
       }
     });
@@ -228,7 +231,7 @@ export class ChildManager {
       // launch() hooks the exit event, but s.child is only set now: a process that died in between (during the steering-mode call) was missed
       const proc = (s.child as unknown as { process?: { exitCode?: number | null; signalCode?: string | null } }).process;
       if (typeof proc?.exitCode === "number" || typeof proc?.signalCode === "string") {
-        this.markDead(s, "the session's process exited");
+        this.markDead(s, "the session's process exited", exitNote(proc.exitCode, proc.signalCode, s.child.getStderr()));
         this.hub.broadcastSessions();
       }
       await this.refreshMeta(s);
@@ -359,12 +362,12 @@ export class ChildManager {
     }
   }
 
-  private markDead(s: DaemonSession, reason: string): void {
+  private markDead(s: DaemonSession, reason: string, crash: string = reason): void {
     s.dead = true;
     s.streaming = false;
     s.compacting = false;
     this.dropBridge(s, reason);
-    this.onStopped?.(s);
+    this.onStopped?.(s, crash);
   }
 
   /** Whether the child has the session bridge extension: it lists the inject command. Remembered on the session. */

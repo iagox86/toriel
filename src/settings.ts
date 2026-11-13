@@ -32,6 +32,8 @@ export interface TorielSettings {
   scheduleDailyLimit?: number;
   /** Keep the machine from sleeping while a session is working or a scheduled run is near (default true; needs systemd-inhibit). */
   preventSleep?: boolean;
+  /** List sessions toriel has never run (plain pi, other instances) in the switcher (default false; /external toggles it for one run). */
+  showExternalSessions?: boolean;
   /** Most permission grants one session may hold (default 100; read when the daemon starts). */
   permissionGrantLimit?: number;
   /** Lifetimes the permission dialog offers as "allow for ..." rows: durations, or "session" for until revoked (default ["1h", "session"]; [] = none). */
@@ -78,7 +80,7 @@ export function settingsMtime(file: string = settingsFile()): number | null {
 }
 
 const NUMBER_KEYS = ["summaryIntervalMinutes", "summaryMinNewMessages", "scheduleUsagePause", "scheduleDailyLimit", "permissionGrantLimit", "trashRetentionDays"] as const;
-const BOOLEAN_KEYS = ["warnNoPermissionSystem", "preventSleep"] as const;
+const BOOLEAN_KEYS = ["warnNoPermissionSystem", "preventSleep", "showExternalSessions"] as const;
 /** Number settings where 0 is a meaningful "off". */
 const ZERO_OK: readonly string[] = ["summaryIntervalMinutes", "scheduleUsagePause", "trashRetentionDays"];
 const STRING_KEYS = ["provider", "model", "thinking", "piCli", "summaryModel"] as const;
