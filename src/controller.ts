@@ -34,7 +34,7 @@ import { DaemonLink } from "./daemon-link.ts";
 import { buildLayouts } from "./layout.ts";
 
 import { dialogOwner } from "./dialog-route.ts";
-import { DEFAULT_GRANT_DURATIONS, type DialogRequest, DialogPanel, isTextDialog, withGrantRows, withOrigin } from "./dialogs.ts";
+import { DEFAULT_GRANT_DURATIONS, type DialogRequest, DialogPanel, isTextDialog, withOrigin, withOwnLayout } from "./dialogs.ts";
 import { configureEditorKeys, InputEditor, } from "./editor.ts";
 import { lastLine } from "./format.ts";
 import { RewindPicker } from "./rewind-picker.ts";
@@ -81,6 +81,7 @@ import {
   itemsFromFile,
   itemsFromMessages,
   newView,
+  noteRow,
   type SessionView,
   showRawError,
 } from "./transcript.ts";
@@ -378,15 +379,17 @@ class Controller {
         return;
       case "notice": {
         const meta = this.sessions.get(msg.session);
-        if (meta && this.keyFor(meta) === this.viewing) {
+        if (meta && msg.durable) {
+          this.noteInTranscript(meta, msg.text);
+        } else if (meta && this.keyFor(meta) === this.viewing) {
           this.notify(msg.text);
         }
         return;
       }
       case "exited": {
         const meta = this.sessions.get(msg.session);
-        if (meta && this.keyFor(meta) === this.viewing) {
-          this.notify(msg.reason ? `child exited - ${msg.reason}` : "child exited");
+        if (meta) {
+          this.noteInTranscript(meta, msg.reason ? `child exited - ${msg.reason}` : "child exited");
         }
         return;
       }
@@ -479,7 +482,7 @@ class Controller {
         });
       } else {
         // Name the session that is blocked, so the dialog says who is asking.
-        view.dialog = withGrantRows(withOrigin(request, sessionId, this.sessions.get(sessionId)?.sessionName, this.sessions.get(sessionId)?.subagent ? "Subagent" : "Session"), loadSettings().settings.permissionGrantDurations ?? DEFAULT_GRANT_DURATIONS);
+        view.dialog = withOwnLayout(withOrigin(request, sessionId, this.sessions.get(sessionId)?.sessionName, this.sessions.get(sessionId)?.subagent ? "Subagent" : "Session"), loadSettings().settings.permissionGrantDurations ?? DEFAULT_GRANT_DURATIONS);
       }
     } else if (request && request.method === "notify") {
       const message = String(request.message ?? "notification");
@@ -766,6 +769,22 @@ class Controller {
       if (key === this.viewing) {
         this.rebuildChat();
       }
+    }
+  }
+
+  /**
+   * Something the daemon did that the user should be able to read back later (a grant answered a prompt, a child died): a dim
+   * row in that session's transcript, next to the tool call it explains, not a flash. Kept on the view so a history reload
+   * does not lose it.
+   */
+  private noteInTranscript(meta: SessionMeta, text: string): void {
+    const key = this.keyFor(meta);
+    const view = this.viewFor(key);
+    const item = noteRow(text);
+    view.notes = [...(view.notes ?? []), item];
+    this.addItem(view, key, item);
+    if (key === this.viewing) {
+      this.renderChrome();
     }
   }
 

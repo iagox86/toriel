@@ -17,37 +17,81 @@ export interface DialogRequest {
   origin?: string;
   /** When the controller received it (ms); set by withOrigin. */
   shownAt?: number;
-  /** The grant pi would record for this ask, attached by the daemon when it can be granted (docs/permissions.md). */
-  toriel?: { grants: Array<{ surface: string; pattern: string }> };
-  /** toriel's own "allow for ..." rows, already appended to `options` (see withGrantRows). */
+  /**
+   * What the daemon knows about this ask (docs/permissions.md): the grants pi would record for it, or `protectedAsk` when
+   * it is about the grants file or pi's own configuration, which no grant ever covers.
+   */
+  toriel?: { grants?: Array<{ surface: string; pattern: string }>; protectedAsk?: boolean };
+  /** toriel's own "allow for ..." rows, among `options` (see withOwnLayout). */
   extraRows?: GrantRow[];
+  /** When toriel relabelled the options: what pi is told for each label, since pi only understands its own wording. */
+  answers?: Record<string, string>;
 }
 
-/** A row toriel adds below pi's options: answering it says "Yes" to pi and stores a grant lasting `for`. */
+/** A row that answers "Yes" to pi and stores a grant lasting `for`. */
 export interface GrantRow {
   label: string;
   /** A duration ("1h") or "session". */
   for: string;
 }
 
-/** Lifetimes of the extra rows when the setting does not say. */
+/** Lifetimes of the allow rows when the setting does not say. */
 export const DEFAULT_GRANT_DURATIONS: readonly string[] = ["1h", "session"];
 
-/**
- * The dialog with toriel's rows appended after pi's options, when the ask can be granted: a
- * select whose plain "Yes" exists and that carries a suggested grant. pi's own options stay as
- * they are (each is the literal answer value). At most nine rows in all, so digits still pick.
- */
-export function withGrantRows(d: DialogRequest, durations: readonly string[]): DialogRequest {
-  const grants = d.toriel?.grants ?? [];
+/** pi's permission prompt: a select titled "Permission Required" with a plain Yes and No. Any other select (an extension's own picker) is left alone. */
+export function isPermissionPrompt(d: DialogRequest): boolean {
   const options = d.options ?? [];
-  const room = Math.max(0, 9 - options.length);
-  if (d.method !== "select" || grants.length === 0 || room === 0 || !options.includes("Yes") || (d.extraRows?.length ?? 0) > 0) {
+  return d.method === "select" && (d.title ?? "").startsWith("Permission Required") && options.includes("Yes") && options.includes("No");
+}
+
+/**
+ * A permission prompt in toriel's own layout, the same whatever pi offered:
+ *
+ *   Yes, this once  /  Yes, and allow ... for 1 hour  /  ... for this session  /  No  /  No, with a reason
+ *
+ * Each row maps to one of pi's literal answers (`answers`), or to "Yes" plus a stored grant (`extraRows`). pi's own "for this
+ * session" rows are never shown, because pi keeps that answer in memory where toriel can neither see nor limit it - it would
+ * cover files toriel refuses to grant; only when there is no grant to offer does one stand in (labelled as pi's). An ask about
+ * a protected file (`protectedAsk`) gets neither. The rest of the dialogs come back untouched.
+ */
+export function withOwnLayout(d: DialogRequest, durations: readonly string[]): DialogRequest {
+  if (!isPermissionPrompt(d) || d.answers !== undefined) {
     return d;
   }
-  const what = grants.map((g) => JSON.stringify(g.pattern)).join(" + ");
-  const rows = durations.slice(0, room).map((life) => ({ label: `Yes, and allow ${what} for ${life === "session" ? "this session, kept across restarts" : durationWords(life)} [toriel]`, for: life }));
-  return rows.length === 0 ? d : { ...d, options: [...options, ...rows.map((r) => r.label)], extraRows: rows };
+  const options = d.options ?? [];
+  const protectedAsk = d.toriel?.protectedAsk === true;
+  const grants = protectedAsk ? [] : (d.toriel?.grants ?? []);
+  const piSession = protectedAsk || grants.length > 0 ? undefined : options.find((o) => o.startsWith("Yes") && o !== "Yes");
+  const reason = options.find((o) => o.startsWith("No") && o !== "No" && takesReason(o));
+  const labels: string[] = [];
+  const answers: Record<string, string> = {};
+  const rows: GrantRow[] = [];
+  const add = (label: string, answer: string): void => {
+    labels.push(label);
+    answers[label] = answer;
+  };
+  add("Yes, this once", "Yes");
+  if (grants.length > 0) {
+    const what = grants.map((g) => JSON.stringify(g.pattern)).join(" + ");
+    for (const life of durations) {
+      const row = { label: `Yes, and allow ${what} for ${life === "session" ? "this session, kept across restarts" : durationWords(life)}`, for: life };
+      rows.push(row);
+      labels.push(row.label);
+      answers[row.label] = "Yes";
+    }
+  } else if (piSession !== undefined) {
+    add("Yes, and allow for this session (pi's own: lost on restart)", piSession);
+  }
+  add("No", "No");
+  if (reason !== undefined) {
+    add("No, with a reason", reason);
+  }
+  return { ...d, options: labels, extraRows: rows, answers };
+}
+
+/** What pi is told when `label` is picked: its own wording for a relabelled row, else the label itself. */
+export function answerValue(d: DialogRequest, label: unknown): unknown {
+  return typeof label === "string" ? (d.answers?.[label] ?? label) : label;
 }
 
 /** The extra row an answer value picked, if it was one. */
@@ -164,8 +208,13 @@ export function wrapRows(text: string, width: number, first = " ", hang = " "): 
   return (rows.length > 0 ? rows : [""]).map((row, i) => (i === 0 ? first : hang) + row);
 }
 
-/** `reason` non-null = the highlighted option is being edited inline. */
-export function dialogLines(d: DialogRequest, index: number, width: number, reason: string | null = null): string[] {
+/** `text` with a cursor drawn at `at`: a block after the end, else the character under it in reverse video. */
+export function withCursor(text: string, at: number): string {
+  return at >= text.length ? `${text}█` : `${text.slice(0, at)}\x1b[7m${text[at]}\x1b[27m${text.slice(at + 1)}`;
+}
+
+/** `reason` non-null = the highlighted option is being edited inline, with the cursor at `cursor` (default: the end). */
+export function dialogLines(d: DialogRequest, index: number, width: number, reason: string | null = null, cursor = reason?.length ?? 0): string[] {
   const out: string[] = [];
   const title = (d.title ?? d.method).split("\n");
   const head = d.origin ? `${d.origin}: ` : "";
@@ -185,17 +234,13 @@ export function dialogLines(d: DialogRequest, index: number, width: number, reas
     out.push(dim(" enter send - empty enter or esc skips"));
     return out;
   }
-  const extraFrom = (d.options?.length ?? 0) - (d.extraRows?.length ?? 0);
   (d.options ?? []).forEach((o, i) => {
-    if (d.extraRows?.length && i === extraFrom) {
-      out.push(dim(" -- toriel: also remember this --"));
-    }
     const row = grantRowFor(d, o);
     const lead = `${i + 1}. `;
     if (i === index && reason !== null) {
       const label = row && editablePattern(d, o) !== undefined ? `Yes, and allow pattern (${row.for === "session" ? "this session" : durationWords(row.for)})` : o;
       // wrapped, not cut: the text being typed and the cursor must stay in view however long it gets
-      out.push(...wrapRows(`${lead}${label}: ${reason}\u2588`, width, " > ", `   ${" ".repeat(lead.length)}`).map(selected));
+      out.push(...wrapRows(`${lead}${label}: ${withCursor(reason, cursor)}`, width, " > ", `   ${" ".repeat(lead.length)}`).map(selected));
       return;
     }
     if (i === index) {
@@ -206,6 +251,9 @@ export function dialogLines(d: DialogRequest, index: number, width: number, reas
     }
     out.push(dim(`  ${truncateToWidth(` ${lead}${o}`, width - 2)}`));
   });
+  if (d.toriel?.protectedAsk) {
+    out.push(...wrapRows("toriel: grants never cover the permission grants file or pi's own configuration, so this is always asked", width, " -- ", "    ").map(dim));
+  }
   return out;
 }
 
@@ -214,14 +262,42 @@ export class DialogPanel implements Component {
   private dialog: DialogRequest | undefined;
   private index = 0;
   private reason: string | null = null;
+  private cursor = 0;
 
   /** Inline reason text while editing, else null. */
   get editing(): string | null {
     return this.reason;
   }
 
+  /** Start editing `text` (null stops), the cursor at its end. */
   edit(text: string | null): void {
     this.reason = text;
+    this.cursor = text?.length ?? 0;
+  }
+
+  /** Type `text` at the cursor. */
+  insert(text: string): void {
+    if (this.reason !== null) {
+      this.reason = this.reason.slice(0, this.cursor) + text + this.reason.slice(this.cursor);
+      this.cursor += text.length;
+    }
+  }
+
+  /** Delete the character before the cursor (`forward`: under it). */
+  erase(forward = false): void {
+    if (this.reason === null) {
+      return;
+    }
+    const at = forward ? this.cursor : this.cursor - 1;
+    if (at >= 0 && at < this.reason.length) {
+      this.reason = this.reason.slice(0, at) + this.reason.slice(at + 1);
+      this.cursor = at;
+    }
+  }
+
+  /** Move the cursor by `delta` characters, or to the start (-Infinity) or end (Infinity); it stays inside the text. */
+  moveCursor(delta: number): void {
+    this.cursor = Math.max(0, Math.min(this.reason?.length ?? 0, this.cursor + delta));
   }
 
   /** Show `dialog` (undefined hides); the highlight restarts for a new dialog. */
@@ -229,6 +305,7 @@ export class DialogPanel implements Component {
     if (dialog?.id !== this.dialog?.id) {
       this.index = 0;
       this.reason = null;
+      this.cursor = 0;
     }
     this.dialog = dialog;
   }
@@ -248,7 +325,7 @@ export class DialogPanel implements Component {
   }
 
   render(width: number): string[] {
-    return this.dialog ? panel(dialogLines(this.dialog, this.index, panelInnerWidth(width), this.reason), width) : [];
+    return this.dialog ? panel(dialogLines(this.dialog, this.index, panelInnerWidth(width), this.reason, this.cursor), width) : [];
   }
 
   invalidate(): void {}

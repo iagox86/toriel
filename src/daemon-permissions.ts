@@ -191,7 +191,7 @@ export function announceExpired(ctx: DaemonContext, gone: Grant[]): void {
     const s = ctx.registry.all().find((x) => x.sessionId === g.session);
     log(`permission grant #${g.id} expired (session ${g.session}): ${g.surface} ${JSON.stringify(g.pattern)}`);
     if (s) {
-      ctx.hub.broadcast({ type: "notice", session: s.id, text: `permission grant #${g.id} expired: ${g.surface} ${JSON.stringify(g.pattern)}` });
+      ctx.hub.broadcast({ type: "notice", session: s.id, text: `permission grant #${g.id} expired: ${g.surface} ${JSON.stringify(g.pattern)}`, durable: true });
     }
   }
   ctx.hub.broadcastSessions();

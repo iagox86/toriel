@@ -346,7 +346,7 @@ export type DaemonMessage =
   | { type: "ui_request"; session: number; request: Record<string, unknown> }
   | { type: "exited"; session: number; reason?: string }
   /** Something worth saying about a session that is not an event in its transcript (a schedule ended or failed). */
-  | { type: "notice"; session: number; text: string }
+  | { type: "notice"; session: number; text: string; /** Worth reading later (a grant answered a prompt): a row in the transcript, not a four-second flash. */ durable?: boolean }
   /** How many messages pi holds, sent when a run settles; a controller whose count differs asks to resync. */
   | { type: "digest"; session: number; messages: number; streaming: boolean }
   | { type: "response"; id: string; ok: boolean; error?: string; data?: unknown };

@@ -4,7 +4,7 @@ import { RpcClient } from "@earendil-works/pi-coding-agent";
 import { childEnv, sandboxWritableRoots } from "./child-env.ts";
 import { scopeForSession } from "./scope-root.ts";
 import { DIALOG_METHODS, SHARED_DIR, SOCK } from "./config.ts";
-import { answerablePrompt } from "./daemon-permissions.ts";
+import { answerablePrompt, touchesProtected } from "./daemon-permissions.ts";
 import { type GrantStore, withSuggestion } from "./permissions.ts";
 import { type BridgeTracker, INJECT_COMMAND, injectedId, mergedQueueTexts, parseBridgeReport } from "./daemon-bridge.ts";
 import type { ClientHub } from "./daemon-hub.ts";
@@ -507,7 +507,7 @@ export class ChildManager {
     }
     stdin.write(encodeLine({ type: "extension_ui_response", id: request.id, value: "Yes" }));
     log(`file-path prompt answered by ${covering.map((g) => `#${g.id}`).join(", ")} for session ${s.sessionId}: ${String(value ?? "")}`);
-    this.hub.broadcast({ type: "notice", session: s.id, text: `allowed by permission grant ${covering.map((g) => `#${g.id}`).join(", ")}: ${String(value ?? "a file path")}` });
+    this.hub.broadcast({ type: "notice", session: s.id, text: `allowed by permission grant ${covering.map((g) => `#${g.id}`).join(", ")}: ${String(value ?? "a file path")}`, durable: true });
     return true;
   }
 
@@ -532,10 +532,12 @@ export class ChildManager {
       }
       // a select dialog may carry the grant the toriel-grants link saw for it
       const asked = s.suggestion?.value;
-      const request = DIALOG_METHODS.has(event.method as string) ? withSuggestion(event, s.suggestion, Date.now()) : event;
+      const suggested = DIALOG_METHODS.has(event.method as string) ? withSuggestion(event, s.suggestion, Date.now()) : event;
+      // an ask about the grants file or pi's config is always asked: say so instead of offering rows that could only be refused
+      const request = event.method === "select" && touchesProtected(typeof event.title === "string" ? event.title : "") ? { ...suggested, toriel: { protectedAsk: true } } : suggested;
       if (DIALOG_METHODS.has(event.method as string)) {
         // only the dialog that took the suggestion uses it up: an unrelated one arriving first must not lose it
-        if (request !== event) {
+        if (suggested !== event) {
           s.suggestion = undefined;
         }
         if (this.answerCovered(s, request, asked)) {

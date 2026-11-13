@@ -24,9 +24,9 @@ Related, not built: #79 (auto-deny after a timeout), #85 (agent tool `toriel_per
   action is required, held in memory per daemon start per session), far less UI.
 - The dialog's pattern comes from the link's report matched to the dialog by its `tool :` /
   `command :` title lines. There is no option-text parsing fallback: when nothing matches,
-  no rows are offered.
+  no grant is offered (the layout stays the same, with pi's own session row in the session slot).
 - `permissionGrantDurations` defaults to `["1h", "session"]`: pi's own "for this session"
-  row dies on restart, so the "kept across restarts" row is useful, not redundant.
+  row dies on restart, so toriel's "kept across restarts" row replaces it rather than sitting beside it.
 - Expiry notices come from a 30 s sweep in the daemon; matching never depends on it.
 - The extension reads the package's service from its documented `globalThis` map, because an
   extension outside the package cannot import it (found in the spike).
@@ -108,11 +108,11 @@ matching); a project config overlay (above).
 - The chain cannot let a grant cover `path` / `external_directory` asks (their `allow` is
   capped to `defer`; the one niche exception is an `external_directory` ask carrying pi's
   nothing-on-disk license, which we do not rely on), and pi has no way to add a session
-  rule with a pattern of your choosing. pi's own "for this session" option still works
-  and still dies on restart. `/permissions add` refuses these surfaces.
+  rule with a pattern of your choosing. pi's own "for this session" option dies on restart,
+  and toriel no longer shows it unless it has no grant to offer instead. `/permissions add` refuses these surfaces.
 - **File-path grants (ticket 194).** toriel answers these itself instead. The daemon sees
   every dialog before a controller does, so a file-path prompt carries toriel's
-  "allow ... [toriel]" rows like any other, and picking one (or tabbing to widen the
+  allow rows like any other, and picking one (or tabbing to widen the
   pattern, say `project/deep/dir/docs/*` to `project/*`) stores a grant. When a later
   file-path prompt in that session has every suggested pattern covered by such a grant, the
   daemon writes pi's plain "Yes" to the child and no controller is asked (a notice says
@@ -270,39 +270,65 @@ Declared once in `src/commands.ts` with help and completion like the other famil
 - Reuse: `pickSchedule`-style pick list, `fmtDuration`/`parseDurationText` from
   `when.ts`, the info-panel listing.
 
-## Permission dialog extras (#82)
+## Permission dialog layout (#82, tickets 194, 195)
 
-The dialog stays pi's, byte for byte (options are the literal answers). The controller
-appends toriel's own rows below them, visibly marked, for asks where a grant is possible
-(the dialog carries a recordable suggestion; file-path asks included, see "File-path grants"
-under the limits):
+A recognised permission prompt (a `select` titled "Permission Required" with a plain "Yes" and
+"No") is always drawn in toriel's own layout, whatever pi offered and whether or not the daemon
+has a suggestion for it. Every other select (an extension's own picker) is left as pi sent it:
 
 ```
- 1. Yes
- 2. Yes, allow bash "sudo -V" for this session          (pi: dies on restart)
- 3. No
- 4. No, provide reason
- -- toriel --
- 5. Yes, and allow "sudo -V" for 1 hour
- 6. Yes, and allow "sudo -V" for this session (kept across restarts)
+ 1. Yes, this once
+ 2. Yes, and allow "sudo -V" for 1 hour
+ 3. Yes, and allow "sudo -V" for this session, kept across restarts
+ 4. No
+ 5. No, with a reason
 ```
 
-Choosing 5 or 6 answers pi with the plain "Yes" (so this one call proceeds) and tells
-the daemon to store the grant. pi never sees the extra rows. The 700ms guard,
-esc-means-deny and the deny-reason flow are untouched. Durations come from a setting
-(`permissionGrantDurations`, default `["1h"]`).
+Each row maps to one of pi's literal answers (`answers` on the dialog, `answerValue` in
+`src/dialogs.ts`): once is "Yes", No is "No", the reason row is pi's "No, provide reason". An
+allow row answers pi with the plain "Yes" (so this one call proceeds) and tells the daemon to
+store the grant. The 700ms guard, esc-means-deny and the deny-reason flow are as before.
+Durations come from a setting (`permissionGrantDurations`, default `["1h", "session"]`).
 
-**Editing the pattern (T13).** Tab on a toriel row (5 or 6) opens the pattern inline,
-pre-filled with the suggestion, the way tab on "No, provide reason" opens the reason. Type a
-broader pattern (an ask for `projects/code/docs/*`, edit to `projects/code/*`) and press enter:
-pi still hears the plain "Yes", and the grant is stored with the typed pattern and that row's
-duration. With broader-grant matching (T11) the one edited grant then covers the narrower asks
-for the rest of its life. Empty is refused; esc leaves the editor without answering. Offered only
-when the ask carries exactly one suggested grant (nothing single to edit otherwise), and never on
-pi's own rows. A typed pattern must cover the suggested one (the controller says so and stays in the
-editor otherwise, the daemon checks it again for file-path grants); beyond that it is toriel's own record,
-glob-matched, on the surface the row appeared for. For a file-path ask the grant is stored first, against
-the open prompt, and pi is answered "Yes" only once the daemon accepted it.
+pi's own "Yes, allow X for this session" row is never shown, because pi keeps that answer in
+memory where toriel can neither list nor limit it, and it would cover files toriel refuses to
+grant (the grants file, pi's config). Only when there is no grant to offer (the grants link is
+not set up, or the daemon could not match the prompt) does it stand in for the session row,
+labelled "Yes, and allow for this session (pi's own: lost on restart)", so the layout stays
+the same and nothing is lost. The allow-for-an-hour row needs a suggestion and is absent
+without one; a row pi did not offer (no reason option) is absent too.
+
+**Protected asks (ticket 197).** When a prompt is about the grants file or pi's own config, the
+daemon marks it (`toriel: {protectedAsk: true}`, decided from the title alone, so it holds
+even with no suggestion) and the layout is once / No / No with a reason, plus a dim note that
+grants never cover these. No allow row of any kind exists on it: not a toriel grant (the daemon
+would refuse it), and not pi's session row (nothing would stop it). This closes the hole where
+pi's built-in session answer went around the protected-path check.
+
+**Editing the pattern (T13).** Tab on an allow row opens the pattern inline, pre-filled with the
+suggestion, the way tab on the reason row opens the reason. Type a broader pattern (an ask for
+`projects/code/docs/*`, edit to `projects/code/*`) and press enter: pi still hears the plain
+"Yes", and the grant is stored with the typed pattern and that row's duration. With
+broader-grant matching (T11) the one edited grant then covers the narrower asks for the rest of
+its life. The editor has a cursor (ticket 196): left, right, home, end, delete and backspace
+work at it, up and down leave the edit and the highlighted row alone. Empty is refused; esc
+leaves the editor without answering. Offered only when the ask carries exactly one suggested
+grant (nothing single to edit otherwise), and never on the once, No or reason rows. A typed
+pattern must cover the suggested one (the controller says so and stays in the editor otherwise,
+the daemon checks it again for file-path grants); beyond that it is toriel's own record,
+glob-matched, on the surface the row appeared for. For a file-path ask the grant is stored
+first, against the open prompt, and pi is answered "Yes" only once the daemon accepted it.
+
+**Who answers (tickets 121, 122).** A subagent's prompt is shown in its parent's view and
+answered from there, with the answer and the grant going to the subagent, not the parent. Only
+the controller attached to the parent shows or answers it, so two controllers viewing one parent
+cannot both answer.
+
+**What the daemon did is a transcript row (ticket 198).** A notice about something the daemon
+did on the user's behalf (a grant answered a prompt, a grant expired, a child exited) is sent
+with `durable: true` and the controller adds it to that session's transcript as a dim
+"toriel: ..." row next to the tool call it explains, kept across history reloads (not across a
+reconnect). Other notices stay a four-second flash.
 
 Where the controller gets the pattern and surface: the link reports its
 `sessionApproval` suggestion (with the ask's `requestId` and command) to the daemon just
@@ -310,9 +336,8 @@ before the dialog. The spike showed asks are serialized per session (one pending
 at a time) and that the dialog's own id and title do not carry `requestId`, so the daemon
 keeps the latest suggestion per session and attaches it to the next `select` dialog whose
 `tool :` / `command :` title lines match the reported value (the request is a free-form
-record, so it can be decorated). Fallback when nothing matches: no extra rows are
-offered, or the quoted pattern is parsed out of pi's own "for this session" option text
-(the same kind of heuristic as `denyOption`).
+record, so it can be decorated). When nothing matches there is no suggestion: the layout is
+the same, with pi's own session row standing in for the session grant.
 
 ## Daemon and protocol changes
 

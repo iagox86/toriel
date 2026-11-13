@@ -93,6 +93,11 @@ export function showRawError(item: OtherItem, showRaw: boolean): void {
   }
 }
 
+/** A dim row for something toriel did that the transcript would not otherwise say (a grant answered a prompt, a child exited). */
+export function noteRow(text: string): OtherItem {
+  return { kind: "other", component: new Text(dim(`toriel: ${text}`), 1, 0) };
+}
+
 /** Why a turn that ended on the output-token limit shows nothing: the model spent it all (usually thinking). */
 export function lengthNotice(m: { usage?: { output?: number; reasoning?: number } }): string {
   const out = m.usage?.output;
@@ -114,6 +119,8 @@ export interface SessionView extends ActivityState {
   pendingReason?: { text: string; at: number };
   /** Prompts shown on send, before pi echoed them back as user messages. */
   echoes: Array<{ text: string; item: UserItem }>;
+  /** Rows toriel added about what it did (see noteRow); they are not in pi's history, so a reload puts them back at the end. */
+  notes?: OtherItem[];
   /** The "working" spinner was started by a sent prompt, not by anything pi reported (yet). */
   echoActivity?: boolean;
   /**

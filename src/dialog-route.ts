@@ -8,7 +8,7 @@ import type { SessionMeta } from "./shared.ts";
 /**
  * The view key holding the dialog to show while `viewing` is on screen: that session's
  * own dialog first, else the dialog of a subagent it started that is waiting on one
- * (lowest session number first). undefined when nothing is waiting.
+ * (lowest session number first), provided this controller is attached to that session. undefined when nothing is waiting.
  */
 export function dialogOwner(
   viewing: string | null,
@@ -23,8 +23,10 @@ export function dialogOwner(
     return viewing;
   }
   const all = [...metas];
-  const uuid = all.find((m) => keyFor(m) === viewing)?.sessionId;
-  if (!uuid) {
+  const parent = all.find((m) => keyFor(m) === viewing);
+  const uuid = parent?.sessionId;
+  // only the controller driving the parent speaks for its subagents: with two controllers on one parent the other shows nothing to answer
+  if (!uuid || !parent?.attachedToYou) {
     return undefined;
   }
   return all
