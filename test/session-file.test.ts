@@ -3,8 +3,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
+import { transcriptOf } from "../src/summarize.ts";
 import { messagesFromFile } from "../src/transcript.ts";
-import { parseLines, readEntries, readHeader, readLines, sessionIdOfFile } from "../src/session-file.ts";
+import { lastThinking } from "../src/why.ts";
+import { activePath, parseLines, readActiveEntries, readEntries, readHeader, readLines, sessionIdOfFile } from "../src/session-file.ts";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-session-file-"));
 const write = (name: string, text: string): string => {
@@ -92,5 +94,60 @@ describe("readLines", () => {
     const file = write("raw1.jsonl", lines({ type: "session", id: "s" }, { type: "message", message: { role: "user", content: "x" } }));
     assert.equal(readLines(file)[1]?.entry?.id, undefined);
     assert.equal(parseLines('{"a":1}\n').length, 2);
+  });
+});
+
+const e = (id: string, parentId: string | null, role: string, content: unknown) => ({ type: "message", id, parentId, message: { role, content } });
+const HDR = { type: "session", id: "s", version: 3 };
+
+/** a -> b -> c -> x (abandoned) and b -> d -> f: the conversation ends at f. */
+const branched = (): string =>
+  write(
+    "branched.jsonl",
+    lines(
+      HDR,
+      e("a", null, "user", "question"),
+      e("b", "a", "assistant", [{ type: "thinking", thinking: "kept reasoning" }, { type: "text", text: "answer" }]),
+      e("c", "b", "user", "abandoned question"),
+      e("x", "c", "assistant", [{ type: "thinking", thinking: "abandoned reasoning" }, { type: "text", text: "abandoned answer" }]),
+      e("d", "b", "user", "second question"),
+      e("f", "d", "assistant", "second answer"),
+    ),
+  );
+
+describe("activePath", () => {
+  it("is the chain from the newest entry to the root, leaving abandoned branches out and the header off", () => {
+    assert.deepEqual(readActiveEntries(branched()).map((x) => x.id), ["a", "b", "d", "f"]);
+  });
+
+  it("is every entry, in order, for a linear file", () => {
+    const entries = [HDR, e("a", null, "user", "1"), e("b", "a", "assistant", "2"), e("c", "b", "user", "3")];
+    assert.deepEqual(activePath(entries).map((x) => x.id), ["a", "b", "c"]);
+  });
+
+  it("goes back to every entry rather than guessing when the tree does not hold together", () => {
+    const ids = (entries: unknown[]) => activePath(entries as Array<{ id?: string }>).map((x) => x.id);
+    assert.deepEqual(ids([HDR, e("a", null, "user", "1"), e("b", "gone", "assistant", "2")]), ["a", "b"], "a parent that is not in the file");
+    assert.deepEqual(ids([HDR, { type: "message", id: "a", message: {} }, { type: "message", id: "b", message: {} }]), ["a", "b"], "no parentId at all");
+    assert.deepEqual(ids([HDR, { type: "message", message: {} }]), [undefined], "no id");
+    assert.deepEqual(ids([HDR, e("a", "b", "user", "1"), e("b", "a", "assistant", "2")]), ["a", "b"], "a cycle");
+    assert.deepEqual(ids([HDR]), [], "an empty conversation");
+  });
+});
+
+describe("callers read the active branch", () => {
+  it("transcript replay shows only the conversation as it stands", () => {
+    const roles = (messagesFromFile(branched()) as Array<{ role: string }>).map((m) => m.role);
+    assert.deepEqual(roles, ["user", "assistant", "user", "assistant"]);
+  });
+
+  it("summaries count and quote only that conversation", () => {
+    const t = transcriptOf(branched(), 100_000);
+    assert.equal(t.messages, 4);
+    assert.ok(t.text.includes("second answer") && !t.text.includes("abandoned"));
+  });
+
+  it("/why explains the reasoning on the active branch, not one left behind", () => {
+    assert.equal(lastThinking(branched()), "kept reasoning");
   });
 });

@@ -1,7 +1,7 @@
 // The transcript model: one renderer for both live event streams and replays
 // of session files, so the two views cannot drift apart. Items are pi's own
 // message/tool components; this module builds and updates them.
-import { readEntries, type SessionEntryLike } from "./session-file.ts";
+import { readActiveEntries, type SessionEntryLike } from "./session-file.ts";
 import { Text, type TuiAltScreen } from "@earendil-works/pi-tui";
 import { ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import { AssistantMessage, BashRow, CompactionRow, UserMessage } from "./components.ts";
@@ -534,7 +534,7 @@ export function messagesFromFile(file: string): unknown[] {
     tokensBefore?: number;
     timestamp?: string;
   };
-  for (const e of readEntries<FileEntry>(file)) {
+  for (const e of readActiveEntries<FileEntry>(file)) {
     if (typeof e !== "object" || e === null) {
       continue;
     }

@@ -63,6 +63,49 @@ export function readEntries<T extends SessionEntryLike = SessionEntryLike>(file:
   return entries;
 }
 
+/**
+ * The entries of the conversation as it stands: the chain from the newest entry back to the root through `parentId`
+ * (pi's own rule: a session is a tree, the leaf is the last entry written, and branches left behind by tree
+ * navigation are not part of what the model sees). The header is not included. For a linear file, which is every file
+ * toriel itself writes, this is all the entries in file order.
+ *
+ * A tree that does not hold together (an entry without an id or a `parentId`, a `parentId` naming nothing, a cycle) is not guessed at:
+ * every entry in file order comes back instead, so a damaged file shows too much rather than too little.
+ */
+export function activePath<T extends SessionEntryLike>(entries: readonly T[]): T[] {
+  const body = entries.filter((e): e is T => typeof e === "object" && e !== null && e.type !== "session");
+  const byId = new Map<string, T>();
+  for (const e of body) {
+    if (typeof e.id !== "string") {
+      return body;
+    }
+    byId.set(e.id, e);
+  }
+  const path: T[] = [];
+  const seen = new Set<string>();
+  for (let at: T | undefined = body[body.length - 1]; at; ) {
+    if (seen.has(at.id as string)) {
+      return body; // a cycle
+    }
+    seen.add(at.id as string);
+    path.push(at);
+    const parent: unknown = at.parentId;
+    if (parent === null) {
+      break; // the root: pi writes null there
+    }
+    at = typeof parent === "string" ? byId.get(parent) : undefined;
+    if (at === undefined) {
+      return body; // no parentId at all, or one that names nothing in the file
+    }
+  }
+  return path.reverse();
+}
+
+/** `readEntries`, narrowed to the conversation as it stands (see `activePath`). */
+export function readActiveEntries<T extends SessionEntryLike = SessionEntryLike>(file: string): T[] {
+  return activePath(readEntries<T>(file));
+}
+
 /** One physical line of a session file with its parse, for code that must keep the file's own text. */
 export interface SessionLine<T extends SessionEntryLike = SessionEntryLike> {
   raw: string;
