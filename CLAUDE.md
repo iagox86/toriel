@@ -33,5 +33,5 @@ Two processes joined by a typed JSONL protocol over a unix socket:
 ## Working here
 
 - Use `toriel --isolated` to try a branch by hand without touching the real daemon. Never kill other live pi sessions.
-- Do not run git commands that mutate the repo; Ron commits and pushes.
+- In a worktree, commit your own work on the worktree's branch, and make that commit before stopping for review (so the reviewer sees a clean branch). Never push, merge, rebase, or commit in the main checkout or on `main`; Ron does those. Other mutating git commands (reset, checkout of other branches, branch deletion) stay off-limits.
 - Tickets live on the Vikunja board, not repo issues; leave finished tasks open with the `needs verification` label.

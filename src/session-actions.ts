@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { Key, matchesKey } from "@earendil-works/pi-tui";
 import { coversPattern, isCappedSurface } from "./permissions.ts";
-import { type DialogRequest, dialogAnswer, editablePattern, grantGuarded, grantRowFor, isTextDialog, isTypingKey, optionTakesReason } from "./dialogs.ts";
+import { answerValue, type DialogRequest, dialogAnswer, editablePattern, grantGuarded, grantRowFor, isTextDialog, isTypingKey, optionTakesReason } from "./dialogs.ts";
 import { isPlainLeft } from "./editor.ts";
 import { fmtAge } from "./format.ts";
 import { TRASH_DIR } from "./config.ts";
@@ -249,8 +249,10 @@ export class SessionActions {
       return false;
     }
     const meta = this.h.metaForPath(ownerKey);
-    // a subagent's dialog shown in its parent's view is answered without attaching to the subagent
-    if (!meta || (ownerKey === this.h.viewing && !meta.attachedToYou)) {
+    // a subagent's dialog shown in its parent's view is answered without attaching to the subagent, but only by the controller
+    // attached to the parent (tickets 121, 122: two controllers on one parent must not both answer)
+    const speaker = ownerKey === this.h.viewing ? meta : this.h.metaForPath(this.h.viewing);
+    if (!meta || !speaker?.attachedToYou) {
       return false;
     }
     if (isTextDialog(dialog)) {
@@ -298,7 +300,7 @@ export class SessionActions {
       this.answerWithGrant(meta.id, view, dialog, row.for);
       return true;
     }
-    this.h.send({ type: "ui_response", session: meta.id, response: { type: "extension_ui_response", id: dialog.id, ...fields } });
+    this.h.send({ type: "ui_response", session: meta.id, response: { type: "extension_ui_response", id: dialog.id, ...fields, ...("value" in fields ? { value: answerValue(dialog, fields.value) } : {}) } });
     view.dialog = undefined;
     this.h.renderChrome();
     return true;
@@ -387,7 +389,7 @@ export class SessionActions {
           this.h.notify("a grant pattern cannot be empty - type one, or esc to go back");
           return true;
         }
-        const suggested = dialog.toriel?.grants[0]?.pattern;
+        const suggested = dialog.toriel?.grants?.[0]?.pattern;
         if (suggested !== undefined && !coversPattern(reason, suggested)) {
           this.h.notify(`"${reason}" does not cover ${JSON.stringify(suggested)}, so this prompt would come straight back - widen it, or esc to go back`);
           return true;
@@ -401,13 +403,23 @@ export class SessionActions {
       this.h.send({
         type: "ui_response",
         session,
-        response: { type: "extension_ui_response", id: dialog.id, value },
+        response: { type: "extension_ui_response", id: dialog.id, value: answerValue(dialog, value) },
       });
       view.dialog = undefined;
     } else if (matchesKey(data, Key.backspace)) {
-      panel.edit(text.slice(0, -1));
+      panel.erase();
+    } else if (matchesKey(data, Key.delete)) {
+      panel.erase(true);
+    } else if (matchesKey(data, Key.left)) {
+      panel.moveCursor(-1);
+    } else if (matchesKey(data, Key.right)) {
+      panel.moveCursor(1);
+    } else if (matchesKey(data, Key.home)) {
+      panel.moveCursor(Number.NEGATIVE_INFINITY);
+    } else if (matchesKey(data, Key.end)) {
+      panel.moveCursor(Number.POSITIVE_INFINITY);
     } else if (data.length > 0 && !/[\x00-\x1f\x7f]/.test(data) && !data.startsWith("\x1b")) {
-      panel.edit(text + data);
+      panel.insert(data);
     }
     this.h.renderChrome();
     return true;

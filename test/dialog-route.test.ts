@@ -4,6 +4,7 @@ import { dialogOwner } from "../src/dialog-route.ts";
 import { withOrigin, type DialogRequest } from "../src/dialogs.ts";
 import type { SessionMeta } from "../src/shared.ts";
 
+const attached = { attachedToYou: true };
 const dialog = { id: "d", method: "confirm", title: "Allow?" } as DialogRequest;
 const meta = (id: number, over: Partial<SessionMeta> = {}): SessionMeta => ({ id, sessionId: `u${id}`, ...over }) as SessionMeta;
 const keyFor = (m: SessionMeta) => `k${m.id}`;
@@ -16,18 +17,23 @@ describe("dialogOwner", () => {
   });
 
   it("shows a waiting subagent's dialog in its parent's view, the lowest session number first", () => {
-    assert.equal(route("k1", { k2: {}, k3: { dialog }, k4: { dialog } }, [meta(1), kid(4), kid(3), kid(2, "u1", { pendingDialog: false })]), "k3");
+    assert.equal(route("k1", { k2: {}, k3: { dialog }, k4: { dialog } }, [meta(1, attached), kid(4), kid(3), kid(2, "u1", { pendingDialog: false })]), "k3");
   });
 
   it("ignores another session's subagents, a subagent whose dialog this controller never saw, and an unknown view", () => {
-    assert.equal(route("k1", { k2: { dialog } }, [meta(1), kid(2, "u9")]), undefined);
-    assert.equal(route("k1", { k2: {} }, [meta(1), kid(2)]), undefined);
+    assert.equal(route("k1", { k2: { dialog } }, [meta(1, attached), kid(2, "u9")]), undefined);
+    assert.equal(route("k1", { k2: {} }, [meta(1, attached), kid(2)]), undefined);
     assert.equal(route("k7", { k2: { dialog } }, [meta(1), kid(2)]), undefined);
     assert.equal(route(null, {}, []), undefined);
   });
 
+  it("shows nothing for a parent this controller is not attached to, so two controllers on one parent cannot both answer", () => {
+    assert.equal(route("k1", { k2: { dialog } }, [meta(1), kid(2)]), undefined);
+    assert.equal(route("k1", { k2: { dialog } }, [meta(1, attached), kid(2)]), "k2");
+  });
+
   it("does not move a subagent's dialog up another level: only its own parent shows it", () => {
-    assert.equal(route("k0", { k2: { dialog } }, [meta(0), meta(1, { subagent: { state: "running", delivered: false, parent: "u0", tokens: 0, budget: 150000, turns: 0 } }), kid(2)]), undefined);
+    assert.equal(route("k0", { k2: { dialog } }, [meta(0, attached), meta(1, { subagent: { state: "running", delivered: false, parent: "u0", tokens: 0, budget: 150000, turns: 0 } }), kid(2)]), undefined);
   });
 });
 

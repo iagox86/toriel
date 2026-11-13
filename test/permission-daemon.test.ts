@@ -218,7 +218,32 @@ describe("daemon: permission grants", () => {
       await c.request({ type: "prompt", session, message: "/ask-select" });
       const dialog = await c.waitFor((m) => m.type === "ui_request" && m.request?.id === "ask-select-1");
       assert.match(dialog.request.title, /\n/, "the fake wraps the command, as pi does");
+      assert.deepEqual(dialog.request.toriel, { protectedAsk: true }, "the controller is told, instead of being offered rows that could only be refused");
       await assert.rejects(c.request({ type: "permission_add", session, surface: "path_read", pattern, dialog: "ask-select-1", source: "dialog" }), /always asked about/);
+    });
+
+    it("marks a protected prompt as such even when the link reported nothing for it (no grants link, or no match)", async () => {
+      const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-agentdir-"));
+      const h = await start({ PI_CODING_AGENT_DIR: agentDir, FAKE_PI_ASK_COMMAND: `cat ${path.join(agentDir, "settings.json")}` });
+      const { c, session } = await savedSession(h);
+      await c.request({ type: "prompt", session, message: "/ask-select" });
+      const dialog = await c.waitFor((m) => m.type === "ui_request" && m.request?.id === "ask-select-1");
+      assert.deepEqual(dialog.request.toriel, { protectedAsk: true });
+    });
+
+    it("marks a protected prompt however the path is spelled: relative, or with a detour", async () => {
+      for (const command of ["cat ../.pi/agent/mcp.json", "cat x/../.pi/agent/mcp.json"]) {
+        const h = await start({ FAKE_PI_ASK_COMMAND: command });
+        const { c, session } = await savedSession(h);
+        await c.request({ type: "prompt", session, message: "/ask-select" });
+        const dialog = await c.waitFor((m) => m.type === "ui_request" && m.request?.id === "ask-select-1");
+        assert.deepEqual(dialog.request.toriel, { protectedAsk: true }, command);
+      }
+    });
+
+    it("does not mark an ordinary prompt", async () => {
+      const { dialog } = await pathPrompt();
+      assert.equal(dialog.request.toriel?.protectedAsk, undefined);
     });
 
     it("answers a later prompt the grant covers itself, before any controller sees it", async () => {
@@ -230,6 +255,7 @@ describe("daemon: permission grants", () => {
       await raise();
       const notice = await c.waitFor((m) => m.type === "notice" && /allowed by permission grant #\d+/.test(m.text));
       assert.match(notice.text, /sudo -V/);
+      assert.equal(notice.durable, true, "a security-relevant fact is a transcript row, not a flash");
       assert.equal(prompts(), 1, "the covered prompt never reached the controller");
     });
   });

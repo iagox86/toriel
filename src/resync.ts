@@ -21,6 +21,11 @@ export function viewFromHistory(old: SessionView | undefined, items: Item[], aft
     fresh.echoes.push(echo);
     fresh.items.push(echo.item);
   }
+  // rows toriel added are not in pi's history either; their place in the order is lost, but what they say is not
+  if (old.notes?.length) {
+    fresh.notes = [...old.notes];
+    fresh.items.push(...old.notes);
+  }
   return fresh;
 }
 
