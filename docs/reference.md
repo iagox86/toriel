@@ -419,6 +419,7 @@ Daemon side:
 - `received.ts` (label on messages between sessions), `daemon-handlers-messages.ts` / `daemon-resolve.ts` (deliver / find a session), `daemon-bridge.ts` + `daemon-handlers-bridge.ts` (session bridge: inject tracking, routing, confirmation)
 - `mouse.ts` (/mouse: the reporting on/off codes and the argument parsing)
 - `help-format.ts` (colour for the /help screens: command names, section headers and flags accented, usage hints dim; text unchanged), `continue-prompt.ts` (the /continue prompt)
+- `unknown-command.ts` (refuse an unknown /command in a session instead of sending it: toriel's list plus pi's, with a nearest-name suggestion; paths and a bare `/` pass through; with pi's list not loaded yet only toriel's commands are known, so others are refused with that reason)
 - `open-url.ts` (opening a clicked link: http and https only, detached `xdg-open`/`open`), `linkify.ts` (OSC 8 links for bare URLs in tool output)
 - `osc52.ts` (copy through the terminal, tmux passthrough wrapping)
 - `resync.ts` (what a view keeps when history is replayed; a replay after a reconnect keeps nothing transient), `drift.ts` (message counts and the digest check), `resources.ts` (the toriel pi resources, the `-e` / `--skill` arguments and `--tools +name` modifiers that load them into each child, the startup audit), `pi-dir.ts` (where pi keeps its own config)

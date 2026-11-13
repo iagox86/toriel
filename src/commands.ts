@@ -273,7 +273,7 @@ export const SESSION_COMMANDS = [
   {
     name: "help",
     description: "list toriel's commands for a session",
-    help: "<command> --help describes one. Anything else typed with a leading / goes to pi (skills, prompt templates, extension commands).",
+    help: "<command> --help describes one. A /name that is not a toriel command goes to pi when pi has such a command (skills, prompt templates, extension commands); an unknown one is refused with a suggestion, and nothing is sent. A line that starts with a path (/tmp/x) is ordinary text.",
   },
   {
     name: "in",

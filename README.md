@@ -112,7 +112,7 @@ Type `/` for commands; tab completes them and their arguments, `/help` lists the
 
 Clicking the transcript only toggles a thinking block or tool output on a double click (a single click is just for focusing or dropping a text selection); `TORIEL_CLICK=single` brings back one-click toggling.
 
-Anything else starting with `/` goes to pi (its skills and prompt templates).
+A line starting with `/` that is not a toriel command goes to pi if pi has such a command (its skills, prompt templates and extension commands); an unknown one is refused with a "did you mean" and nothing is sent. A path such as `/tmp/x` is ordinary text.
 
 `!command` in a session (the chat box border turns yellow while you type it) runs a shell command in the session's directory and shows the output. The agent gets the command and output immediately, as a message wrapped in `<local-command>` tags with a note that you ran it yourself, so it reacts right away (or queues it behind its current turn). `esc` stops a running command; a command is stopped after 10 minutes; very long output is cut to its start and end. It needs a running session, and it sees the session's environment (`TORIEL_SESSION_ID`, `PI_SESSION_ID`, ...) like the agent's own shell. `!!` is not supported.
 

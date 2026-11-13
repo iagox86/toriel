@@ -41,6 +41,8 @@ export interface Host {
   choicePanel: ChoicePanel;
   switching: SwitcherActions;
   session: SessionActions;
+  /** pi's slash commands for the viewed session (empty until pi has been asked). */
+  piCommands: ReadonlyArray<{ name: string }>;
   request(cmd: DistributiveOmit<ClientCommand, "id">, timeoutMs?: number): Promise<unknown>;
   send(msg: Record<string, unknown>): void;
   keyFor(meta: SessionMeta): string;

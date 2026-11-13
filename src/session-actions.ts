@@ -12,6 +12,8 @@ import { latestClearBackup, rewindTargets } from "./rewind.ts";
 import type { Host } from "./host.ts";
 import type { SessionMeta } from "./shared.ts";
 import { SessionCommands } from "./session-commands.ts";
+import { SESSION_COMMANDS } from "./commands.ts";
+import { checkSlash } from "./unknown-command.ts";
 import type { SessionView } from "./transcript.ts";
 import { errText } from "./util.ts";
 
@@ -430,8 +432,16 @@ export class SessionActions {
     if (trimmed.length === 0) {
       return;
     }
-    if (trimmed.startsWith("/") && this.commands.run(trimmed)) {
-      return;
+    if (trimmed.startsWith("/")) {
+      if (this.commands.run(trimmed)) {
+        return;
+      }
+      // not toriel's: pi's skills, templates and extension commands go on to pi, anything else is refused (the line stays in the box)
+      const verdict = checkSlash(trimmed, SESSION_COMMANDS.map((c) => c.name), this.h.piCommands?.map((c) => c.name));
+      if (!verdict.send) {
+        this.h.notify(verdict.message);
+        return;
+      }
     }
     if (trimmed.startsWith("!")) {
       void this.bang(trimmed);
