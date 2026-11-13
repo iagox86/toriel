@@ -22,10 +22,34 @@ export const DEFAULT_SUBAGENT_LIMITS: SubagentLimits = { maxDepth: 1, maxConcurr
 /** How long a finished subagent stays in the switcher before it is deleted (the trash keeps its file). */
 export const DEFAULT_KEEP_MS = 30 * 60_000;
 
-/** The grace window from `TORIEL_SUBAGENT_KEEP_MS`: a whole number of ms, 0 allowed; anything else (unset, negative, not a number) means the default. */
-export function keepMsFrom(raw: string | undefined): number {
+/** The grace window from `TORIEL_SUBAGENT_KEEP_MS`: a whole number of ms, 0 allowed; anything else (unset, negative, not a number) means `fallback` (the settings' value, or the default). */
+export function keepMsFrom(raw: string | undefined, fallback: number = DEFAULT_KEEP_MS): number {
   const n = raw === undefined || raw.trim() === "" ? Number.NaN : Number(raw);
-  return Number.isFinite(n) && n >= 0 ? n : DEFAULT_KEEP_MS;
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
+/** The subagent settings that shape the limits (a subset of TorielSettings, so this module needs no settings import). */
+export interface SubagentSettings {
+  subagentMaxConcurrent?: number;
+  subagentMaxDepth?: number;
+  subagentMaxSpawns?: number;
+  subagentBudgetTokens?: number;
+  subagentKeepMinutes?: number;
+}
+
+/** The built-in limits with the settings applied; depth is held to HARD_MAX_DEPTH. */
+export function subagentLimitsFrom(s: SubagentSettings): SubagentLimits {
+  return {
+    maxDepth: Math.min(s.subagentMaxDepth ?? DEFAULT_SUBAGENT_LIMITS.maxDepth, HARD_MAX_DEPTH),
+    maxConcurrent: s.subagentMaxConcurrent ?? DEFAULT_SUBAGENT_LIMITS.maxConcurrent,
+    maxSpawnsPerParent: s.subagentMaxSpawns ?? DEFAULT_SUBAGENT_LIMITS.maxSpawnsPerParent,
+    budget: s.subagentBudgetTokens ?? DEFAULT_SUBAGENT_LIMITS.budget,
+  };
+}
+
+/** The grace window: the environment's if it is valid, else the settings' minutes, else the default. */
+export function subagentKeepMs(s: SubagentSettings, raw: string | undefined): number {
+  return keepMsFrom(raw, s.subagentKeepMinutes !== undefined ? s.subagentKeepMinutes * 60_000 : DEFAULT_KEEP_MS);
 }
 
 export type SubagentState = "running" | "done" | "stopped" | "limit" | "failed";

@@ -447,7 +447,7 @@ state when the daemon was first built.
 
 ## toriel settings file (built 2026-10-23)
 
-~/.config/toriel/settings.json (settings.ts): steeringMode, provider, model,
+~/.config/toriel/settings.yaml (settings.ts, settings-file.ts): steeringMode, provider, model,
 thinking, piCli; defaults < file < TORIEL_* env. Read by the daemon at EVERY
 child spawn (not at daemon start), so changes need no restart; each child
 records the file's mtime it started with (SessionMeta.settingsMtime) and the

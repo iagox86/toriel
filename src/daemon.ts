@@ -38,10 +38,11 @@ import { DEFAULT_LIMITS, Scheduler } from "./scheduler.ts";
 import { SubagentManager } from "./daemon-subagents.ts";
 import { pruneSessionState } from "./state-prune.ts";
 import { pruneTrash } from "./trash.ts";
-import { DEFAULT_SUBAGENT_LIMITS, keepMsFrom } from "./subagents.ts";
+import { subagentKeepMs, subagentLimitsFrom } from "./subagents.ts";
 import { needsAwake, SleepInhibitor } from "./sleep-inhibit.ts";
 import { collectFindings } from "./doctor.ts";
 import { DEFAULT_TRASH_RETENTION_DAYS, loadSettings } from "./settings.ts";
+import { ensureSettingsFile } from "./settings-file.ts";
 import { PROTOCOL, type UsageReport } from "./shared.ts";
 import { errText, rotateLog } from "./util.ts";
 
@@ -65,9 +66,20 @@ function createContext(shutdown: () => void): DaemonContext {
   } catch (err) {
     log(`could not create the shared directory ${SHARED_DIR}: ${errText(err)}`);
   }
+  // a new install has no settings file, and without one nothing shows which defaults can be changed
+  try {
+    const made = ensureSettingsFile();
+    if (made !== undefined) {
+      log(`created the settings file ${made} with the defaults`);
+    }
+  } catch (err) {
+    log(`could not create the settings file: ${errText(err)}`);
+  }
+  const startSettings = loadSettings().settings;
+  const subagentLimits = subagentLimitsFrom(startSettings);
   const bridges = new BridgeTracker();
   const grants = new GrantStore(PERMISSIONS_FILE, Date.now, { perSession: loadSettings().settings.permissionGrantLimit ?? DEFAULT_GRANT_LIMITS.perSession });
-  const children = new ChildManager(hub, usage, bridges, DEFAULT_SUBAGENT_LIMITS, grants);
+  const children = new ChildManager(hub, usage, bridges, subagentLimits, grants);
   // the scheduler's host reads the context lazily, so it can be built inside it
   // every scheduler event may have changed the set of schedules, so the file watches ("on change" schedules, board 98) follow it
   const host = schedulerHost(() => ctx, usage);
@@ -82,7 +94,7 @@ function createContext(shutdown: () => void): DaemonContext {
     SCHEDULES_FILE,
     { ...DEFAULT_LIMITS, dailyFires: loadSettings().settings.scheduleDailyLimit ?? DEFAULT_LIMITS.dailyFires },
   );
-  const ctx: DaemonContext = { registry, hub, children, presence, bridges, scheduler, watches: new WatchManager(scheduler, new FileWatcher()), grants, subagents: new SubagentManager(() => ctx, DEFAULT_SUBAGENT_LIMITS, keepMsFrom(process.env.TORIEL_SUBAGENT_KEEP_MS)), shutdown };
+  const ctx: DaemonContext = { registry, hub, children, presence, bridges, scheduler, watches: new WatchManager(scheduler, new FileWatcher()), grants, subagents: new SubagentManager(() => ctx, subagentLimits, subagentKeepMs(startSettings, process.env.TORIEL_SUBAGENT_KEEP_MS)), shutdown };
   // a session going idle is what a waiting schedule is looking for, and what starts a gap loop's countdown
   children.onSettled = (s) => {
     ctx.subagents.onSettled(s);

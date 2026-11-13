@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { DoctorOptions } from "../src/doctor.ts";
 import { RESOURCES } from "../src/resources.ts";
+import { renderSettings } from "../src/settings-file.ts";
 
 export const GRANTS_RULE = "~/.local/share/toriel/permissions.json";
 export const GOOD_CONFIG = { authorizerChain: ["toriel-grants"], permission: { "*": "ask", path: { "*": "ask", [GRANTS_RULE]: "ask" } } };
@@ -27,6 +28,8 @@ export function tempHome(): { home: string; done(): void } {
 export interface Over {
   config?: unknown;
   settings?: string;
+  /** No toriel settings file at all (the default is the commented defaults file, a healthy setup). */
+  noSettings?: boolean;
   noPackage?: boolean;
   noPiDir?: boolean;
   stale?: boolean;
@@ -90,9 +93,11 @@ export function setup(home: string, over: Over = {}) {
     mk(pkg);
     fs.writeFileSync(path.join(pkg, "permission-session.ts"), over.scopePatch === "present" ? "// toriel-scope-patch\n" : "export {}\n");
   }
-  const settingsFile = path.join(base, "toriel-settings.json");
+  const settingsFile = path.join(base, "toriel-settings.yaml");
   if (over.settings !== undefined) {
     fs.writeFileSync(settingsFile, over.settings);
+  } else if (!over.noSettings) {
+    fs.writeFileSync(settingsFile, renderSettings());
   }
   const grantsFile = path.join(home, ".local", "share", "toriel", "permissions.json");
   const opts: DoctorOptions = { agentDir, root, grantsFile, settingsFile, piCli, pathDirs: [bin], platform: "linux", startup: [], env: { TORIEL_NODE: "/nonexistent-node" } };

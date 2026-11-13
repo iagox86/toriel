@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { ANSI_STYLE, applyFixes, CATALOG, collectFindings, type DoctorOptions, exitCode, lineDiff, plannedFixes, previewFixes, renderDoctor, runDoctor } from "../src/doctor.ts";
+import { loadSettings } from "../src/settings.ts";
+import { renderSettings } from "../src/settings-file.ts";
 import { GRANTS_RULE, setup as setupIn, tempHome } from "./doctor-fixture.ts";
 
 let env: ReturnType<typeof tempHome>;
@@ -11,6 +13,71 @@ beforeEach(() => {
 });
 afterEach(() => env.done());
 const setup = (over: Parameters<typeof setupIn>[1] = {}) => setupIn(env.home, over);
+
+/** A setup whose only toriel settings are an old settings.json in the XDG config directory (no explicit settings file). */
+function legacySetup(json = '{"model":"m1","sandbox":"off","note":1}') {
+  const s = setup({ noSettings: true });
+  const config = path.join(env.home, "xdg");
+  fs.mkdirSync(path.join(config, "toriel"), { recursive: true });
+  fs.writeFileSync(path.join(config, "toriel", "settings.json"), json);
+  const { settingsFile: _unused, ...rest } = s.opts;
+  return { opts: { ...rest, env: { ...rest.env, XDG_CONFIG_HOME: config } } as DoctorOptions, dir: path.join(config, "toriel") };
+}
+
+describe("the settings file", () => {
+  it("is missing: reported as recommended, and doctor --fix writes the commented defaults, once", () => {
+    const s = setup({ noSettings: true });
+    const file = s.opts.settingsFile as string;
+    const found = collectFindings(s.opts).filter((f) => f.id === "settings-file");
+    assert.equal(found.length, 1);
+    assert.equal(found[0]?.level, "recommended");
+    const [group] = plannedFixes(runDoctor(s.opts));
+    assert.equal(group?.file, file);
+    assert.match(previewFixes(file, group?.fixes ?? []), /^\+ # toriel settings\./m);
+    assert.equal(fs.existsSync(file), false, "previewing writes nothing");
+    assert.equal(applyFixes(file, group?.fixes ?? []), undefined, "nothing to back up");
+    assert.equal(fs.readFileSync(file, "utf8"), renderSettings());
+    assert.deepEqual(collectFindings(s.opts).filter((f) => f.id === "settings-file"), []);
+    assert.deepEqual(plannedFixes(runDoctor(s.opts)), [], "and a second run has nothing to do");
+  });
+
+  it("is an old settings.json: offered as a conversion that keeps the values and sets the old file aside", () => {
+    const s = legacySetup();
+    const found = collectFindings(s.opts).filter((f) => f.id === "settings-yaml");
+    assert.equal(found.length, 1);
+    assert.match(found[0]?.message ?? "", /settings\.json/);
+    const [group] = plannedFixes(runDoctor(s.opts));
+    const yaml = path.join(s.dir, "settings.yaml");
+    assert.equal(group?.file, yaml);
+    const preview = previewFixes(yaml, group?.fixes ?? []);
+    assert.match(preview, /\+ model: "m1"/);
+    assert.match(preview, /settings\.json would be renamed/);
+    assert.equal(fs.existsSync(yaml), false, "previewing writes nothing");
+    const backup = applyFixes(yaml, group?.fixes ?? [], new Date(2026, 10, 13, 9, 5, 7));
+    assert.equal(backup, path.join(s.dir, "settings.json.bak-20261113-090507"));
+    assert.equal(fs.readFileSync(backup as string, "utf8"), '{"model":"m1","sandbox":"off","note":1}');
+    assert.equal(fs.existsSync(path.join(s.dir, "settings.json")), false);
+    const loaded = loadSettings(yaml);
+    assert.equal(loaded.settings.model, "m1");
+    assert.deepEqual(loaded.problems, ['unknown setting "note"']);
+    assert.deepEqual(collectFindings(s.opts).filter((f) => f.id === "settings-yaml"), []);
+  });
+
+  it("is an old settings.json that cannot be read: the conversion is refused and nothing moves", () => {
+    const s = legacySetup("{ broken");
+    const [group] = plannedFixes(runDoctor(s.opts));
+    const yaml = path.join(s.dir, "settings.yaml");
+    assert.throws(() => previewFixes(yaml, group?.fixes ?? []));
+    assert.throws(() => applyFixes(yaml, group?.fixes ?? []));
+    assert.ok(fs.existsSync(path.join(s.dir, "settings.json")));
+    assert.equal(fs.existsSync(yaml), false);
+  });
+
+  it("is quiet when TORIEL_SETTINGS names a file, even a JSON one", () => {
+    const s = setup({ settings: '{"model":"m"}' });
+    assert.deepEqual(collectFindings(s.opts).filter((f) => f.id === "settings-file" || f.id === "settings-yaml"), []);
+  });
+});
 
 describe("doctor checks", () => {
   it("finds nothing wrong with a complete setup", () => {
@@ -26,6 +93,8 @@ describe("doctor checks", () => {
     const scenarios: DoctorOptions[] = [
       { ...setup({ noPiDir: true, noResources: true, stale: false, noCli: true, noInhibit: true, settings: '{"bogus":1}' }).opts, startup: ["node is too old"] },
       setup({ stale: true }).opts,
+      setup({ noSettings: true }).opts,
+      legacySetup().opts,
       setup({ noPackage: true }).opts,
       setup({ config: {} }).opts,
       { ...setup({}).opts, env: { WAYLAND_DISPLAY: "wayland-0" }, pathDirs: ["/nonexistent-path"], startup: [] },
@@ -206,9 +275,9 @@ describe("doctor report", () => {
   it("leaves the passing checks out of the compact report and counts them", () => {
     const text = renderDoctor(runDoctor(setup({ config: {} }).opts), { compact: true });
     assert.match(text, /Required: all 5 ok/);
-    assert.match(text, /Recommended: all 2 ok/);
+    assert.match(text, /Recommended: all 3 ok/);
     assert.doesNotMatch(text, / ok {7}/);
-    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(8 ok\)/);
+    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(9 ok\)/);
   });
 });
 
@@ -237,7 +306,7 @@ describe("doctor report colours", () => {
   it("colours the compact report too, with the passing checks' count dim", () => {
     const coloured = renderDoctor(checks(), { compact: true, style: ANSI_STYLE });
     assert.match(coloured, /Required\x1b\[22m: \x1b\[32mall 5 ok\x1b\[39m/);
-    assert.match(coloured, /\x1b\[2m {2}\(8 ok\)\x1b\[22m/);
+    assert.match(coloured, /\x1b\[2m {2}\(9 ok\)\x1b\[22m/);
   });
 });
 
@@ -255,8 +324,8 @@ describe("doctor fixes", () => {
     assert.doesNotMatch(diff, /\+ {7}"\*": "allow",/, "the fix no longer seeds an allow-all into a missing path section (an omitted fallback means ask)");
     assert.equal(fs.readFileSync(s.config, "utf8"), original, "previewing writes nothing");
     const backup = applyFixes(s.config, group?.fixes ?? [], new Date(2026, 10, 1, 9, 5, 7));
-    assert.match(backup, /config\.json\.bak-20261101-090507$/);
-    assert.equal(fs.readFileSync(backup, "utf8"), original);
+    assert.match(backup ?? "", /config\.json\.bak-20261101-090507$/);
+    assert.equal(fs.readFileSync(backup as string, "utf8"), original);
     assert.equal(fs.statSync(s.config).mode & 0o777, 0o640);
     const now = JSON.parse(fs.readFileSync(s.config, "utf8"));
     assert.deepEqual(now.authorizerChain, ["toriel-grants"]);

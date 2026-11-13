@@ -98,11 +98,12 @@ export async function doctorMain(args: readonly string[], io: DoctorIo, opts: Do
       io.write("Not applied: nobody is at the terminal to confirm (pass --yes to apply).\n");
       continue;
     }
-    if (!yes && !(await io.confirm(`Apply this to ${file}? The original is kept. [y/N] `))) {
+    if (!yes && !(await io.confirm(`Apply this to ${file}? [y/N] `))) {
       io.write("Not applied.\n");
       continue;
     }
-    io.write(`Applied. The original is at ${doctor.applyFixes(file, fixes)}\n`);
+    const backup = doctor.applyFixes(file, fixes);
+    io.write(`Applied.${backup ? ` The original is at ${backup}` : ""}\n`);
   }
   const after = doctor.runDoctor(options);
   io.write(`\nAfter fixing:\n\n${doctor.renderDoctor(after, { style })}\n`);
