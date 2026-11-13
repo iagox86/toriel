@@ -18,6 +18,7 @@ import { detachFromParent, loadLineage, parentMap, recordSubagent, subagentDepth
 import { log } from "./log.ts";
 import { formatReceived } from "./received.ts";
 import { uniqueName } from "./session-id.ts";
+import { verbLine } from "./subagent-exit.ts";
 import {
   childBudget,
   describeRecord,
@@ -148,10 +149,11 @@ export class SubagentManager {
   }
 
   /** A session's process went away: if it was a subagent it is over, and its foreground subagents go with it. */
-  onStopped(s: DaemonSession): void {
+  onStopped(s: DaemonSession, crash?: string): void {
     const rec = this.book.bySession(s.id);
     if (rec?.state === "running") {
-      void this.finish(rec, "stopped", "its session was stopped");
+      // a process that died on its own failed, and says how; a deliberate stop is only stopped
+      void (crash ? this.finish(rec, "failed", crash) : this.finish(rec, "stopped", "its session was stopped"));
     }
     if (s.sessionId) {
       for (const r of this.book.ofParent(s.sessionId)) {
@@ -345,7 +347,7 @@ export class SubagentManager {
       this.markDelivered(rec);
       return;
     }
-    const verb = rec.state === "done" ? "finished" : rec.state === "failed" ? "failed" : "was cut short";
+    const verb = verbLine(rec.state, rec.note);
     const body = `Subagent #${rec.handle} (${rec.agent}: ${rec.description}) ${verb}.\n\n${resultText(rec)}`;
     try {
       await deliverToTarget(

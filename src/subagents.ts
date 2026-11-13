@@ -235,7 +235,10 @@ export function abnormalEnd(lastStop: string | undefined, lastError: string | un
     return { state: "failed", note: "ended on a tool call, with no final answer" };
   }
   if (lastStop === "aborted") {
-    return { state: "stopped", note: "was interrupted (aborted) before it finished" };
+    // pi's own error text, when the run died of one, says more than the abort does
+    return lastError
+      ? { state: "stopped", note: `was aborted: ${lastError}` }
+      : { state: "stopped", note: "was aborted mid-run; no stop was requested" };
   }
   if (lastStop === "error") {
     return { state: "failed", note: `ended with an error${lastError ? `: ${lastError}` : ""}` };

@@ -343,9 +343,29 @@ describe("daemon: subagents", () => {
     await new Promise((r) => setTimeout(r, 300)); // past the fake pi's start-up, where it would reset an abort
     await c.request({ type: "abort", session: child()?.id });
     const done = await c.request({ type: "agents_op", from: uuid, action: "wait", ref: "#1", timeoutMs: 5000 });
-    assert.match(done.text, /^Subagent #1 was interrupted \(aborted\) before it finished/);
-    const got = await c.waitFor((m) => m.type === "event" && m.event?.type === "message_end" && JSON.stringify(m.event.message).includes("Subagent #1 (worker: look) was cut short"));
-    assert.match(JSON.stringify(got.event.message), /interrupted/);
+    assert.match(done.text, /^Subagent #1 was aborted mid-run; no stop was requested/);
+    const got = await c.waitFor((m) => m.type === "event" && m.event?.type === "message_end" && JSON.stringify(m.event.message).includes("Subagent #1 (worker: look) was cut short (aborted mid-run; no stop was requested)"));
+    assert.match(JSON.stringify(got.event.message), /aborted mid-run/);
+  });
+
+  it("tells its parent how a subagent's process died, not just that it was stopped", async () => {
+    harness = await startDaemon();
+    const { c, uuid } = await parentSession(harness);
+    await spawn(c, uuid, { task: "[hang]", background: true });
+    const child = () => c.sessions().find((x) => x.sessionName?.startsWith("worker: look"));
+    for (let i = 0; i < 60 && !child()?.streaming; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    const h = harness;
+    const newest = fs
+      .readdirSync(h.sessionsDir)
+      .filter((f) => f.endsWith(".env.json"))
+      .map((f) => ({ f, t: fs.statSync(path.join(h.sessionsDir, f)).mtimeMs, pid: (JSON.parse(fs.readFileSync(path.join(h.sessionsDir, f), "utf8")) as { pid: number }).pid }))
+      .sort((a, b) => b.t - a.t)[0];
+    process.kill((newest as { pid: number }).pid, "SIGKILL");
+    const done = await c.request({ type: "agents_op", from: uuid, action: "wait", ref: "#1", timeoutMs: 5000 });
+    assert.match(done.text, /^Subagent #1 failed: its process exited \(signal SIGKILL\)/);
+    await c.waitFor((m) => m.type === "event" && m.event?.type === "message_end" && JSON.stringify(m.event.message).includes("Subagent #1 (worker: look) failed (its process exited (signal SIGKILL))"));
   });
 
   it("cleans up a subagent that was stopped while it was still starting: no leftover process, session or lineage", async () => {
