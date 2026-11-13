@@ -207,8 +207,10 @@ export async function handleReload(
 ): Promise<void> {
   const s = ctx.registry.live(cmd.session);
   requireIdle(s);
-  if (!s.sessionFile) {
-    throw new Error("nothing to reload yet (no session file)");
+  // the path is set as soon as a session spawns; a session with no message yet has no file behind it,
+  // and restarting pi against a missing file re-keys the session (ticket 155)
+  if (!s.sessionFile || !fs.existsSync(s.sessionFile)) {
+    throw new Error("nothing to reload yet (the session has no file): send a message first");
   }
   await ctx.children.restart(s);
   ctx.hub.broadcastSessions();

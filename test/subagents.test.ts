@@ -119,6 +119,11 @@ describe("expiredSubagents", () => {
     assert.deepEqual(ids([cand({ record: { ...old, state: "running" } }), cand({ uuid: "live", live: true, record: old }), cand({ uuid: "used", mtime: NOW - 60_000, record: old })]), []);
   });
 
+  it("keeps one a controller is attached to, even with its window long past (ticket 129)", () => {
+    const old = { state: "done" as const, endedAt: NOW - 5 * HOUR, deliveredAt: NOW - 5 * HOUR };
+    assert.deepEqual(ids([cand({ uuid: "viewed", attached: true, record: old }), cand({ uuid: "left", attached: false, record: old })]), ["left"]);
+  });
+
   it("dates a subagent from before a restart by its file alone, and never expires one it cannot date", () => {
     assert.deepEqual(ids([cand({ uuid: "old", mtime: NOW - HOUR }), cand({ uuid: "fresh", mtime: NOW - 60_000 }), cand({ uuid: "unknown", mtime: 0 })]), ["old"]);
   });
