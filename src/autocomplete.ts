@@ -74,7 +74,13 @@ export class CommandAutocomplete implements AutocompleteProvider {
     if (ctx.switcher && !(cursorLine === 0 && (lines[0] ?? "").startsWith("/"))) {
       return null;
     }
-    return provider.getSuggestions(lines, cursorLine, cursorCol, options);
+    const suggestions = await provider.getSuggestions(lines, cursorLine, cursorCol, options);
+    // An argument that already equals a completion needs no popup: pi-tui's editor applies the selection on Enter and
+    // only submits for a "/..." prefix, which an argument's is not, so the open popup would eat the Enter (ticket 200).
+    if (suggestions && /^\s*\/\S+\s/.test(typed) && suggestions.items.some((i) => i.value.trimEnd() === suggestions.prefix)) {
+      return null;
+    }
+    return suggestions;
   }
 
   applyCompletion(lines: string[], cursorLine: number, cursorCol: number, item: AutocompleteItem, prefix: string) {

@@ -131,6 +131,16 @@ describe("argument completion", () => {
     assert.deepEqual(await suggest({ ...base, sources }, "/mcp explore f"), ["explore freecad"]);
   });
 
+  it("closes the popup once the typed argument is a whole completion, so Enter submits (ticket 200)", async () => {
+    assert.deepEqual(await suggest({ ...base, sources }, "/think low"), []);
+    assert.deepEqual(await suggest({ ...base, sources }, "/mcp list"), []);
+    assert.deepEqual(await suggest({ ...base, sources }, "/mcp status"), []);
+    assert.deepEqual(await suggest({ ...base, sources }, "/mcp reconnect freecad"), []);
+    // still open while the word is only a prefix, and for the command name itself (Enter submits there)
+    assert.deepEqual(await suggest({ ...base, sources }, "/think lo"), ["low"]);
+    assert.ok((await suggest({ ...base, sources }, "/think")).includes("think"));
+  });
+
   it("does not try to complete flags", async () => {
     assert.deepEqual(await suggest({ ...base, sources }, "/model --li"), []);
   });
@@ -142,11 +152,11 @@ describe("argument completion", () => {
 
 describe("a tab popup in the real editor", () => {
   const theme = { borderColor: (s: string) => s, selectList: { selectedPrefix: (s: string) => s, selectedText: (s: string) => s, description: (s: string) => s, scrollInfo: (s: string) => s, noMatch: (s: string) => s } };
-  const make = async (switcher: boolean) => {
+  const make = async (switcher: boolean, sources?: AutocompleteContext["sources"]) => {
     const { InputEditor, configureEditorKeys } = await import("../src/editor.ts");
     configureEditorKeys();
     const ed = new InputEditor({ requestRender() {}, terminal: { rows: 40, columns: 80 } } as never, theme as never);
-    ed.setAutocompleteProvider(new CommandAutocomplete(() => ({ ...base, switcher, cwd: process.cwd() })));
+    ed.setAutocompleteProvider(new CommandAutocomplete(() => ({ ...base, switcher, cwd: process.cwd(), sources })));
     const press = async (...keys: string[]) => {
       for (const k of keys) {
         ed.handleInput(k);
@@ -176,6 +186,18 @@ describe("a tab popup in the real editor", () => {
     assert.equal(ed.isShowingAutocomplete(), true);
     await press("\r");
     assert.equal(submitted.trim(), "/help");
+  });
+
+  it("submits on the first Enter when the typed argument is already a whole completion (ticket 200)", async () => {
+    const { ed, press } = await make(false, { models: async () => [], thinkingLevels: async () => ["off", "low"], groups: () => [], agents: () => [], mcpServers: async () => [] });
+    let submitted = "";
+    ed.onSubmit = (text) => {
+      submitted = text;
+    };
+    await press(..."/think low".split(""));
+    assert.equal(ed.isShowingAutocomplete(), false);
+    await press("\r");
+    assert.equal(submitted, "/think low");
   });
 
   it("is dismissed by esc, which never reaches the controller's own esc handling", async () => {
