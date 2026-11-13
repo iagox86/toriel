@@ -17,7 +17,6 @@ import { modelProblem } from "./model-match.ts";
 import { detachFromParent, loadLineage, parentMap, recordSubagent, subagentDepth } from "./lineage.ts";
 import { log } from "./log.ts";
 import { formatReceived } from "./received.ts";
-import { uniqueName } from "./session-id.ts";
 import { verbLine } from "./subagent-exit.ts";
 import {
   childBudget,
@@ -286,8 +285,8 @@ export class SubagentManager {
     }
     // everything above is synchronous with the record below, so parallel calls cannot both slip past a limit
     const child = ctx.registry.create(cmd.cwd ?? parent.cwd);
-    const taken = ctx.registry.all().flatMap((x) => (x.sessionName ? [x.sessionName] : []));
-    const name = uniqueName(`${base.name}: ${cmd.description}`.slice(0, 60), taken);
+    // claimed here, synchronously with the record: the book needs the final name, and parallel calls must not share one
+    const name = ctx.naming.claim(child, `${base.name}: ${cmd.description}`.slice(0, 60), { source: "subagent" }) as string;
     const rec = this.book.add({
       parent: parentUuid,
       session: child.id,
@@ -301,6 +300,7 @@ export class SubagentManager {
     log(`subagent #${rec.handle} (${base.name}) started for ${parentName}: ${cmd.description}`);
     try {
       await ctx.children.start(child, { agent: profile, name, forkPath: cmd.context === "fork" ? parent.sessionFile : undefined });
+      ctx.naming.applyInBackground(child);
       if (rec.state !== "running") {
         // stopped while it was starting: the process that just came up has no task and no lineage, so it goes
         // again, and with it the registry entry (pi writes the file on the first prompt, so there is none)

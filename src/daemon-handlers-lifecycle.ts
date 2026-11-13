@@ -89,7 +89,17 @@ export async function handlePrompt(
       throw new Error("spawn in progress; retry");
     }
     s.attachedTo = socket;
-    await ctx.children.start(s, { sessionFile: cmd.sessionFile, name: cmd.name });
+    // a name for a session that has none: decided here (unique), checked in the background once it is up
+    const wanted = cmd.name && !s.sessionName ? ctx.naming.claim(s, cmd.name, { source: "spawn" }) : undefined;
+    try {
+      await ctx.children.start(s, { sessionFile: cmd.sessionFile, name: wanted ?? cmd.name });
+    } catch (err) {
+      ctx.naming.release(s);
+      throw err;
+    }
+    if (wanted !== undefined) {
+      ctx.naming.applyInBackground(s);
+    }
     ctx.hub.broadcastSessions();
     await sendHistory(ctx, socket, s);
   }
@@ -121,13 +131,14 @@ export async function handleSpawn(
       throw new Error("session is attached to another controller");
     }
     s.attachedTo = socket;
+    // the name is decided now, synchronously, so two spawns of one name cannot share it; pi is checked in the background
+    const wanted = cmd.name && !s.sessionName ? ctx.naming.claim(s, cmd.name, { source: "spawn" }) : undefined;
     // Respond as soon as the session is registered (startChild has already
     // broadcast it as spawning) so the controller can open it immediately;
     // prompts arriving before the child is up wait on s.starting.
-    const starting = ctx.children.start(s, { sessionFile: cmd.sessionFile, name: cmd.name, agent }).then(async () => {
-      if (cmd.name && !s.sessionName) {
-        await s.child!.setSessionName(cmd.name);
-        await ctx.children.refreshMeta(s);
+    const starting = ctx.children.start(s, { sessionFile: cmd.sessionFile, name: wanted ?? cmd.name, agent }).then(async () => {
+      if (wanted !== undefined) {
+        ctx.naming.applyInBackground(s);
       }
       ctx.hub.broadcastSessions();
       await sendHistory(ctx, socket, s);
@@ -138,6 +149,7 @@ export async function handleSpawn(
     s.starting.catch((err: unknown) => {
       log(`session ${s.id} spawn failed: ${errText(err)}`);
       s.attachedTo = undefined;
+      ctx.naming.release(s);
       ctx.hub.broadcastSessions();
     });
     if (cmd.ready) {

@@ -1,7 +1,7 @@
 # Session naming: one authority (design review for Vikunja 156)
 
 Source: Claude (Sonnet) design review, 2026-11-06, farmed per Ron. Ticket: 156.
-PR 1 of section 6 is built (docs/design.md "Naming"); PR 2 and the parked items are not.
+Both PRs of section 6 are built (docs/design.md "Naming"); the parked items are not, and the controller's uniqueSessionName was kept as the preview (see there).
 
 ---
 

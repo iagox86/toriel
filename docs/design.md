@@ -1453,7 +1453,7 @@ alias bypasses a pattern match, so a link must match the boundary value; a throw
 a generic reason, so a link must never throw; a headless deny never hangs. Some of this predates the
 bwrap sandbox (#38) and may be superseded; read it as history.
 
-## Naming: one authority (ticket 156, PR 1 built 2026-11-13)
+## Naming: one authority (ticket 156, built 2026-11-13)
 
 Design of record: docs/naming-design.md (the review). What is built:
 
@@ -1485,10 +1485,17 @@ Design of record: docs/naming-design.md (the review). What is built:
   faults; `FAKE_PI_COMPACT_ORPHANS_NAME=1` models the compaction case. test/naming.test.ts is the module,
   test/naming-daemon.test.ts the daemon.
 
-Next (PR 2, not built): move the remaining writers onto it - `/new`, spawn and wake (`--name` plus an
-unverified `setSessionName`; fire and forget) and subagents (`daemon-subagents.ts` keeps its own `uniqueName`
-over registry names; its claim must stay synchronous because of the parallel-call limit) - then delete
-`Controller.uniqueSessionName`. Parked: what to do about a rename pi reports that the daemon did not issue
-(an external or in-session `/name`; today the wanted name is re-asserted up to five times, then left),
-`uniqueName` turning a user's own `Task #5` into `Task #2`, and reading the names of session files the daemon
-has never registered into the taken set.
+PR 2 (same day) moved the remaining writers onto it: `/new` and spawn (`handleSpawn`) and a wake that carries a
+name (`handlePrompt`) claim synchronously, start pi with `--name`, and check it in the background
+(`applyInBackground`, so the first paint is not delayed; only for a session that has no name yet, as before);
+a subagent (`daemon-subagents.ts`) claims its `"agent: description"` name synchronously with its record, which the
+book needs and which keeps parallel calls from sharing one, and checks it in the background (a `context: fork`
+subagent starts as a copy of its parent's file, so it had the same bug). A failed start gives the claim back.
+`Controller.uniqueSessionName` stays on purpose, as the preview: it is the only code that sees the names of
+session files the daemon never registered, and deleting it would let a new name collide with those until the
+daemon reads them too.
+
+Parked: what to do about a rename pi reports that the daemon did not issue (an external or in-session `/name`;
+today the wanted name is re-asserted up to five times, then left), `uniqueName` turning a user's own `Task #5`
+into `Task #2`, reading the names of unregistered session files into the taken set (then the controller's
+preview can go), and the auto-namer (62), which is now just `claim(..., {source: "auto", ifUnset: true})`.
