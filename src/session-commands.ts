@@ -21,6 +21,8 @@ import { runPerformance, savePerformance } from "./performance.ts";
 import { loadSettings, resolveChildConfig } from "./settings.ts";
 import { explainLastThinking } from "./why.ts";
 import { newView } from "./transcript.ts";
+import { continuePrompt } from "./continue-prompt.ts";
+import { styleHelp, styleListing } from "./help-format.ts";
 import { INIT_PROMPT } from "./init-prompt.ts";
 import type { SessionMeta } from "./shared.ts";
 import { runDoctorCommand } from "./doctor-commands.ts";
@@ -64,7 +66,7 @@ export class SessionCommands {
       case "unknown":
         return false;
       case "help":
-        this.h.infoPanel.show(parsed.text);
+        this.h.infoPanel.show(styleHelp(parsed.text));
         this.h.tui.requestRender();
         break;
       case "error":
@@ -100,7 +102,7 @@ export class SessionCommands {
       performance: (c) => this.performance(c.opts.model as string | undefined),
       comment: (c) => this.comment(c.args.join(" "), c.opts.clear === true),
       help: () => {
-        this.h.infoPanel.show(listing(SESSION_COMMANDS));
+        this.h.infoPanel.show(styleListing(listing(SESSION_COMMANDS)));
         this.h.tui.requestRender();
       },
       abort: () => this.abort(),
@@ -117,6 +119,7 @@ export class SessionCommands {
       feedback: (c) => runFeedback(this.h, c, this.h.viewing ?? undefined),
       why: (c) => this.why(c.opts.model as string | undefined),
       init: () => this.init(),
+      continue: (c) => this.continueAfterAbort(c.args.join(" ")),
       clear: () => this.clear(),
       compact: (c) => this.compact(c.args.join(" ")),
       mcp: (c) => this.mcp(c.args[0], c.args[1], c.args.slice(2)),
@@ -634,6 +637,12 @@ export class SessionCommands {
   private async init(): Promise<void> {
     this.h.editor.setText("");
     await this.h.session.prompt(INIT_PROMPT);
+  }
+
+  /** /continue: an ordinary prompt (it wakes a stopped session like any other) saying the interruption was a mistake. */
+  private async continueAfterAbort(extra: string): Promise<void> {
+    this.h.editor.setText("");
+    await this.h.session.prompt(continuePrompt(extra));
   }
 
   /** /mcp add: write the server into pi's mcp.json, then reload so the session picks it up. */

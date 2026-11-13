@@ -12,6 +12,8 @@ import { latestClearBackup, rewindTargets } from "./rewind.ts";
 import type { Host } from "./host.ts";
 import type { SessionMeta } from "./shared.ts";
 import { SessionCommands } from "./session-commands.ts";
+import { SESSION_COMMANDS } from "./commands.ts";
+import { checkSlash } from "./unknown-command.ts";
 import type { SessionView } from "./transcript.ts";
 import { errText } from "./util.ts";
 
@@ -430,8 +432,16 @@ export class SessionActions {
     if (trimmed.length === 0) {
       return;
     }
-    if (trimmed.startsWith("/") && this.commands.run(trimmed)) {
-      return;
+    if (trimmed.startsWith("/")) {
+      if (this.commands.run(trimmed)) {
+        return;
+      }
+      // not toriel's: pi's skills, templates and extension commands go on to pi, anything else is refused (the line stays in the box)
+      const verdict = checkSlash(trimmed, SESSION_COMMANDS.map((c) => c.name), this.h.piCommands?.map((c) => c.name));
+      if (!verdict.send) {
+        this.h.notify(verdict.message);
+        return;
+      }
     }
     if (trimmed.startsWith("!")) {
       void this.bang(trimmed);
@@ -632,7 +642,7 @@ export class SessionActions {
 
   private async sendToLive(key: string, meta: SessionMeta, out: Outgoing): Promise<boolean> {
     if (out.echo) {
-      this.h.echoPrompt(key, out.sent);
+      this.h.echoPrompt(key, out.sent, out.images);
     }
     await this.h.request({ type: "prompt", session: meta.id, message: out.sent, images: out.images.length > 0 ? out.images : undefined });
     return true;
@@ -663,7 +673,7 @@ export class SessionActions {
     // lands in that window there is no pending echo to consume, so the
     // text would render twice. dropEcho retracts the echo on a refusal.
     if (out.echo) {
-      this.h.echoPrompt(key, out.sent);
+      this.h.echoPrompt(key, out.sent, out.images);
     }
     const data = (await this.h.request({
       type: "prompt",

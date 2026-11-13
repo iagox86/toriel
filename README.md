@@ -102,7 +102,7 @@ Type `/` for commands; tab completes them and their arguments, `/help` lists the
   `/filter [-r]`, `/comment [-c] [text]`, `/summarize`, `/restore`, `/adopt <file>`, `/feedback`, `/mouse [on|off|toggle]`, `/schedules` (every session's timed prompts), `/cancel /pause /resume <id|name>` and `/fire <schedule>` (manage a timed prompt), `/kill-daemon`, `/help`, `/exit`
 - In a session: `/help`, `/name` (show or rename; same as `/rename`), `/in`, `/at`, `/every`, `/loop`, `/cron` (timed prompts), `/watch <path> <prompt>` (a prompt when a file or directory changes; `/schedules` lists them, `/cancel /pause /resume <id|name>` and `/fire <schedule>` manage one), `/permissions` (list, add and revoke "allow for 1 hour" grants), `/doctor`, `/btw`, `/performance`, `/comment`, `/model`, `/think`, `/compact`, `/clear`, `/fork [-n name] [--keep-permissions]` (works while the session is running; the copy gets everything up to its last finished step), `/cd <dir>` (move this session to another directory), `/park`, `/rename`, `/reload`,
   `/mcp` (`list`, `status`, `explore`, `add`, `remove`, `reconnect`, `login`, `logout`), `/init`, `/why`, `/abort`, `/background`,
-  `/feedback`, `/parent` (jump to the agent that started this subagent), `/detach` (cut that link), `/mouse [on|off|toggle]`, `/quit` (back to the switcher), `/exit`
+  `/feedback`, `/parent` (jump to the agent that started this subagent), `/detach` (cut that link), `/continue [text]` (carry on after an accidental esc), `/mouse [on|off|toggle]`, `/quit` (back to the switcher), `/exit`
 
 `/comment <text>` keeps a longer note to yourself about a session (why it exists, where it stands). It is not drawn in the list, but `/filter` and `ctrl-f` search it. With no text the switcher puts the current comment in the box to edit; `-c` removes it.
 
@@ -112,7 +112,7 @@ Type `/` for commands; tab completes them and their arguments, `/help` lists the
 
 Clicking the transcript only toggles a thinking block or tool output on a double click (a single click is just for focusing or dropping a text selection); `TORIEL_CLICK=single` brings back one-click toggling.
 
-Anything else starting with `/` goes to pi (its skills and prompt templates).
+A line starting with `/` that is not a toriel command goes to pi if pi has such a command (its skills, prompt templates and extension commands); an unknown one is refused with a "did you mean" and nothing is sent. A path such as `/tmp/x` is ordinary text.
 
 `!command` in a session (the chat box border turns yellow while you type it) runs a shell command in the session's directory and shows the output. The agent gets the command and output immediately, as a message wrapped in `<local-command>` tags with a note that you ran it yourself, so it reacts right away (or queues it behind its current turn). `esc` stops a running command; a command is stopped after 10 minutes; very long output is cut to its start and end. It needs a running session, and it sees the session's environment (`TORIEL_SESSION_ID`, `PI_SESSION_ID`, ...) like the agent's own shell. `!!` is not supported.
 

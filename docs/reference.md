@@ -388,11 +388,17 @@ Pasting and selecting (Linux; `wl-clipboard` on Wayland, `xclip` on X11):
 - `ctrl-v` pastes the clipboard: its text, or - when it holds only an image - an
   `[image #1 png 340 KB]` marker in the chat box; the picture is sent with the
   message (delete the marker to drop it). Refused with a message when the model
-  takes no images, or the image is over 8 MB. Not shown in the transcript yet.
+  takes no images, or the image is over 8 MB. In the transcript a message's
+  images show as a PNG thumbnail (at most 40 x 12 cells, aspect kept) on a
+  terminal that draws images (kitty, iTerm2; pi-tui decides, and turns it off
+  under tmux/screen), and as a dim `[image]` / `[2 images]` line everywhere
+  else and for non-PNG types. Live echo, live events and file replays all use
+  the one `UserMessage` component. The base64 stays in memory with the row.
 - Middle click pastes the primary selection (whatever you last highlighted).
 - Text selected inside toriel is copied to both the clipboard and the primary
   selection, so either paste finds it. Shift+click still hands the mouse to the
   terminal.
+- **Links**: a plain click on a URL in the transcript opens it in the browser (`xdg-open`; `open` on macOS). pi's markdown links URLs in assistant and user text; `linkify.ts` links them in tool output. Only `http(s)` opens (the link text is model output), and a failure shows a notice. A URL that wraps across lines is not linked in tool output (half a URL would open the wrong page); with `/mouse off` the terminal's own link click (kitty: ctrl+shift+click) works on the same links. Needs a terminal that supports OSC 8 (pi turns hyperlinks off under screen and tmux without forwarding).
 - `/mouse [on|off|toggle]` (session view and switcher; no argument shows the state; `/mouse --help` describes it): `off` stops toriel's mouse reporting, so the terminal does select, copy and middle-click paste itself - also over SSH, where toriel cannot read your clipboard. While off, toriel's clicks (switcher rows, double-click on blocks) and its own selection highlight stop, wheel scrolling may stop depending on the terminal, and the terminal selects raw screen cells; the status line shows `mouse off` in a session. Not remembered across restarts. Shift held during one click does the same for that click only.
 - **Over SSH or without a display** there is no clipboard tool to run (`WAYLAND_DISPLAY` and `DISPLAY` are unset on the remote), so selected text is copied through the terminal with OSC 52 escapes (`osc52.ts`), one for the clipboard (ctrl-v) and one for the primary selection (middle click). The terminal never says whether it accepted it, so the flash reads "Sent to the terminal clipboard (not confirmed)" rather than "Copied!". Your terminal must allow it: kitty and most others allow OSC 52 *writes* by default (kitty's `clipboard_control`, `write-clipboard write-primary`); *reads* (what ctrl-v over SSH would need) are off by default and toriel does not do them yet.
 - **Inside tmux** the escape needs one of these in `~/.tmux.conf` (restart tmux or `tmux source-file`): `set -g set-clipboard on` (tmux handles the escape itself) or `set -g allow-passthrough on` (tmux 3.3+; tmux forwards it). toriel sends both forms under `$TMUX`, so either setting works; with neither the copy is dropped silently, which is why the flash says "not confirmed" and names both.
@@ -417,6 +423,9 @@ Daemon side:
 - `local-command.ts` (`!command`: run it, clean/trim the output, the tagged message the agent receives and its parser)
 - `received.ts` (label on messages between sessions), `daemon-handlers-messages.ts` / `daemon-resolve.ts` (deliver / find a session), `daemon-bridge.ts` + `daemon-handlers-bridge.ts` (session bridge: inject tracking, routing, confirmation)
 - `mouse.ts` (/mouse: the reporting on/off codes and the argument parsing)
+- `help-format.ts` (colour for the /help screens: command names, section headers and flags accented, usage hints dim; text unchanged), `continue-prompt.ts` (the /continue prompt)
+- `unknown-command.ts` (refuse an unknown /command in a session instead of sending it: toriel's list plus pi's, with a nearest-name suggestion; paths and a bare `/` pass through; with pi's list not loaded yet only toriel's commands are known, so others are refused with that reason)
+- `open-url.ts` (opening a clicked link: http and https only, detached `xdg-open`/`open`), `linkify.ts` (OSC 8 links for bare URLs in tool output)
 - `osc52.ts` (copy through the terminal, tmux passthrough wrapping)
 - `resync.ts` (what a view keeps when history is replayed; a replay after a reconnect keeps nothing transient), `drift.ts` (message counts and the digest check), `resources.ts` (the toriel pi resources, the `-e` / `--skill` arguments and `--tools +name` modifiers that load them into each child, the startup audit), `pi-dir.ts` (where pi keeps its own config)
 - `mcp.ts` / `mcp-doctor.ts` / `mcp-explore-prompt.ts` - /mcp: parse pi's status, add/remove servers, the /mcp status troubleshooting report, the merged one-line /mcp list rendering (state plus skill presence) and the /mcp explore prompt; `explainMcpFailure` turns a cryptic "Sign-in failed" into what probably happened

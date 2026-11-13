@@ -273,7 +273,7 @@ export const SESSION_COMMANDS = [
   {
     name: "help",
     description: "list toriel's commands for a session",
-    help: "<command> --help describes one. Anything else typed with a leading / goes to pi (skills, prompt templates, extension commands).",
+    help: "<command> --help describes one. A /name that is not a toriel command goes to pi when pi has such a command (skills, prompt templates, extension commands); an unknown one is refused with a suggestion, and nothing is sent. A line that starts with a path (/tmp/x) is ordinary text.",
   },
   {
     name: "in",
@@ -447,6 +447,14 @@ export const SESSION_COMMANDS = [
     name: "init",
     description: "have the agent survey the project and write an AGENTS.md (what it is, layout, conventions); updates one that exists and folds in CLAUDE.md and other agent-instruction files",
     help: "Sends the agent a prompt to survey the project and write AGENTS.md, or update the one that exists, folding in CLAUDE.md and other agent-instruction files. The agent does the scanning with its normal tools.",
+  },
+  {
+    name: "continue",
+    description: "carry on after an accidental esc: tells the agent the interruption was a mistake (optional extra instruction)",
+    help: "Sends the agent \"That interruption was accidental, please continue where you left off.\" as an ordinary prompt, so it also wakes a stopped session. Any text after the command is added as extra instruction.\n\nExamples:\n  /continue\n  /continue and focus on the tests",
+    build: (cmd) => {
+      cmd.argument("[instruction...]", "extra instruction added after the standard sentence");
+    },
   },
   { name: "clear", description: "wipe this session's conversation and start over (same name and model; old contents go to trash)",
     help: "Empties the conversation but keeps the session, its name and model. The old contents go to trash; esc esc offers to undo it." },

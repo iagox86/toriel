@@ -20,6 +20,7 @@ import {
 } from "./session-list.ts";
 import { detachFromParent, loadLineage, parentMap } from "./lineage.ts";
 import { arrangeTree, markFinishedSubagents } from "./session-tree.ts";
+import { styleHelp, styleListing } from "./help-format.ts";
 import { INIT_PROMPT } from "./init-prompt.ts";
 import { loadAgentsChecked } from "./agents.ts";
 import { agentListing } from "./agents-completion.ts";
@@ -383,7 +384,7 @@ export class SwitcherActions {
         this.h.switcher.hint = `unknown command: /${parsed.name} (/help)`;
         break;
       case "help":
-        this.h.infoPanel.show(parsed.text);
+        this.h.infoPanel.show(styleHelp(parsed.text));
         this.h.editor.setText("");
         break;
       case "error":
@@ -613,7 +614,7 @@ export class SwitcherActions {
       mouse: async (call) => this.h.setMouse(call.args[0] ?? ""),
       cd: async (call) => this.cd(call.args.join(" ")),
       help: async () => {
-        this.h.infoPanel.show(listing(SWITCHER_COMMANDS));
+        this.h.infoPanel.show(styleListing(listing(SWITCHER_COMMANDS)));
       },
       exit: leave,
       quit: leave,
