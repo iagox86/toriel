@@ -13,7 +13,8 @@ import { type AgentProfile, loadAgents, profileArgs } from "./agents.ts";
 import { recordHandled } from "./handled-files.ts";
 import { historyOf } from "./daemon-history.ts";
 import { resourceArgs, SPAWN_TOOLS, TORIEL_TOOLS } from "./resources.ts";
-import { lineageArgs, loadLineage, parentMap, sessionIdOfFile, subagentDepth } from "./lineage.ts";
+import { lineageArgs, loadLineage, parentMap, subagentDepth } from "./lineage.ts";
+import { sessionIdOfFile } from "./session-file.ts";
 import { mayDelegate, type SubagentLimits } from "./subagents.ts";
 import { profileOfSession, saveSessionAgent } from "./session-agents.ts";
 import { log } from "./log.ts";
@@ -166,7 +167,8 @@ export class ChildManager {
     if (opts.appendSystemPrompt) {
       args.push("--append-system-prompt", opts.appendSystemPrompt);
     }
-    args.push(...lineageArgs(useFile ? sessionIdOfFile(useFile) : undefined));
+    const fileId = useFile ? sessionIdOfFile(useFile) : undefined; // read once: the header is what every use below needs
+    args.push(...lineageArgs(fileId));
     const cfg = this.configFor(s);
     // The toriel settings' provider/model/thinking are defaults for NEW sessions.
     // A session that already has a file resumes with its own (pi restores them
@@ -179,9 +181,9 @@ export class ChildManager {
       s.sessionId = randomUUID();
       args.push("--session-id", s.sessionId);
     } else if (useFile) {
-      s.sessionId = sessionIdOfFile(useFile) ?? s.sessionId;
+      s.sessionId = fileId ?? s.sessionId;
     }
-    const agent = opts.agent ?? profileOfSession(useFile ? sessionIdOfFile(useFile) : undefined) ?? s.agent;
+    const agent = opts.agent ?? profileOfSession(fileId) ?? s.agent;
     s.agent = agent;
     if (agent) {
       args.push(...profileArgs(agent, { isNew }));

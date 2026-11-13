@@ -4,7 +4,6 @@
 // told about its forks: a running child's system prompt is fixed at start, and
 // restarting it just to update the prompt was rejected. See docs/design.md,
 // "parent/child communication".
-import * as fs from "node:fs";
 import { LINEAGE_FILE } from "./config.ts";
 import { readJsonOr, writeJsonAtomic } from "./util.ts";
 
@@ -100,17 +99,6 @@ export function subagentDepth(uuid: string | undefined, parents: ReadonlyMap<str
     at = parents.get(at);
   }
   return depth;
-}
-
-/** The session UUID from a session file's header line, if readable. */
-export function sessionIdOfFile(file: string): string | undefined {
-  try {
-    const first = fs.readFileSync(file, "utf8").split("\n", 1)[0] ?? "";
-    const id = (JSON.parse(first) as { id?: unknown }).id;
-    return typeof id === "string" ? id : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 const describe = (r: SessionRef) => `"${r.name}" (session id ${r.id}, file ${r.file})`;

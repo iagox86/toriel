@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
-import { errText, fireAndReport, moveFile, readJsonOr, rotateLog, writeFileAtomic, writeJsonAtomic } from "../src/util.ts";
+import { clipMiddle, errText, fireAndReport, moveFile, readJsonOr, rotateLog, writeFileAtomic, writeJsonAtomic } from "../src/util.ts";
 
 const tmp = (): string => fs.mkdtempSync(path.join(os.tmpdir(), "toriel-util-"));
 
@@ -108,5 +108,14 @@ describe("fireAndReport", () => {
     fireAndReport(Promise.resolve(1), "fine", (t) => notes.push(t));
     await new Promise((r) => setImmediate(r));
     assert.deepEqual(notes, ["saving the group failed: disk full"]);
+  });
+});
+
+describe("clipMiddle", () => {
+  it("leaves short text alone and cuts a long one to its first third plus its tail around a marker", () => {
+    assert.equal(clipMiddle("short", 10), "short");
+    const text = "a".repeat(30) + "b".repeat(30) + "c".repeat(30);
+    const clipped = clipMiddle(text, 30);
+    assert.equal(clipped, `${"a".repeat(10)}\n[...]\n${"c".repeat(20)}`);
   });
 });

@@ -4,6 +4,7 @@
 import * as fs from "node:fs";
 import { runSummarizer, summaryModel } from "./summarize.ts";
 import { loadSettings, resolveChildConfig } from "./settings.ts";
+import { clipMiddle } from "./util.ts";
 
 /** Reasoning can be enormous; the start (the goal) and the end (the decision) matter most. */
 export const MAX_THINKING_CHARS = 6000;
@@ -40,11 +41,7 @@ export function lastThinking(file: string): string | undefined {
 }
 
 export function clipThinking(text: string, max = MAX_THINKING_CHARS): string {
-  if (text.length <= max) {
-    return text;
-  }
-  const head = Math.floor(max / 3);
-  return `${text.slice(0, head)}\n[...]\n${text.slice(text.length - (max - head))}`;
+  return clipMiddle(text, max);
 }
 
 export async function explainLastThinking(file: string, model?: string): Promise<string> {

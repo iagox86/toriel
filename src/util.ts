@@ -7,6 +7,15 @@ export function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** `text` cut to at most `max` characters by dropping the middle: the first third and the rest from the end, joined by `[...]` (what a long conversation is about, and where it is now). */
+export function clipMiddle(text: string, max: number): string {
+  if (text.length <= max) {
+    return text;
+  }
+  const head = Math.floor(max / 3);
+  return `${text.slice(0, head)}\n[...]\n${text.slice(text.length - (max - head))}`;
+}
+
 /**
  * Start `work` without waiting for it, and say so through `notify` if it fails. For a key press or command
  * that kicks off async work: a rejection nobody handles would otherwise reach the controller's catch-all
