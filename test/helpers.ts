@@ -62,6 +62,8 @@ export async function startDaemon(extraEnv: Record<string, string> = {}): Promis
     // a test daemon must not take real logind sleep locks
     TORIEL_NO_INHIBIT: "1",
     TORIEL_PI_CLI: FAKE_PI,
+    // no test daemon may run the title model (it would be fake-pi in print mode); the auto-name tests turn it on
+    TORIEL_AUTO_NAME: "0",
     XDG_DATA_HOME: path.join(dir, "data"),
     FAKE_PI_DIR: sessionsDir,
     ...extraEnv,
