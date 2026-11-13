@@ -457,7 +457,7 @@ Controller side:
 - `util.ts` - `errText`, `writeFileAtomic` / `writeJsonAtomic`, `readJsonOr`, `rotateLog`; `daemon-lock.ts` - the one-daemon-per-state-directory lock; `preflight.ts` - the startup checks `toriel.ts` runs before importing anything else; `bin/toriel` - the launcher
 - `session-list.ts` - pure: daemon sessions + files -> rows, ordering, group moves
 - `transcript.ts` - live events and file replays -> pi message components; `tool-run.ts` (collapsible tool runs), `tool-defs.ts` (pi's built-in tool renderers), `components.ts` (user/assistant message tweaks)
-- `activity.ts` - working indicator and queued-message strip (events -> state -> lines)
+- `activity.ts` - working indicator and queued-message strip (events -> state -> lines). Also the slow-provider hint: when an assistant message is open (message_start, no message_end) and nothing has streamed for 30s, the strip adds `slower than usual - 2m30s`. Tool and MCP time sits between messages and never counts; compaction clears it.
 - `rewind-picker.ts` - the esc-esc message list; `history.ts` - slash-command log and history merge
 - `status.ts`, `dialogs.ts`, `commands.ts`, `format.ts` - small pure helpers
 - `editor.ts` - chat box (key interception, history bindings), `autocomplete.ts` (/command, @file and path completion), `history-search.ts` (ctrl-r), `switcher.ts` - the list UI, `session-filter.ts` (the filter's matching)
