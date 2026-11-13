@@ -77,7 +77,14 @@ export class AutoNamer {
     if (!this.eligible(s)) {
       return Promise.resolve();
     }
-    const request = firstRequest(s.sessionFile as string);
+    let request: string | undefined;
+    try {
+      request = firstRequest(s.sessionFile as string);
+    } catch (err) {
+      // the file can be gone (trash sweep, rewind, clear) when the turn settles; this runs inside the settle hook, which must not throw
+      this.log(`auto-name for session ${s.id} skipped: ${errText(err)}`);
+      return Promise.resolve();
+    }
     if (request === undefined) {
       return Promise.resolve();
     }

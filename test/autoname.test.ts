@@ -77,7 +77,7 @@ describe("AutoNamer", () => {
     });
     const s = t.session(sessionFile([["user", "the build fails on main"], ["assistant", "ok"]]));
     // no child and no real file entries to write through pi here: the claim is what matters
-    await t.namer.onSettled(s).catch(() => {});
+    await t.namer.onSettled(s);
     assert.deepEqual(seen, ["the build fails on main"]);
     assert.equal(s.wantedName, "Fix build");
     assert.equal(s.nameSource, "auto");
@@ -120,6 +120,23 @@ describe("AutoNamer", () => {
     release("Auto title");
     await done;
     assert.equal(racing.wantedName, "Chosen by hand");
+  });
+
+  it("does not throw into the settle hook when the session file is gone, and tries again at the next settle", () => {
+    let calls = 0;
+    const t = setup(async () => {
+      calls++;
+      return "T";
+    });
+    const s = t.session(sessionFile([["user", "hi"]]));
+    const file = s.sessionFile as string;
+    const content = fs.readFileSync(file);
+    fs.rmSync(file);
+    assert.doesNotThrow(() => void t.namer.onSettled(s));
+    assert.equal(calls, 0);
+    assert.match(t.logs.join("\n"), /skipped/);
+    fs.writeFileSync(file, content);
+    return t.namer.onSettled(s).then(() => assert.equal(calls, 1));
   });
 
   it("does nothing when disabled, without a file, or with only /commands so far", async () => {
