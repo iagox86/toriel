@@ -105,12 +105,35 @@ matching); a project config overlay (above).
 
 ### Limits that follow from the chain
 
-- Grants cannot cover `path` / `external_directory` asks (their `allow` is capped to
-  `defer`; the one niche exception is an `external_directory` ask carrying pi's
-  nothing-on-disk license, which we do not rely on). For those only pi's native one-shot "for this session" option works, and it
-  still dies on restart. `/permissions add` refuses these surfaces with that
-  explanation, and the dialog extras are not offered on such an ask. This is a
-  deliberate package guarantee, not something to route around.
+- The chain cannot let a grant cover `path` / `external_directory` asks (their `allow` is
+  capped to `defer`; the one niche exception is an `external_directory` ask carrying pi's
+  nothing-on-disk license, which we do not rely on), and pi has no way to add a session
+  rule with a pattern of your choosing. pi's own "for this session" option still works
+  and still dies on restart. `/permissions add` refuses these surfaces.
+- **File-path grants (ticket 194).** toriel answers these itself instead. The daemon sees
+  every dialog before a controller does, so a file-path prompt carries toriel's
+  "allow ... [toriel]" rows like any other, and picking one (or tabbing to widen the
+  pattern, say `project/deep/dir/docs/*` to `project/*`) stores a grant. When a later
+  file-path prompt in that session has every suggested pattern covered by such a grant, the
+  daemon writes pi's plain "Yes" to the child and no controller is asked (a notice says
+  which grant did it). Guards, since this goes around pi's cap on purpose:
+  - a file-path grant is only made as the answer to the file-path prompt that is open for
+    the session (`permission_add` names its id, and the daemon checks it against the prompt it
+    holds), so it cannot be added from `/permissions add`, an agent tool or a stray socket
+    line without one; it is never `spawn` or `command` sourced, and it must cover the
+    patterns pi suggested for that very prompt (otherwise the prompt would come straight
+    back);
+  - only grants from a prompt answer ever cover a file-path ask, in the stored file too
+    (dormant until `/permissions restore`, like all grants);
+  - the grants file and pi's own config (`~/.pi/agent`) are never answered from a grant,
+    however wide the pattern: those prompts always reach the user, and answering one with a
+    toriel row is refused up front rather than storing a grant that would never fire;
+  - the surface stays exact (`path_write` does not cover `path_read`), the pattern is a glob
+    over the path text pi suggested, and an ask with several suggested patterns (a
+    directory) offers the rows but no pattern edit.
+  The socket is still only guarded by the "controller announced itself" check, so a caller
+  holding the socket that learns an open prompt's id could still answer it; that is the
+  same trust as answering the prompt directly.
 - pi's own native session grants stay invisible to toriel. `/permissions` says so in a
   footer line instead of pretending the list is complete.
 - A small latency cost on every ask (one local socket round trip). Measured in the
@@ -131,7 +154,10 @@ Grant { id, session (uuid), surface, pattern, createdAt, expiresAt|null,
   in-process pi subagent node shares its parent's process and so its
   `TORIEL_SESSION_ID`; its asks match the parent session's grants. Acceptable and
   probably desirable; it is absorbed by the permission trickle-up ticket.
-  permission trickle-up ticket).
+  When a toriel subagent's prompt is answered from its parent's view (trickle-up), the
+  grant and pi's answer go to the subagent that asked, never to the parent being
+  viewed (`test/session-actions-dialog.test.ts`, "a subagent's prompt answered from its
+  parent's view").
 - No per-project or "always" scope in v1: a grant never applies outside its session.
 - Match: same surface, and the grant's pattern covers the ask's pattern as a glob:
   `*` matches any run of characters including path separators, `?` matches one
@@ -203,8 +229,9 @@ ticket). What the design does:
    unnoticed but Ron can still approve edits while configuring pi. Use `deny` instead if
    no agent should ever touch the grant file. Scoped to the one file, not the whole
    toriel data dir, so agents working on toriel itself are not blocked. A toriel grant
-   can never cover these asks (path asks are capped, see the limits), so an agent cannot
-   approve its own write to the file by getting a grant first.
+   never answers an ask about this file (nor pi's config), whatever pattern it has, and a
+   file-path grant exists only as the user's answer to a file-path prompt (see the limits),
+   so an agent cannot approve its own write to the file by getting a grant first.
    Optional: deny `/run/user/*/toriel.sock` to block `nc -U` from bash (only matches
    when the path is written out; pi does not expand `$XDG_RUNTIME_DIR`).
    Limits: a shell can build a path indirectly (`python -c`, variable-built paths),
@@ -247,7 +274,8 @@ Declared once in `src/commands.ts` with help and completion like the other famil
 
 The dialog stays pi's, byte for byte (options are the literal answers). The controller
 appends toriel's own rows below them, visibly marked, for asks where a grant is possible
-(the dialog carries a recordable suggestion and the surface is not capped):
+(the dialog carries a recordable suggestion; file-path asks included, see "File-path grants"
+under the limits):
 
 ```
  1. Yes
@@ -271,8 +299,10 @@ pi still hears the plain "Yes", and the grant is stored with the typed pattern a
 duration. With broader-grant matching (T11) the one edited grant then covers the narrower asks
 for the rest of its life. Empty is refused; esc leaves the editor without answering. Offered only
 when the ask carries exactly one suggested grant (nothing single to edit otherwise), and never on
-pi's own rows. The typed pattern is not otherwise validated: it is toriel's own record, glob-matched
-by the grants link, and the surface was already known grantable when the row appeared.
+pi's own rows. A typed pattern must cover the suggested one (the controller says so and stays in the
+editor otherwise, the daemon checks it again for file-path grants); beyond that it is toriel's own record,
+glob-matched, on the surface the row appeared for. For a file-path ask the grant is stored first, against
+the open prompt, and pi is answered "Yes" only once the daemon accepted it.
 
 Where the controller gets the pattern and surface: the link reports its
 `sessionApproval` suggestion (with the ask's `requestId` and command) to the daemon just

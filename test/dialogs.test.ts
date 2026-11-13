@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { DEFAULT_GRANT_DURATIONS, DIALOG_GUARD_MS, DialogPanel, dialogAnswer, dialogLines, dialogPrompt, editablePattern, grantGuarded, grantRowFor, isTypingKey, optionTakesReason, withGrantRows, withOrigin } from "../src/dialogs.ts";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { DEFAULT_GRANT_DURATIONS, DIALOG_GUARD_MS, type DialogRequest, DialogPanel, dialogAnswer, dialogLines, dialogPrompt, editablePattern, grantGuarded, grantRowFor, isTypingKey, optionTakesReason, withGrantRows, withOrigin } from "../src/dialogs.ts";
 
 const confirm = { id: "1", method: "confirm", title: "Run rm?", message: "rm -rf x" };
 const select = { id: "2", method: "select", title: "Pick", options: ["a", "b", "c"] };
@@ -217,5 +218,50 @@ describe("toriel's grant rows on a permission prompt", () => {
 
   it("offers an hour and a kept-across-restarts row unless the setting says otherwise", () => {
     assert.deepEqual([...DEFAULT_GRANT_DURATIONS], ["1h", "session"]);
+  });
+});
+
+describe("long text in the prompt panel", () => {
+  const plain = (lines: string[]): string[] => lines.map((l) => stripTerminalSequences(l));
+  const longPath = `/home/user/projects/${"deeply/nested/".repeat(8)}file.txt`;
+  const wide: DialogRequest = {
+    id: "w1",
+    method: "select",
+    title: `Permission Required\ntool    : bash\ncommand : cat ${longPath}`,
+    options: ["Yes", "No", "No, provide reason"],
+  };
+  const granting = (durations: string[]) => withGrantRows({ ...wide, options: ["Yes", "No"], toriel: { grants: [{ surface: "bash", pattern: `cat ${longPath}` }] } }, durations);
+
+  it("wraps a typed reason so its end and the cursor stay in view", () => {
+    const typed = "because this touches the production database and nobody asked for it, so please do not";
+    const rows = plain(dialogLines(wide, 2, 40, typed));
+    assert.ok(rows.every((r) => visibleWidth(r) <= 40), rows.join("|"));
+    assert.ok(rows.at(-1)?.endsWith("█"), "the cursor is on the last row");
+    assert.match(rows.join(" "), /please do not█$/);
+  });
+
+  it("breaks one unbroken word (a path) that is wider than the panel", () => {
+    const rows = plain(dialogLines(wide, 2, 30, longPath));
+    assert.ok(rows.every((r) => visibleWidth(r) <= 30), rows.join("|"));
+    assert.ok(rows.join("").replaceAll(" ", "").includes("file.txt█"));
+  });
+
+  it("wraps a long command in the title instead of cutting it", () => {
+    const rows = plain(dialogLines(wide, 0, 40));
+    assert.ok(rows.every((r) => visibleWidth(r) <= 40), rows.join("|"));
+    assert.ok(rows.join("").replaceAll(" ", "").includes("file.txt"), "the end of the command is shown");
+  });
+
+  it("keeps the tab hint visible on a toriel row whose pattern is long", () => {
+    const rows = plain(dialogLines(granting(["1h"]), 2, 40));
+    assert.ok(rows.every((r) => visibleWidth(r) <= 40), rows.join("|"));
+    assert.match(rows.join(" ").replace(/\s+/g, " "), /\(tab: edit the pattern\)/);
+    assert.ok(rows.join("").replaceAll(" ", "").includes("file.txt"), "the whole pattern is readable before you tab into it");
+  });
+
+  it("still cuts the rows you are not on, one line each", () => {
+    const rows = plain(dialogLines(granting(["1h", "session"]), 0, 40));
+    assert.ok(rows.every((r) => visibleWidth(r) <= 40), rows.join("|"));
+    assert.equal(rows.filter((r) => /^\s+[34]\. /.test(r)).length, 2, "each unselected toriel row is a single line");
   });
 });

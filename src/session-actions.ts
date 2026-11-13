@@ -3,6 +3,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Key, matchesKey } from "@earendil-works/pi-tui";
+import { coversPattern, isCappedSurface } from "./permissions.ts";
 import { type DialogRequest, dialogAnswer, editablePattern, grantGuarded, grantRowFor, isTextDialog, isTypingKey, optionTakesReason } from "./dialogs.ts";
 import { isPlainLeft } from "./editor.ts";
 import { fmtAge } from "./format.ts";
@@ -293,28 +294,56 @@ export class SessionActions {
       return true;
     }
     const row = grantRowFor(dialog, fields.value);
-    // toriel's "allow for ..." rows answer pi with its plain "Yes", then keep the grant
-    this.h.send({
-      type: "ui_response",
-      session: meta.id,
-      response: { type: "extension_ui_response", id: dialog.id, ...(row ? { value: "Yes" } : fields) },
-    });
     if (row) {
-      this.rememberGrants(meta.id, dialog, row.for);
+      this.answerWithGrant(meta.id, view, dialog, row.for);
+      return true;
     }
+    this.h.send({ type: "ui_response", session: meta.id, response: { type: "extension_ui_response", id: dialog.id, ...fields } });
     view.dialog = undefined;
     this.h.renderChrome();
     return true;
   }
 
+  /**
+   * toriel's "allow for ..." rows answer pi with its plain "Yes" and keep the grant (with `pattern` in place of the suggested one,
+   * when it was edited). A file-path grant is stored first, because the daemon makes it only while the prompt is still open, and pi is
+   * answered only once that worked; the other kinds answer at once and store after.
+   */
+  private answerWithGrant(session: number, view: SessionView, dialog: DialogRequest, life: string, pattern?: string): void {
+    const answer = (): void => {
+      if (view.dialog !== dialog) {
+        return; // answered some other way meanwhile
+      }
+      this.h.send({ type: "ui_response", session, response: { type: "extension_ui_response", id: dialog.id, value: "Yes" } });
+      view.dialog = undefined;
+      this.h.renderChrome();
+    };
+    if (!(dialog.toriel?.grants ?? []).some((g) => isCappedSurface(g.surface))) {
+      answer();
+      this.rememberGrants(session, dialog, life, pattern);
+      return;
+    }
+    void this.storeGrants(session, dialog, life, pattern).then((ok) => (ok ? answer() : undefined));
+  }
+
   /** Store the grant(s) the dialog suggested, lasting `life`; failures are said, not swallowed. */
   private rememberGrants(session: number, dialog: DialogRequest, life: string, pattern?: string): void {
+    void this.storeGrants(session, dialog, life, pattern);
+  }
+
+  /** `rememberGrants`, saying whether every grant was kept. A file-path grant names the prompt it comes from. */
+  private async storeGrants(session: number, dialog: DialogRequest, life: string, pattern?: string): Promise<boolean> {
+    let ok = true;
     for (const g of (dialog.toriel?.grants ?? []).map((x) => (pattern === undefined ? x : { ...x, pattern }))) {
-      this.h
-        .request({ type: "permission_add", session, surface: g.surface, pattern: g.pattern, for: life, source: "dialog" })
-        .then((r) => this.h.notify((r as { echo: string }).echo))
-        .catch((err: unknown) => this.h.notify(`could not keep the permission grant: ${errText(err)}`));
+      try {
+        const r = await this.h.request({ type: "permission_add", session, surface: g.surface, pattern: g.pattern, for: life, source: "dialog", ...(isCappedSurface(g.surface) ? { dialog: dialog.id } : {}) });
+        this.h.notify((r as { echo: string }).echo);
+      } catch (err) {
+        ok = false;
+        this.h.notify(`could not keep the permission grant: ${errText(err)}`);
+      }
     }
+    return ok;
   }
 
   /**
@@ -358,11 +387,13 @@ export class SessionActions {
           this.h.notify("a grant pattern cannot be empty - type one, or esc to go back");
           return true;
         }
+        const suggested = dialog.toriel?.grants[0]?.pattern;
+        if (suggested !== undefined && !coversPattern(reason, suggested)) {
+          this.h.notify(`"${reason}" does not cover ${JSON.stringify(suggested)}, so this prompt would come straight back - widen it, or esc to go back`);
+          return true;
+        }
         panel.edit(null);
-        this.h.send({ type: "ui_response", session, response: { type: "extension_ui_response", id: dialog.id, value: "Yes" } });
-        this.rememberGrants(session, dialog, row.for, reason);
-        view.dialog = undefined;
-        this.h.renderChrome();
+        this.answerWithGrant(session, view, dialog, row.for, reason);
         return true;
       }
       view.pendingReason = reason ? { text: reason, at: Date.now() } : undefined;

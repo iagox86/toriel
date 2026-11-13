@@ -64,7 +64,9 @@ export function isCappedSurface(surface: string): boolean {
 
 /** Why a grant on `surface` cannot be made, or undefined when it can. */
 export function cappedReason(surface: string): string | undefined {
-  return isCappedSurface(surface) ? `pi does not let a grant cover "${surface}" (file-path) requests; pi's own "for this session" answer is the only way to allow those` : undefined;
+  return isCappedSurface(surface)
+    ? `pi does not let a grant cover "${surface}" (file-path) requests, so one is only made by answering a file-path prompt with a toriel "allow ..." row (tab on it edits the pattern); /permissions add cannot`
+    : undefined;
 }
 
 /** The grant pi would record for an ask, as the link reported it, waiting for the dialog that follows. */
@@ -162,15 +164,19 @@ export class GrantStore {
     return n;
   }
 
-  /** Make a grant (active at once). The same surface and pattern in a session is updated, not duplicated. */
-  add(spec: NewGrant): Grant {
+  /**
+   * Make a grant (active at once). The same surface and pattern in a session is updated, not duplicated.
+   * A file-path surface is refused unless `fromPrompt`: the caller has checked that the user is answering a file-path
+   * prompt the daemon is holding (see `handlePermissionAdd`), which is the only way such a grant comes about.
+   */
+  add(spec: NewGrant, fromPrompt = false): Grant {
     const surface = spec.surface.trim();
     const pattern = spec.pattern.trim();
     if (!surface || !pattern) {
       throw new Error("a grant needs a surface (bash, mcp, tool, skill) and a pattern");
     }
     const capped = cappedReason(surface);
-    if (capped) {
+    if (capped && !(fromPrompt && spec.source === "dialog")) {
       throw new Error(capped);
     }
     const now = this.now();
@@ -249,19 +255,21 @@ export class GrantStore {
    * pattern, treated as literal text, matches the grant's pattern as a glob (`*` = any
    * run of characters including `/`, `?` = one character); so a wider grant such as
    * `projects/code/*` covers narrower asks like `projects/code/tests/*`. An empty ask is
-   * never covered, and neither is a capped surface.
+   * never covered, and neither is a capped surface unless `withPaths`: only the daemon answering a file-path
+   * prompt itself asks that way (pi would downgrade a link's allow there, so the link never does).
    */
-  covers(session: string, asked: readonly GrantSpec[]): Grant[] | undefined {
+  covers(session: string, asked: readonly GrantSpec[], withPaths = false): Grant[] | undefined {
     if (asked.length === 0) {
       return undefined;
     }
     const live = this.active(session);
     const used: Grant[] = [];
     for (const a of asked) {
-      if (isCappedSurface(a.surface)) {
+      if (isCappedSurface(a.surface) && !withPaths) {
         return undefined;
       }
-      const hit = live.find((g) => g.surface === a.surface && coversPattern(g.pattern, a.pattern));
+      // a file-path grant counts only when it came from a prompt answer, whatever else a store file might hold
+      const hit = live.find((g) => g.surface === a.surface && (g.source === "dialog" || !isCappedSurface(g.surface)) && coversPattern(g.pattern, a.pattern));
       if (!hit) {
         return undefined;
       }
@@ -302,7 +310,8 @@ export class GrantStore {
  * matches literally, and the match must span the whole ask. A `*` or `?` in the ask is
  * an ordinary character, not a wildcard.
  */
-function coversPattern(grant: string, ask: string): boolean {
+/** Whether `grant`, as a glob (`*` any run of characters, `?` one), matches the literal text `ask` in full. */
+export function coversPattern(grant: string, ask: string): boolean {
   const escaped = [...grant]
     .map((c) => {
       if (c === "*") {
@@ -333,6 +342,6 @@ function isGrant(v: unknown): v is Grant {
     typeof g.createdAt === "number" &&
     (g.expiresAt === null || typeof g.expiresAt === "number") &&
     (g.source === "dialog" || g.source === "command" || g.source === "spawn") &&
-    !isCappedSurface(g.surface)
+    (!isCappedSurface(g.surface) || g.source === "dialog") // a file-path grant exists only as the answer to a prompt
   );
 }

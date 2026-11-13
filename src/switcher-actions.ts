@@ -55,7 +55,7 @@ type CommandHandler = (call: Invocation, target: SwitcherSession | undefined) =>
 const NORMAL_HINT = "type / for commands, or a message to start a session - enter open - ctrl-n new - ctrl-k stop - ctrl-x delete - ctrl-r rename - ctrl-g group - ctrl-f filter";
 
 /** How long a first ctrl-x stays a pending confirm. */
-export const CONFIRM_MS = 1000;
+export const CONFIRM_MS = 4000;
 
 export class SwitcherActions {
   groups: GroupsFile = { groups: [], assignments: {} };

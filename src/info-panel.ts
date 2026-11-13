@@ -63,8 +63,9 @@ export class InfoPanel extends VStack {
     const paint = (width: number) => panelRowPainter(width);
     const text = new Lines((width) => (self.panel?.isOpen ? (self.panel.bodyLines(width)).map(paint(width)) : []));
     const top = new Lines((width) => (self.panel?.isOpen ? ["", paint(width)("")] : []));
-    const foot = new Lines((width) => (self.panel?.isOpen ? self.panel.footerLines().map(paint(width)) : []));
-    const scroller = new ScrollView(text, { scrollbar: "auto" });
+    const foot = new Lines((width) => (self.panel?.isOpen ? self.panel.footerLines(width).map(paint(width)) : []));
+    // "contain": at the popup's top or bottom the wheel stops, instead of moving the transcript behind it
+    const scroller = new ScrollView(text, { scrollbar: "auto", overscroll: "contain" });
     // the text takes what it needs and gives way (and scrolls) when the screen is shorter; top and foot never shrink
     super([
       { component: top, basis: "auto", grow: 0, shrink: 0, minSize: 0 },
@@ -121,13 +122,15 @@ export class InfoPanel extends VStack {
     return rows;
   }
 
-  private footerLines(): string[] {
+  /** The key hints, wrapped to the panel so a long action list never runs past the box. */
+  footerLines(width: number): string[] {
     const keys = this.actions.map((a) => `${a.key} ${a.label}`).join(", ");
     const hidden = this.scroller.viewportHeight > 0 && this.bodyRows > this.scroller.viewportHeight;
     const above = hidden && this.scroller.scrollTop > 0;
     const below = hidden && this.scroller.scrollTop + this.scroller.viewportHeight < this.bodyRows;
     const more = [above ? "more above" : "", below ? "more below" : ""].filter(Boolean).join(" and ");
     const where = hidden ? `${more} (up/down/pgup/pgdn scroll) - ` : "";
-    return ["", dim(` ${where}${keys ? `${keys} - ` : ""}esc or enter closes`), ""];
+    const hint = `${where}${keys ? `${keys} - ` : ""}esc or enter closes`;
+    return ["", ...wrapHanging(hint, panelInnerWidth(width)).map((row) => dim(row)), ""];
   }
 }

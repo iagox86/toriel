@@ -2,7 +2,7 @@
 // answered from a docked panel; input/editor are answered by typing in the
 // input box (pi-permission-system uses one for the optional deny reason).
 import type { Component } from "@earendil-works/pi-tui";
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { durationWords } from "./permission-format.ts";
 import { attention, dim, panel, panelInnerWidth, selected } from "./theme.ts";
 
@@ -153,17 +153,28 @@ export function dialogPrompt(d: DialogRequest): string {
 /** Options that chain a free-text dialog afterwards ("No, provide reason"). */
 export const takesReason = (option: string | undefined): boolean => /reason/i.test(option ?? "");
 
+/**
+ * `text` wrapped to `width`: the first line starts with `first`, the others with `hang` (same width), so a long
+ * command or a typed reason stays readable to its end instead of being cut at the right edge. A word longer than a
+ * line is broken. Always at least one line.
+ */
+export function wrapRows(text: string, width: number, first = " ", hang = " "): string[] {
+  const room = Math.max(1, width - Math.max(first.length, hang.length));
+  const rows = wrapTextWithAnsi(text, room);
+  return (rows.length > 0 ? rows : [""]).map((row, i) => (i === 0 ? first : hang) + row);
+}
+
 /** `reason` non-null = the highlighted option is being edited inline. */
 export function dialogLines(d: DialogRequest, index: number, width: number, reason: string | null = null): string[] {
   const out: string[] = [];
   const title = (d.title ?? d.method).split("\n");
   const head = d.origin ? `${d.origin}: ` : "";
-  out.push(attention(truncateToWidth(` ${head}${title[0]}`, width)));
+  out.push(...wrapRows(`${head}${title[0]}`, width).map(attention));
   for (const line of title.slice(1)) {
-    out.push(truncateToWidth(` ${line}`, width));
+    out.push(...wrapRows(line, width));
   }
   if (d.message) {
-    out.push(truncateToWidth(` ${d.message}`, width));
+    out.push(...wrapRows(d.message, width));
   }
   if (d.method === "confirm") {
     out.push(dim(" [y]es  [n]o"));
@@ -180,14 +191,20 @@ export function dialogLines(d: DialogRequest, index: number, width: number, reas
       out.push(dim(" -- toriel: also remember this --"));
     }
     const row = grantRowFor(d, o);
+    const lead = `${i + 1}. `;
     if (i === index && reason !== null) {
       const label = row && editablePattern(d, o) !== undefined ? `Yes, and allow pattern (${row.for === "session" ? "this session" : durationWords(row.for)})` : o;
-      out.push(selected(truncateToWidth(` > ${i + 1}. ${label}: ${reason}\u2588`, width)));
+      // wrapped, not cut: the text being typed and the cursor must stay in view however long it gets
+      out.push(...wrapRows(`${lead}${label}: ${reason}\u2588`, width, " > ", `   ${" ".repeat(lead.length)}`).map(selected));
       return;
     }
-    const hint = i === index && optionTakesReason(d, o) ? "  (tab: type a reason)" : i === index && editablePattern(d, o) !== undefined ? "  (tab: edit the pattern)" : "";
-    const text = truncateToWidth(` ${i + 1}. ${o}${hint}`, width - 2);
-    out.push(i === index ? selected(` >${text}`) : dim(`  ${text}`));
+    if (i === index) {
+      const hint = optionTakesReason(d, o) ? "  (tab: type a reason)" : editablePattern(d, o) !== undefined ? "  (tab: edit the pattern)" : "";
+      // the row you are on shows in full (it names the pattern a grant would store) with its tab hint at the end
+      out.push(...wrapRows(`${lead}${o}${hint}`, width, " > ", `   ${" ".repeat(lead.length)}`).map(selected));
+      return;
+    }
+    out.push(dim(`  ${truncateToWidth(` ${lead}${o}`, width - 2)}`));
   });
   return out;
 }

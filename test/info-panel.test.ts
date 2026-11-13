@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { Component } from "@earendil-works/pi-tui";
+import { type Component, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { getScrollViewsAt, renderLayoutFrame } from "@earendil-works/pi-tui/dist/layout.js";
 import { InfoPanel, wrapHanging } from "../src/info-panel.ts";
 import { buildLayouts } from "../src/layout.ts";
@@ -72,7 +72,7 @@ describe("info panel taller than the screen", () => {
     assert.match(all, /EDITOR/);
     assert.match(all, /line 1\b/);
     assert.doesNotMatch(all, /line 60\b/);
-    assert.match(all, /esc or enter closes/);
+    assert.match(all.replace(/\s+/g, " "), /esc or enter closes/, "the footer may wrap, but it is all there");
     assert.match(all, /more below/);
     assert.doesNotMatch(all, /more above/);
   });
@@ -194,5 +194,19 @@ describe("info panel actions", () => {
     const panel = new InfoPanel();
     panel.show("answer", [{ key: "s", label: "saves", run: () => {} }]);
     assert.match(panel.render(60).join("\n"), /s saves - esc or enter closes/);
+  });
+
+  it("wraps a long footer inside the box instead of running past its edge", () => {
+    const panel = new InfoPanel();
+    panel.show("answer", [{ key: "c", label: "copies it to the clipboard", run: () => {} }, { key: "s", label: "saves it to a file", run: () => {} }, { key: "f", label: "opens the file", run: () => {} }]);
+    const rows = panel.footerLines(40).map((r) => stripTerminalSequences(r));
+    assert.ok(rows.length > 3, "the hint takes more than one row");
+    assert.ok(rows.every((r) => visibleWidth(r) <= 40), rows.join("|"));
+    assert.match(rows.join(" "), /esc or enter closes/);
+  });
+
+  it("keeps the wheel inside the popup at its top and bottom", () => {
+    const scroller = (new InfoPanel() as unknown as { scroller: { overscroll: string } }).scroller;
+    assert.equal(scroller.overscroll, "contain");
   });
 });

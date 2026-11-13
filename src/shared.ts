@@ -12,7 +12,7 @@
  * older daemon or controller cannot cope with. A mismatch blocks the controller
  * (see version-check.ts); a mere code difference with the same protocol only warns.
  */
-export const PROTOCOL = 4; // 4: the watch_add command (file-trigger schedules) (3: agent_spawn's optional cwd; 2: the `cd` command and adopt's `keepPermissions`)
+export const PROTOCOL = 5; // 5: file-path prompts carry grant rows, and permission_add's `dialog` (4: the watch_add command (file-trigger schedules); 3: agent_spawn's optional cwd; 2: the `cd` command and adopt's `keepPermissions`)
 
 /** Which toriel code a process runs (build-id.ts). */
 export interface BuildInfo {
@@ -228,8 +228,8 @@ type ClientCommandBody =
   | { type: "permission_check"; id?: string; uuid: string; grants: PermissionGrantSpec[]; value?: string }
   /** Permission grants of one session, or of all when neither `session` nor `uuid` is given. The response is {grants: GrantView[]}. */
   | { type: "permission_list"; id?: string; session?: number; uuid?: string }
-  /** Grant a surface/pattern in a session. `for` is a duration ("1h"), or "session"/"never" for no expiry (the default). */
-  | { type: "permission_add"; id?: string; session?: number; uuid?: string; surface: string; pattern: string; for?: string; note?: string; source?: "dialog" | "command" }
+  /** Grant a surface/pattern in a session. `for` is a duration ("1h"), or "session"/"never" for no expiry (the default). `dialog` is the id of the file-path prompt being answered: required, and checked against the prompt the daemon holds, for a file-path surface (those grants come only from a prompt). */
+  | { type: "permission_add"; id?: string; session?: number; uuid?: string; surface: string; pattern: string; for?: string; note?: string; source?: "dialog" | "command"; dialog?: string }
   /** Revoke grants: `ref` is "#3", "3" or an exact pattern (within the session when one is given); `all` takes every grant in scope. */
   | { type: "permission_revoke"; id?: string; session?: number; uuid?: string; ref?: string; all?: boolean }
   /** Activate the grants a session had saved before the daemon restarted. */

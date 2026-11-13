@@ -68,12 +68,12 @@ describe("deleting a group", () => {
     assert.ok(!loadGroups().groups.includes("Empty"));
   });
 
-  it("forgets the first ctrl-x after a second, and takes the confirm hint down", (t) => {
+  it("forgets the first ctrl-x after four seconds, and takes the confirm hint down", (t) => {
     t.mock.timers.enable({ apis: ["Date", "setTimeout"] });
     const { sw, actions, goTo } = setup();
     goTo("Empty");
     actions.keys(CTRL_X);
-    t.mock.timers.tick(1100);
+    t.mock.timers.tick(4100);
     assert.doesNotMatch(sw.hint, /again/);
     actions.keys(CTRL_X);
     assert.ok(loadGroups().groups.includes("Empty"), "the late second press only arms again");
