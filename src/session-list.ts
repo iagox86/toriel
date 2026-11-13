@@ -116,6 +116,18 @@ export function buildSessionList(inp: ListInputs): SwitcherSession[] {
 }
 
 /**
+ * A session toriel never ran: a plain-pi session, or one from another toriel
+ * instance. Adopted means the daemon has it (registry entry, not a presence
+ * pseudo-entry) or ever ran a child on its file (`handled`); a session the
+ * user filed into a group stays visible, and so do the `keep` keys (the one
+ * being viewed, one being entered).
+ */
+export function isExternalRow(row: SwitcherSession, handled: ReadonlySet<string>, keep: ReadonlySet<string> = new Set()): boolean {
+  const daemonOwned = row.daemonId !== undefined && row.daemonId >= 0;
+  return !daemonOwned && !handled.has(row.key) && !row.group && !keep.has(row.key);
+}
+
+/**
  * Display order: the persisted manual order (groups.json `order`) first, then
  * sessions never manually placed, in `openedOrder` (captured when the switcher
  * opened and frozen, so background file activity elsewhere never reshuffles

@@ -11,6 +11,11 @@ function load(file: string): Set<string> {
   return new Set(Array.isArray(list) ? list.filter((x): x is string => typeof x === "string") : []);
 }
 
+/** Every session file toriel has run a child on. */
+export function loadHandled(file = HANDLED_FILE): Set<string> {
+  return load(file);
+}
+
 export function wasHandled(sessionFile: string, file = HANDLED_FILE): boolean {
   return load(file).has(sessionFile);
 }
