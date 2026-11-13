@@ -1,0 +1,45 @@
+P3 READ JAIL  (P2 shape on the read surfaces)
+W = /tmp/p3-fGN1Of/W
+scratch agentDir = /tmp/p3-fGN1Of/agent
+
+RS-A = [deny '*' then allow '<W>/**'] on both read surfaces
+RS-B = [allow '<W>/**' then deny '*'] on both read surfaces
+
+CASE                              path_read   ext_dir_read  RS-B path_read  match values
+--------------------------------------------------------------------------------------------------------------
+inside W (W/a.txt)                allow       allow         deny            /tmp/p3-fGN1Of/W/a.txt  |  a.txt
+parent via .. (../outside)        deny        deny          deny            /tmp/p3-fGN1Of/outside.txt  |  ../outside.txt
+sibling (W-evil/f.txt)            deny        deny          deny            /tmp/p3-fGN1Of/W-evil/f.txt  |  ../W-evil/f.txt
+symlink out (link-out/target.txt) allow       allow         deny            /tmp/p3-fGN1Of/W/link-out/target.txt  |  link-out/target.txt  |  /tmp/p3-fGN1Of/main/targe
+agentDir skill                    deny        deny          deny            /tmp/p3-fGN1Of/agent/skills/messaging/SKILL.md
+
+note: the symlink case carries the canonical alias (access-path.ts matchValues),
+  e.g. /tmp/p3-fGN1Of/W/link-out/target.txt | link-out/target.txt | /tmp/p3-fGN1Of/main/target.txt
+  so under last-match-wins (rule.ts:107/:236) a LATER allow on the lexical alias
+  still wins even though the canonical target is outside W: config cannot close the
+  symlink hole; only a chain link checking boundaryValue/canonical can.
+
+P2: pipeline outcomes for `read` tool calls
+--------------------------------------------------------------------------------------------------------------
+(a) read agentDir/skills/... with path_read '*':deny -> block ([pi-permission-system] Denied by policy: 'path_read' for too)  [3ms]  escalate=0 link=0 terminal=0
+(b) read W/a.txt: path_read deny + W/** allow + read allow -> allow  [0ms]  escalate=0 link=0 terminal=0
+(c) read agentDir/skills/... no rules, no link (infra baseline) -> block ([pi-permission-system] The 'terminal' authorizer denied this)  [1ms]  escalate=1 link=0 terminal=1
+(d) read agentDir/skills/... path_read deny + read allow, no link -> block ([pi-permission-system] Denied by policy: 'path_read' for too)  [0ms]  escalate=0 link=0 terminal=0
+(e) read agentDir/skills/... external_directory_read '*':deny only -> allow  [0ms]  escalate=0 link=0 terminal=0
+
+P3: infra auto-allow roots for scratch agentDir (extension-paths.ts)
+  dir:     /tmp/p3-fGN1Of/agent/agents
+  dir:     /tmp/p3-fGN1Of/agent/extensions
+  dir:     /tmp/p3-fGN1Of/agent/git
+  dir:     /tmp/p3-fGN1Of/agent/npm
+  dir:     /tmp/p3-fGN1Of/agent/prompts
+  dir:     /tmp/p3-fGN1Of/agent/skills
+  dir:     /tmp/p3-fGN1Of/agent/themes
+  dir:     /tmp/p3-fGN1Of/agent/settings.json
+  dir:     /tmp/p3-fGN1Of/agent/SYSTEM.md
+  dir:     /tmp/p3-fGN1Of/agent/APPEND_SYSTEM.md
+  dir:     /tmp/p3-fGN1Of/agent/AGENTS.md
+  dir:     /home/ron/.nvm/versions/node/v27.0.0-alpha.0.0.0/lib/node_modules
+  exclude: /tmp/p3-fGN1Of/agent/extensions/pi-permission-system/logs
+
+  pi-infrastructure-read.ts: project-local <cwd>/.pi/npm and <cwd>/.pi/git are auto-allowed too.

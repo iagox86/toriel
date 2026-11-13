@@ -1,0 +1,62 @@
+P1 BASH CORPUS RESULTS====================================================================
+cwd (W): /tmp/p1-upKx2A/W
+main checkout: /tmp/p1-upKx2A/main
+
+CMD                                                    VERDICT       EXPECTED      DETAIL
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+echo x > ../outside.txt                                CAUGHT        should catch  /tmp/p1-upKx2A/outside.txt
+echo x >> ../outside.txt                               CAUGHT        should catch  /tmp/p1-upKx2A/outside.txt
+echo x 2> ../outside.txt                               CAUGHT        should catch  /tmp/p1-upKx2A/outside.txt
+echo x &> ../outside.txt                               CAUGHT        should catch  /tmp/p1-upKx2A/outside.txt
+exec 3> ../outside.txt && echo x >&3                   CAUGHT        doubtful      /tmp/p1-upKx2A/outside.txt
+sed -i 's/a/b/' ../outside.txt                         CAUGHT        should catch  /tmp/p1-upKx2A/outside.txt
+sed -i 's/a/b/' ../outside*.txt                        CAUGHT        should catch  /tmp/p1-upKx2A/outside*.txt
+awk -i inplace '{print}' ../outside.txt                CAUGHT        should catch  /tmp/p1-upKx2A/outside.txt
+cp a.txt ../outside_copy.txt                           CAUGHT        should catch  /tmp/p1-upKx2A/outside_copy.txt
+mv a.txt ../moved.txt                                  CAUGHT        should catch  /tmp/p1-upKx2A/moved.txt
+install -m 644 a.txt ../installed.txt                  CAUGHT        doubtful      /tmp/p1-upKx2A/installed.txt
+ln -s ../outside.txt link-in-w                         CAUGHT        doubtful      /tmp/p1-upKx2A/outside.txt
+ln -s a.txt ../link-outside                            CAUGHT        should catch  /tmp/p1-upKx2A/link-outside
+rm ../outside.txt                                      CAUGHT        should catch  /tmp/p1-upKx2A/outside.txt
+mkdir ../new-dir                                       CAUGHT        should catch  /tmp/p1-upKx2A/new-dir
+touch ../touched.txt                                   CAUGHT        should catch  /tmp/p1-upKx2A/touched.txt
+dd if=/dev/zero of=../dd-out.txt bs=1 count=10         MISS          doubtful      no external access detected
+echo x | tee ../tee-out.txt                            CAUGHT        doubtful      /tmp/p1-upKx2A/tee-out.txt
+echo x | tee -a ../tee-out.txt                         CAUGHT        doubtful      /tmp/p1-upKx2A/tee-out.txt
+cd .. && echo x > f.txt                                CAUGHT        should catch  /tmp/p1-upKx2A, /tmp/p1-upKx2A/f.txt
+pushd ..; echo x > f.txt                               CAUGHT        doubtful      /tmp/p1-upKx2A
+(cd .. && echo x > subshell.txt)                       CAUGHT        should catch  /tmp/p1-upKx2A, /tmp/p1-upKx2A/subshell.txt
+env -C .. sh -c 'echo x > env-out.txt'                 CAUGHT        doubtful      /tmp/p1-upKx2A
+git -C ../main status                                  CAUGHT        should catch (read)/tmp/p1-upKx2A/main
+d=..; echo x > $d/f.txt                                MISS          should catch (or fail-closed)no external access detected
+echo x > "$(pwd)/../var-out.txt"                       MISS          should catch or fail-closedno external access detected
+eval "echo x > ../eval-out.txt"                        MISS          expect fail-closed / catchno external access detected
+echo x > link-out/target.txt                           CAUGHT        should catch (canonical)/tmp/p1-upKx2A/W/link-out/target.txt
+cat link-out/file.txt                                  CAUGHT        should catch (read)/tmp/p1-upKx2A/W/link-out/file.txt
+git checkout -b feature                                MISS          should catch (git writes)no external access detected
+git apply ../patch.diff                                CAUGHT        should catch  /tmp/p1-upKx2A/patch.diff
+git -C ../main commit -m 'msg'                         CAUGHT        should catch (write)/tmp/p1-upKx2A/main
+git worktree add ../wt2 -b branch2                     CAUGHT        should catch (write)/tmp/p1-upKx2A/wt2
+python3 -c 'open("../py-out.txt","w").write("x")'      MISS          residue       no external access detected
+node -e 'require("fs").writeFile("../node-out.txt","x" MISS          residue       no external access detected
+make                                                   MISS          residue       no external access detected
+npm run build                                          MISS          residue       no external access detected
+curl -o $(pwd)/../curl-out.txt http://example.com/file MISS          residue       no external access detected
+bash script.sh                                         MISS          residue       no external access detected
+find .. -name '*.txt' -exec rm {} \;                   CAUGHT        residue       /tmp/p1-upKx2A
+ls | xargs -I{} rm ../{}                               CAUGHT        residue       /tmp/p1-upKx2A/{}
+
+SUMMARY===================================================================================
+Caught (external access detected):  30
+Missed (no external access found):  11
+Fail-closed (unreadable parse):     0
+Residue correctly not caught:       6
+Residue unexpectedly caught:        2
+
+Should-catch: 21/24
+  MISSED (candidate tickets):
+    - var + redirect: d=..; echo x > $d/f.txt
+    - cmd-subst redirect: echo x > "$(pwd)/../var-out.txt"
+    - git checkout: git checkout -b feature
+
+Done.

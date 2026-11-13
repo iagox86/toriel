@@ -1417,3 +1417,34 @@ a watch). Details: reference.md "File triggers"; the watcher's traps (atomic
 saves, burst cooldown, replaced directories) are in file-watch.ts's header.
 Parked: recursive watches and globs, a catch-up check on resume, an agent
 tool, and a watch on a special filesystem (/proc, /sys) arms but never fires.
+
+## T10 session-wide write grant: finding kept, design superseded (2026-11-10; board 175)
+
+Recovered from an abandoned branch (`park-t10-note`). The finding still holds: pi-permission-system
+42.0.0 (`src/authority/delegation-envelope.ts`, `encloseInDelegationEnvelope`) caps any link `allow`
+on the `path` and `external_directory` families to `defer`; only the "nothing-on-disk" license on
+`external_directory` asks passes, which a write never carries. That is why a link-side grant cannot
+cover file writes, and why `GrantStore.add` refuses capped surfaces unless the grant is made from the
+open prompt (`source "dialog"`).
+
+The note originally parked the one design that works: the daemon answers a covered file-path
+permission `select` dialog itself ("Yes") in `ChildManager.onEvent` (`src/daemon-children.ts`),
+before any controller sees it. Ticket 194 built that, narrowly: only for grants the user made by
+answering the file-path prompt (with an editable pattern), never for the grants file or pi's own
+config, with a notice naming the grant each time. docs/permissions.md "File-path grants" is the
+current description. What was parked and stays parked is the wide form, a session-wide `*` write
+grant ("auto mode"): it circumvents a deliberate cap of the package, and a sandbox that confines the
+child (board 166, `docs/sandbox-spike.md`) makes it unnecessary. The broader question, layer on the
+package or own the gate through pi's `tool_call` hook, is board 189.
+
+## Scoped-session guard: phase 1 probes (board 148)
+
+Recovered from an abandoned branch (`phase1-scope-probes`). The probe scripts and their output are in
+`probes/scope-guard/`; the specs and the write-up are `docs/specs/SPEC-148-scope.md`,
+`SPEC-148-phase1.md` and `FINDINGS-148-phase1.md`. Headline results: the guard caught 21 of 24 bash
+cases (misses: `dd of=`, variable-expanded and command-substituted redirects, `eval`); a config
+`allow` short-circuits the permission chain, so the guard's deny is reachable only on `ask` (the
+doctor flags operator allows on the covered surfaces); the last matching pattern wins, and a symlink
+alias bypasses a pattern match, so a link must match the boundary value; a throwing link blocks with
+a generic reason, so a link must never throw; a headless deny never hangs. Some of this predates the
+bwrap sandbox (#38) and may be superseded; read it as history.

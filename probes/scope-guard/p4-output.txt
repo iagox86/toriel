@@ -1,0 +1,18 @@
+P4 CHAIN ORDER / P5 HEADLESS DENY / P6 FAIL-CLOSED
+W = /tmp/p4-q6Kraz/W, outside = /tmp/p4-q6Kraz/outside.txt
+
+S1a config allow*: write tool outside W (real subagent ter  -> allow     [3ms]  escalate=0 link=0 terminal=0
+S1b config allow*: bash 'echo x > ../outside.txt'           -> allow     [20ms]  escalate=0 link=0 terminal=0
+S2 default ask: write outside W, scope link denies          -> BLOCK     [1ms]  escalate=1 link=1 terminal=0  reason="[pi-permission-system] The 'toriel-grants' authorizer denied this 'external_directory_write' call for tool 'write' for path '/tmp/p4-q6Kraz/outside.txt': outside working directory '/tmp/p4-q6Kraz/W'. Reason: scope guard:"
+S3 link allow on path write (envelope must downgrade)       -> BLOCK     [0ms]  escalate=1 link=1 terminal=1  reason="[pi-permission-system] This 'external_directory_write' call for tool 'write' for path '/tmp/p4-q6Kraz/outside.txt' requires approval, but no interactive UI is available. Reason: Could not resolve a parent session to forw"
+S4 in-W write: link defers, approving terminal allows       -> allow     [0ms]  escalate=1 link=1 terminal=1
+S5 subagent no parent: outside-W ask (no scope link)        -> BLOCK     [0ms]  escalate=1 link=0 terminal=1  reason="[pi-permission-system] This 'external_directory_write' call for tool 'write' for path '/tmp/p4-q6Kraz/outside.txt' requires approval, but no interactive UI is available. Reason: Could not resolve a parent session to forw"
+S6 subagent parent not serving: outside-W ask               -> BLOCK     [2004ms]  escalate=1 link=0 terminal=1  reason="[pi-permission-system] This 'external_directory_write' call for tool 'write' for path '/tmp/p4-q6Kraz/outside.txt' requires approval, but no interactive UI is available. Reason: Session 'parent-x' is not serving forwarde"
+S7 link throws: what does the pipeline do?                  -> REJECT    [1ms]  escalate=1 link=1 terminal=0  reason="boom: scope link crashed"
+
+P6: pipeline.evaluate REJECTS on a throwing link; in production the
+  tool_call boundary (handlers/tool-call-boundary.ts:23-36, 56-59) owns the
+  try/catch: it blocks the call and writes a gate_error review entry
+  ('[pi-permission-system] ' + formatted error). Fail-closed = BLOCK, not ask.
+  The reason text is the generic error, NOT a scope message - a well-behaved
+  link therefore must never throw (toriel-grants.ts defers on every error).

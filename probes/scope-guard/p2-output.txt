@@ -1,0 +1,12 @@
+P2 RULE PRECEDENCE  (surface: path_write)
+W = /tmp/p2-iws3fl/W
+
+RS-A = [ deny '*', allow '<W>/**' ]   (recommended 'deny outside, allow inside' ordering)
+RS-B = [ allow '<W>/**', deny '*' ]   (reversed ordering)
+
+CASE                            RS-A    RS-B    match values
+------------------------------------------------------------------------------------------------
+inside W (W/a.txt)              allow   deny    /tmp/p2-iws3fl/W/a.txt  |  a.txt
+parent via .. (../outside)      deny    deny    /tmp/p2-iws3fl/outside.txt  |  ../outside.txt
+sibling (W-evil/f.txt)          deny    deny    /tmp/p2-iws3fl/W-evil/f.txt  |  ../W-evil/f.txt
+symlink out (link-out/target.txt)allow   deny    /tmp/p2-iws3fl/W/link-out/target.txt  |  link-out/target.txt
