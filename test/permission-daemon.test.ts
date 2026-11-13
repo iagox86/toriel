@@ -165,14 +165,73 @@ describe("daemon: permission grants", () => {
     assert.deepEqual(dialog.request.toriel, { grants: [{ surface: "bash", pattern: "sudo -V" }] });
   });
 
-  it("offers no grant for file-path asks, which pi would not honor", async () => {
-    const h = await start();
-    const { c, session, uuid } = await savedSession(h);
-    const link = await h.connect();
-    await link.request({ type: "permission_check", uuid, grants: [{ surface: "path_write", pattern: "sudo -V" }], value: "sudo -V" });
-    await c.request({ type: "prompt", session, message: "/ask-select" });
-    const dialog = await c.waitFor((m) => m.type === "ui_request" && m.request?.id === "ask-select-1");
-    assert.equal(dialog.request.toriel, undefined);
+  describe("file-path asks", () => {
+    const ask = { surface: "path_write", pattern: "/p/deep/docs/*" };
+
+    /** A session with a file-path prompt open, as pi raises one: the link reported the ask, then the dialog came. */
+    async function pathPrompt() {
+      const h = await start();
+      const { c, session, uuid } = await savedSession(h);
+      const link = await h.connect();
+      const raise = async () => {
+        await link.request({ type: "permission_check", uuid, grants: [ask], value: "sudo -V" });
+        await c.request({ type: "prompt", session, message: "/ask-select" });
+      };
+      await raise();
+      const dialog = await c.waitFor((m) => m.type === "ui_request" && m.request?.id === "ask-select-1");
+      return { c, session, uuid, link, raise, dialog, h };
+    }
+
+    it("carries the grant pi suggested, so the prompt can offer toriel's rows", async () => {
+      const { dialog } = await pathPrompt();
+      assert.deepEqual(dialog.request.toriel, { grants: [ask] });
+    });
+
+    it("makes a grant only from the open prompt, with a pattern that covers what pi asked about", async () => {
+      const { c, session } = await pathPrompt();
+      const add = (extra: Record<string, unknown>) => c.request({ type: "permission_add", session, surface: "path_write", for: "1h", source: "dialog", ...extra });
+      await assert.rejects(add({ pattern: "/p/*" }), /answering the file-path prompt/, "no prompt named");
+      await assert.rejects(add({ pattern: "/p/*", dialog: "some-other-prompt" }), /answering the file-path prompt/, "not the prompt that is open");
+      await assert.rejects(add({ pattern: "/elsewhere/*", dialog: "ask-select-1" }), /does not cover/, "a pattern that would not cover this ask");
+      await assert.rejects(c.request({ type: "permission_add", session, surface: "external_directory", pattern: "/p/*", dialog: "ask-select-1" }), /does not cover/, "another surface than the one asked");
+      const ok = await add({ pattern: "/p/*", dialog: "ask-select-1" });
+      assert.equal(ok.grant.surface, "path_write");
+      assert.equal(ok.grant.source, "dialog");
+    });
+
+    it("refuses a file-path grant once the prompt is answered, and from /permissions add", async () => {
+      const { c, session } = await pathPrompt();
+      await c.request({ type: "ui_response", session, response: { id: "ask-select-1", value: "Yes" } });
+      await assert.rejects(c.request({ type: "permission_add", session, surface: "path_write", pattern: "/p/*", dialog: "ask-select-1", source: "dialog" }), /answering the file-path prompt/);
+      await assert.rejects(c.request({ type: "permission_add", session, surface: "path_write", pattern: "/p/*", source: "command" }), /answering the file-path prompt/);
+    });
+
+    it("makes no grant for a prompt about the grants file or pi's config, even one pi wrapped across lines", async () => {
+      // pi's own directory is protected; the daemon reads it from PI_CODING_AGENT_DIR
+      const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-agentdir-"));
+      const file = path.join(agentDir, "settings.json");
+      const pattern = `${agentDir}/*`;
+      const h = await start({ PI_CODING_AGENT_DIR: agentDir, FAKE_PI_ASK_COMMAND: `cat ${file}` });
+      const { c, session, uuid } = await savedSession(h);
+      const link = await h.connect();
+      await link.request({ type: "permission_check", uuid, grants: [{ surface: "path_read", pattern }], value: `cat ${file}` });
+      await c.request({ type: "prompt", session, message: "/ask-select" });
+      const dialog = await c.waitFor((m) => m.type === "ui_request" && m.request?.id === "ask-select-1");
+      assert.match(dialog.request.title, /\n/, "the fake wraps the command, as pi does");
+      await assert.rejects(c.request({ type: "permission_add", session, surface: "path_read", pattern, dialog: "ask-select-1", source: "dialog" }), /always asked about/);
+    });
+
+    it("answers a later prompt the grant covers itself, before any controller sees it", async () => {
+      const { c, session, raise } = await pathPrompt();
+      await c.request({ type: "permission_add", session, surface: "path_write", pattern: "/p/*", for: "session", source: "dialog", dialog: "ask-select-1" });
+      await c.request({ type: "ui_response", session, response: { id: "ask-select-1", value: "Yes" } });
+      const prompts = () => c.messages.filter((m) => m.type === "ui_request" && m.request?.id === "ask-select-1").length;
+      assert.equal(prompts(), 1);
+      await raise();
+      const notice = await c.waitFor((m) => m.type === "notice" && /allowed by permission grant #\d+/.test(m.text));
+      assert.match(notice.text, /sudo -V/);
+      assert.equal(prompts(), 1, "the covered prompt never reached the controller");
+    });
   });
 
   it("removes a deleted session's grants", async () => {

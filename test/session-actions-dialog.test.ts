@@ -16,19 +16,31 @@ const ask: DialogRequest = {
   toriel: { grants: [{ surface: "bash", pattern: "sudo -V" }] },
 };
 
-function setup(over: { shownAgoMs?: number; fail?: boolean } = {}) {
+const PARENT_KEY = "/tmp/fake/parent.jsonl";
+
+/** `owner`: the dialog belongs to a subagent (daemon id 9) but is shown, and answered, while viewing its parent (daemon id 1). */
+/** A file-path prompt: pi's own four options and the one grant it suggested (the file's directory). */
+const pathAsk: DialogRequest = {
+  id: "g1",
+  method: "select",
+  title: "Permission Required\ntool    : write\npath    : /p/deep/docs/a.md",
+  options: ["Yes", 'Yes, allow path_write "/p/deep/docs/*" for this session', "No", "No, provide reason"],
+  toriel: { grants: [{ surface: "path_write", pattern: "/p/deep/docs/*" }] },
+};
+
+function setup(over: { shownAgoMs?: number; fail?: boolean; owner?: boolean; path?: boolean } = {}) {
   const sent: Array<Record<string, unknown>> = [];
   const requests: Array<Record<string, unknown>> = [];
   const notices: string[] = [];
   const panel = new DialogPanel();
-  const dialog = { ...withGrantRows(withOrigin(ask, 4, "Mealie"), ["1h", "session"]), shownAt: Date.now() - (over.shownAgoMs ?? 5000) };
+  const dialog = { ...withGrantRows(withOrigin(over.path ? pathAsk : ask, 4, "Mealie"), ["1h", "session"]), shownAt: Date.now() - (over.shownAgoMs ?? 5000) };
   const view = { dialog } as unknown as SessionView;
   panel.sync(dialog);
   const host = {
-    viewing: KEY,
+    viewing: over.owner ? PARENT_KEY : KEY,
     dialogPanel: panel,
     editor: { getText: () => "", setText: () => {} },
-    metaForPath: () => ({ id: 4, attachedToYou: true }),
+    metaForPath: (key: string) => (over.owner ? (key === KEY ? { id: 9, attachedToYou: false } : { id: 1, attachedToYou: true }) : { id: 4, attachedToYou: true }),
     send: (cmd: Record<string, unknown>) => void sent.push(cmd),
     request: (cmd: Record<string, unknown>) => {
       requests.push(cmd);
@@ -113,6 +125,114 @@ describe("permission prompt: toriel's grant rows", () => {
     assert.equal(t.sa.dialogKeys(t.view, "\t"), true);
     assert.deepEqual(t.sent, []);
     assert.ok(t.view.dialog, "the prompt stays open");
+  });
+});
+
+describe("a file-path prompt: toriel's rows and the pattern edit", () => {
+  const BACKSPACE = "\x7f";
+  const down = (t: ReturnType<typeof setup>, n: number) => {
+    for (let i = 0; i < n; i++) {
+      t.sa.dialogKeys(t.view, "\x1b[B");
+    }
+  };
+
+  it("stores the grant against the open prompt first, then answers pi Yes", async () => {
+    const t = setup({ path: true });
+    t.sa.dialogKeys(t.view, "5");
+    assert.deepEqual(t.sent, [], "pi is not answered until the grant is kept");
+    await settle();
+    assert.deepEqual(t.requests, [{ type: "permission_add", session: 4, surface: "path_write", pattern: "/p/deep/docs/*", for: "1h", source: "dialog", dialog: "g1" }]);
+    assert.equal(answered(t.sent[0]), "Yes");
+    assert.equal(t.view.dialog, undefined);
+  });
+
+  it("keeps the prompt open, and pi unanswered, when the daemon refuses the grant", async () => {
+    const t = setup({ path: true, fail: true });
+    t.sa.dialogKeys(t.view, "5");
+    await settle();
+    assert.deepEqual(t.sent, []);
+    assert.ok(t.view.dialog, "still asking");
+    assert.match(t.notices.at(-1) ?? "", /could not keep the permission grant/);
+  });
+
+  it("lets you widen the directory, and stores what you typed", async () => {
+    const t = setup({ path: true });
+    down(t, 4);
+    t.sa.dialogKeys(t.view, "\t");
+    for (let i = 0; i < "deep/docs/*".length; i++) {
+      t.sa.dialogKeys(t.view, BACKSPACE);
+    }
+    t.sa.dialogKeys(t.view, "*");
+    t.sa.dialogKeys(t.view, "\r");
+    await settle();
+    assert.equal(t.requests[0]?.pattern, "/p/*");
+    assert.equal(t.requests[0]?.dialog, "g1");
+    assert.equal(answered(t.sent[0]), "Yes");
+  });
+
+  it("refuses a pattern that would not cover this very ask, and keeps editing", async () => {
+    const t = setup({ path: true });
+    down(t, 4);
+    t.sa.dialogKeys(t.view, "\t");
+    for (let i = 0; i < "/p/deep/docs/*".length; i++) {
+      t.sa.dialogKeys(t.view, BACKSPACE);
+    }
+    for (const ch of "/q/*") {
+      t.sa.dialogKeys(t.view, ch);
+    }
+    t.sa.dialogKeys(t.view, "\r");
+    await settle();
+    assert.deepEqual(t.requests, []);
+    assert.deepEqual(t.sent, []);
+    assert.match(t.notices.at(-1) ?? "", /does not cover "\/p\/deep\/docs\/\*"/);
+    assert.ok(t.view.dialog);
+  });
+
+  it("leaves bash grants as they were: pi answered at once, no prompt id sent", async () => {
+    const t = setup();
+    t.sa.dialogKeys(t.view, "5");
+    assert.equal(answered(t.sent[0]), "Yes", "answered before the store call");
+    await settle();
+    assert.equal("dialog" in (t.requests[0] ?? {}), false);
+  });
+});
+
+describe("a subagent's prompt answered from its parent's view", () => {
+  const BACKSPACE = "\x7f";
+
+  it("stores the grant on the subagent, not on the parent being viewed", async () => {
+    const t = setup({ owner: true });
+    t.sa.dialogKeys(t.view, "5", KEY);
+    await settle();
+    assert.equal(t.sent[0]?.session, 9, "pi's Yes goes to the subagent");
+    assert.equal(t.requests[0]?.session, 9, "and so does the grant");
+    assert.equal(t.requests[0]?.surface, "bash");
+  });
+
+  it("does the same for a pattern typed after tab", async () => {
+    const t = setup({ owner: true });
+    for (let i = 0; i < 4; i++) {
+      t.sa.dialogKeys(t.view, "\x1b[B", KEY);
+    }
+    t.sa.dialogKeys(t.view, "\t", KEY);
+    t.sa.dialogKeys(t.view, BACKSPACE, KEY);
+    t.sa.dialogKeys(t.view, "*", KEY);
+    t.sa.dialogKeys(t.view, "\r", KEY);
+    await settle();
+    assert.equal(t.sent[0]?.session, 9);
+    assert.deepEqual(t.requests.map((r) => [r.session, r.pattern]), [[9, "sudo -*"]]);
+  });
+
+  it("answers a typed deny reason on the subagent too", () => {
+    const t = setup({ owner: true });
+    for (let i = 0; i < 3; i++) {
+      t.sa.dialogKeys(t.view, "\x1b[B", KEY);
+    }
+    t.sa.dialogKeys(t.view, "\t", KEY);
+    t.sa.dialogKeys(t.view, "x", KEY);
+    t.sa.dialogKeys(t.view, "\r", KEY);
+    assert.equal(t.sent[0]?.session, 9);
+    assert.equal(t.requests.length, 0, "a reason is not a grant");
   });
 });
 

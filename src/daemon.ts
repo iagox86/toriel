@@ -66,9 +66,9 @@ function createContext(shutdown: () => void): DaemonContext {
     log(`could not create the shared directory ${SHARED_DIR}: ${errText(err)}`);
   }
   const bridges = new BridgeTracker();
-  const children = new ChildManager(hub, usage, bridges, DEFAULT_SUBAGENT_LIMITS);
-  // the scheduler's host reads the context lazily, so it can be built inside it
   const grants = new GrantStore(PERMISSIONS_FILE, Date.now, { perSession: loadSettings().settings.permissionGrantLimit ?? DEFAULT_GRANT_LIMITS.perSession });
+  const children = new ChildManager(hub, usage, bridges, DEFAULT_SUBAGENT_LIMITS, grants);
+  // the scheduler's host reads the context lazily, so it can be built inside it
   // every scheduler event may have changed the set of schedules, so the file watches ("on change" schedules, board 98) follow it
   const host = schedulerHost(() => ctx, usage);
   const scheduler = new Scheduler(

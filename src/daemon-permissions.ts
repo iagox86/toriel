@@ -1,10 +1,13 @@
 // The daemon's side of permission grants (docs/permissions.md): the handlers for the
 // permission_* commands. The store itself is pure (src/permissions.ts); the toriel-grants
 // link in each child asks `permission_check` before pi's dialog opens.
+import * as os from "node:os";
+import { PERMISSIONS_FILE } from "./config.ts";
 import type { Cmd, DaemonContext, Responder } from "./daemon-context.ts";
 import { scopeOf } from "./daemon-schedule.ts";
 import { log } from "./log.ts";
-import { type Grant, isCappedSurface } from "./permissions.ts";
+import { coversPattern, type Grant, type GrantStore, isCappedSurface } from "./permissions.ts";
+import { piAgentDir } from "./pi-dir.ts";
 import type { GrantView, PermissionGrantSpec } from "./shared.ts";
 import { fmtClock, parseDurationText } from "./when.ts";
 
@@ -44,10 +47,54 @@ export function handlePermissionCheck(ctx: DaemonContext, cmd: Cmd<"permission_c
   }
   const s = typeof cmd.uuid === "string" ? ctx.registry.all().find((x) => x.sessionId === cmd.uuid) : undefined;
   if (s) {
-    const grantable = asked.filter((a) => !isCappedSurface(a.surface));
-    s.suggestion = grantable.length > 0 && grantable.length === asked.length ? { grants: grantable, value: typeof cmd.value === "string" ? cmd.value : undefined, at: Date.now() } : undefined;
+    // file-path asks too: their grant rows are made from the prompt itself (see handlePermissionAdd)
+    s.suggestion = asked.length > 0 ? { grants: asked, value: typeof cmd.value === "string" ? cmd.value : undefined, at: Date.now() } : undefined;
   }
   res(true, undefined, { allow: false });
+}
+
+/** Files a grant must never answer for: the grants themselves and pi's own configuration. Such an ask always reaches the user. */
+export function protectedPaths(): string[] {
+  return [PERMISSIONS_FILE, piAgentDir()];
+}
+
+/**
+ * Whether the daemon can answer a file-path prompt itself: every pair pi suggested for it is covered by a grant the user made from
+ * an earlier prompt, and the ask is not about a protected file (`value` is what was asked about; the title is checked too, since
+ * a command's value need not be the bare path). Only file-path surfaces: the grants link already settles every other kind.
+ */
+export function answerablePrompt(grants: GrantStore, uuid: string | undefined, request: Record<string, unknown>, value: string | undefined, protectedFiles: readonly string[] = protectedPaths()): Grant[] | undefined {
+  const asked = (request.toriel as { grants?: PermissionGrantSpec[] } | undefined)?.grants ?? [];
+  const options = Array.isArray(request.options) ? request.options : [];
+  if (!uuid || request.method !== "select" || !options.includes("Yes") || asked.length === 0 || !asked.every((a) => isCappedSurface(a.surface))) {
+    return undefined;
+  }
+  return touchesProtected([value ?? "", typeof request.title === "string" ? request.title : ""].join("\n"), protectedFiles) ? undefined : grants.covers(uuid, asked, true);
+}
+
+/** Whether `text` (what an ask is about) names a protected file, spelled absolutely or with `~`. Whitespace is ignored, since pi wraps long commands across lines; matching too much only means one more prompt. */
+export function touchesProtected(text: string, protectedFiles: readonly string[] = protectedPaths()): boolean {
+  const home = os.homedir();
+  const squash = (t: string) => t.replace(/\s+/g, "");
+  const flat = squash(text);
+  return protectedFiles.some((p) => flat.includes(squash(p)) || flat.includes(squash(p.startsWith(home) ? `~${p.slice(home.length)}` : p)));
+}
+
+/** A file-path grant comes only from answering the file-path prompt the daemon holds open for the session, with a pattern that covers what pi asked about. */
+function checkPromptFor(ctx: DaemonContext, uuid: string, cmd: Cmd<"permission_add">): void {
+  const s = ctx.registry.all().find((x) => x.sessionId === uuid);
+  const open = s?.pendingDialog ? s.lastDialog : undefined;
+  if (!open || cmd.dialog === undefined || open.id !== cmd.dialog) {
+    throw new Error(`a "${cmd.surface}" (file-path) grant is made by answering the file-path prompt that is open for the session, and none matches`);
+  }
+  // such a prompt always reaches the user (see answerablePrompt), so a grant for it would sit in /permissions promising what never happens
+  if (touchesProtected(typeof open.title === "string" ? open.title : "")) {
+    throw new Error("this prompt is about the permission grants file or pi's own configuration; those are always asked about, so no grant is made for it");
+  }
+  const asked = ((open.toriel as { grants?: PermissionGrantSpec[] } | undefined)?.grants ?? []).filter((g) => g.surface === cmd.surface);
+  if (asked.length === 0 || !asked.every((g) => coversPattern(cmd.pattern, g.pattern))) {
+    throw new Error(`"${cmd.pattern}" does not cover what the prompt asked about (${asked.map((g) => JSON.stringify(g.pattern)).join(", ") || "nothing on this surface"})`);
+  }
 }
 
 export function handlePermissionList(ctx: DaemonContext, cmd: Cmd<"permission_list">, res: Responder): void {
@@ -73,7 +120,11 @@ export function handlePermissionAdd(ctx: DaemonContext, cmd: Cmd<"permission_add
     throw new Error("a grant needs a session");
   }
   const expiresIn = lifetimeOf(cmd.for);
-  const g = ctx.grants.add({ session: uuid, surface: cmd.surface, pattern: cmd.pattern, expiresIn, source: cmd.source, note: cmd.note });
+  const fromPrompt = isCappedSurface(cmd.surface);
+  if (fromPrompt) {
+    checkPromptFor(ctx, uuid, cmd);
+  }
+  const g = ctx.grants.add({ session: uuid, surface: cmd.surface, pattern: cmd.pattern, expiresIn, source: fromPrompt ? "dialog" : cmd.source, note: cmd.note }, fromPrompt);
   const now = new Date();
   log(`permission grant #${g.id} (${g.source}) for session ${uuid}: ${g.surface} ${JSON.stringify(g.pattern)}${g.expiresAt === null ? "" : ` until ${fmtClock(g.expiresAt, now)}`}`);
   ctx.hub.broadcastSessions();

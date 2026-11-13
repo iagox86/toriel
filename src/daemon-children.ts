@@ -4,7 +4,8 @@ import { RpcClient } from "@earendil-works/pi-coding-agent";
 import { childEnv, sandboxWritableRoots } from "./child-env.ts";
 import { scopeForSession } from "./scope-root.ts";
 import { DIALOG_METHODS, SHARED_DIR, SOCK } from "./config.ts";
-import { withSuggestion } from "./permissions.ts";
+import { answerablePrompt } from "./daemon-permissions.ts";
+import { type GrantStore, withSuggestion } from "./permissions.ts";
 import { type BridgeTracker, INJECT_COMMAND, injectedId, mergedQueueTexts, parseBridgeReport } from "./daemon-bridge.ts";
 import type { ClientHub } from "./daemon-hub.ts";
 import type { DaemonSession } from "./daemon-session.ts";
@@ -18,7 +19,7 @@ import { sessionIdOfFile } from "./session-file.ts";
 import { mayDelegate, type SubagentLimits } from "./subagents.ts";
 import { profileOfSession, saveSessionAgent } from "./session-agents.ts";
 import { log } from "./log.ts";
-import type { UsageReport } from "./shared.ts";
+import { encodeLine, type UsageReport } from "./shared.ts";
 import { type ChildConfig, loadSettings, resolveChildConfig, settingsMtime } from "./settings.ts";
 import { errText } from "./util.ts";
 
@@ -60,7 +61,11 @@ export class ChildManager {
   /** Called when a session's process is stopped or found dead (subagents end with their session; foreground ones with their parent). */
   onStopped?: (s: DaemonSession) => void;
 
-  constructor(hub: ClientHub, usage: Map<string, UsageReport>, bridges: BridgeTracker, subagentLimits: SubagentLimits) {
+  /** The grant store, which answers file-path prompts it covers (see `answerCovered`). */
+  private readonly grants: GrantStore | undefined;
+
+  constructor(hub: ClientHub, usage: Map<string, UsageReport>, bridges: BridgeTracker, subagentLimits: SubagentLimits, grants?: GrantStore) {
+    this.grants = grants;
     this.subagentLimits = subagentLimits;
     this.hub = hub;
     this.usage = usage;
@@ -489,6 +494,23 @@ export class ChildManager {
     }, timeout + 1000).unref();
   }
 
+  /**
+   * A file-path prompt a grant the user made from an earlier prompt covers is answered "Yes" here, before any controller sees
+   * it: pi's chain will not let a grant allow a path ask, so the daemon, which sees every dialog first, does it. Says so in
+   * the log and in a notice. False when the prompt is not covered (or not a file-path prompt) and must be shown.
+   */
+  private answerCovered(s: DaemonSession, request: Record<string, unknown>, value: string | undefined): boolean {
+    const covering = this.grants ? answerablePrompt(this.grants, s.sessionId, request, value) : undefined;
+    const stdin = (s.child as unknown as { process?: { stdin?: { write(text: string): void } } } | undefined)?.process?.stdin;
+    if (!covering || !stdin || typeof request.id !== "string") {
+      return false;
+    }
+    stdin.write(encodeLine({ type: "extension_ui_response", id: request.id, value: "Yes" }));
+    log(`file-path prompt answered by ${covering.map((g) => `#${g.id}`).join(", ")} for session ${s.sessionId}: ${String(value ?? "")}`);
+    this.hub.broadcast({ type: "notice", session: s.id, text: `allowed by permission grant ${covering.map((g) => `#${g.id}`).join(", ")}: ${String(value ?? "a file path")}` });
+    return true;
+  }
+
   private clearDialog(s: DaemonSession): void {
     if (s.pendingDialog) {
       s.pendingDialog = false;
@@ -509,11 +531,15 @@ export class ChildManager {
         return;
       }
       // a select dialog may carry the grant the toriel-grants link saw for it
+      const asked = s.suggestion?.value;
       const request = DIALOG_METHODS.has(event.method as string) ? withSuggestion(event, s.suggestion, Date.now()) : event;
       if (DIALOG_METHODS.has(event.method as string)) {
         // only the dialog that took the suggestion uses it up: an unrelated one arriving first must not lose it
         if (request !== event) {
           s.suggestion = undefined;
+        }
+        if (this.answerCovered(s, request, asked)) {
+          return; // answered from a grant: nobody is asked
         }
         s.pendingDialog = true;
         s.lastDialog = request;

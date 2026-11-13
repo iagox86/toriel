@@ -82,7 +82,7 @@ begin a new session, or use the keys below.
 | shift+up / shift+down | switcher | move a session or group (crossing a header changes group) |
 | ctrl-n | switcher | new session |
 | ctrl-k | switcher | stop the session's process (file kept) |
-| ctrl-x, then ctrl-x again within 1s | switcher | delete (to trash, recoverable with `/restore`); any other key cancels |
+| ctrl-x, then ctrl-x again within 4s | switcher | delete (to trash, recoverable with `/restore`); any other key cancels |
 | ctrl-r or f2 | switcher | rename |
 | ctrl-g, ctrl-f | switcher | group, filter |
 | left / right / enter on a group | switcher | fold or unfold |

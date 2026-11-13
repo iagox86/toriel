@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
+import { answerablePrompt } from "../src/daemon-permissions.ts";
 import { cappedReason, GrantStore, isCappedSurface } from "../src/permissions.ts";
 
 const HOUR = 3_600_000;
@@ -125,16 +126,39 @@ describe("GrantStore", () => {
     assert.equal(forever.expiresAt, null);
   });
 
-  it("refuses file-path surfaces, naming why", () => {
+  it("refuses file-path surfaces unless the caller vouches for a prompt answer, naming why", () => {
     const s = make();
     for (const surface of ["path", "path_write", "external_directory", "external_directory_read"]) {
       assert.ok(isCappedSurface(surface), surface);
       assert.throws(() => s.add({ session: A, surface, pattern: "/tmp/*" }), /file-path/);
+      assert.throws(() => s.add({ session: A, surface, pattern: "/tmp/*", source: "command" }, true), /file-path/, "only a dialog answer counts, whatever the caller says");
+      assert.throws(() => s.add({ session: A, surface, pattern: "/tmp/*", source: "dialog" }), /file-path/, "a dialog source alone is not enough");
     }
     assert.equal(isCappedSurface("bash"), false);
     assert.equal(isCappedSurface("pathology"), false);
     assert.equal(cappedReason("bash"), undefined);
     assert.equal(s.covers(A, [{ surface: "path_write", pattern: "/tmp/*" }]), undefined);
+  });
+
+  it("covers a file-path ask only for a grant made from a prompt, and only when asked to", () => {
+    const s = make();
+    s.add({ session: A, surface: "path_write", pattern: "/p/*", source: "dialog" }, true);
+    const ask = [{ surface: "path_write", pattern: "/p/deep/docs/*" }];
+    assert.equal(s.covers(A, ask), undefined, "the link's own check never allows a path ask");
+    assert.equal(s.covers(A, ask, true)?.length, 1);
+    assert.equal(s.covers(A, [{ surface: "path", pattern: "/p/deep/docs/*" }], true), undefined, "another surface");
+    assert.equal(s.covers(A, [{ surface: "path_write", pattern: "/q/*" }], true), undefined, "outside the pattern");
+    assert.equal(s.covers(B, ask, true), undefined, "another session");
+  });
+
+  it("keeps a prompt-made file-path grant across a restart, dormant until restored", () => {
+    make().add({ session: A, surface: "path_write", pattern: "/p/*", source: "dialog" }, true);
+    const again = make();
+    again.load();
+    assert.equal(again.list(A).length, 1);
+    assert.equal(again.covers(A, [{ surface: "path_write", pattern: "/p/x" }], true), undefined, "dormant");
+    again.restore(A);
+    assert.equal(again.covers(A, [{ surface: "path_write", pattern: "/p/x" }], true)?.length, 1);
   });
 
   it("needs a surface and a pattern", () => {
@@ -260,5 +284,52 @@ describe("GrantStore persistence", () => {
     edited.load();
     assert.deepEqual(edited.list().map((x) => x.pattern), ["ok"]);
     assert.equal(edited.dormantCount(A), 1);
+  });
+});
+
+describe("answerablePrompt: a file-path prompt the daemon may answer itself", () => {
+  const request = (surface: string, title = "Permission Required\ncommand : /p/deep/docs/a.md", options: unknown = ["Yes", "No"]) => ({
+    id: "d1",
+    method: "select",
+    title,
+    options,
+    toriel: { grants: [{ surface, pattern: "/p/deep/docs/*" }] },
+  });
+  const store = () => {
+    const s = make();
+    s.add({ session: A, surface: "path_write", pattern: "/p/*", source: "dialog" }, true);
+    s.add({ session: A, surface: "bash", pattern: "ls *" });
+    return s;
+  };
+  const PROTECTED = ["/home/me/.local/share/toriel/permissions.json", "/home/me/.pi/agent"];
+
+  it("answers when every suggested pair is covered", () => {
+    assert.equal(answerablePrompt(store(), A, request("path_write"), "/p/deep/docs/a.md", PROTECTED)?.length, 1);
+  });
+
+  it("does not answer for another session, an uncovered path, or a prompt without a plain Yes", () => {
+    assert.equal(answerablePrompt(store(), B, request("path_write"), "/p/deep/docs/a.md", PROTECTED), undefined);
+    assert.equal(answerablePrompt(store(), A, request("path"), "/p/deep/docs/a.md", PROTECTED), undefined, "another surface");
+    assert.equal(answerablePrompt(store(), A, request("path_write", undefined, ["Allow", "Deny"]), "/p/x", PROTECTED), undefined);
+    assert.equal(answerablePrompt(store(), undefined, request("path_write"), "/p/x", PROTECTED), undefined);
+  });
+
+  it("answers only select prompts, not an input or editor dialog that happens to carry grants", () => {
+    for (const method of ["input", "editor", "confirm"]) {
+      assert.equal(answerablePrompt(store(), A, { ...request("path_write"), method }, "/p/deep/docs/a.md", PROTECTED), undefined, method);
+    }
+  });
+
+  it("leaves everything but file-path prompts to the grants link", () => {
+    assert.equal(answerablePrompt(store(), A, request("bash"), "ls x", PROTECTED), undefined);
+  });
+
+  it("never answers for the grants file or pi's own configuration, whatever pattern a grant has", () => {
+    const s = make();
+    s.add({ session: A, surface: "path_write", pattern: "/home/me/*", source: "dialog" }, true);
+    const ask = (title: string) => ({ ...request("path_write", title), toriel: { grants: [{ surface: "path_write", pattern: "/home/me/.local/share/toriel/*" }] } });
+    assert.equal(answerablePrompt(s, A, ask("x"), "/home/me/.local/share/toriel/permissions.json", PROTECTED), undefined, "by the asked path");
+    assert.equal(answerablePrompt(s, A, ask("write /home/me/.pi/agent/settings.json"), undefined, PROTECTED), undefined, "by the title when the value is not a bare path");
+    assert.equal(answerablePrompt(s, A, ask("x"), "/home/me/notes/a.md", PROTECTED)?.length, 1, "other files are fine");
   });
 });
