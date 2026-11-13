@@ -460,6 +460,7 @@ export function lineDiff(before: string, after: string): string {
 /** What applying `fixes` to `file` would change, as a diff. Throws when the file cannot be read as a JSON object. */
 export function previewFixes(file: string, fixes: readonly Fix[]): string {
   if (fixes.some((f) => f.custom)) {
+    requireOnlyCustom(fixes);
     return fixes.map((f) => f.custom?.preview() ?? "").join("\n");
   }
   const { before, after } = edited(file, fixes);
@@ -467,6 +468,13 @@ export function previewFixes(file: string, fixes: readonly Fix[]): string {
 }
 
 const pad = (n: number) => String(n).padStart(2, "0");
+
+/** A file's fixes are all JSON edits or all custom: a mix would silently drop one kind. */
+function requireOnlyCustom(fixes: readonly Fix[]): void {
+  if (fixes.some((f) => !f.custom)) {
+    throw new Error("cannot mix a custom fix with JSON edits for one file");
+  }
+}
 
 /** `<file>.bak-<time>`: where the original of a changed file is kept. */
 function backupPath(file: string, now: Date): string {
@@ -476,6 +484,7 @@ function backupPath(file: string, now: Date): string {
 /** Apply `fixes` to `file`: the original is copied to `<file>.bak-<time>` first, then the file is replaced in one step (same mode). Returns the backup's path, or undefined when a fix created a file and there was no original. */
 export function applyFixes(file: string, fixes: readonly Fix[], now: Date = new Date()): string | undefined {
   if (fixes.some((f) => f.custom)) {
+    requireOnlyCustom(fixes);
     return fixes.map((f) => f.custom?.apply(now)).find((b) => b !== undefined);
   }
   const { after } = edited(file, fixes);

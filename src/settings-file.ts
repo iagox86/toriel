@@ -10,7 +10,7 @@ import { writeFileAtomic } from "./util.ts";
 
 interface Entry {
   key: string;
-  /** The value in effect when the key is absent, written out active; undefined = no fixed default, so the line is written as a commented example. */
+  /** The value in effect when the key is absent; undefined = no fixed default. Either way the line is written commented: absent means whatever the code's default is today. */
   value?: unknown;
   /** For a key with no default: the example line's value. */
   example?: string;
@@ -87,7 +87,8 @@ export const SETTINGS_TEMPLATE: readonly Group[] = [
 ];
 
 const HEADER = [
-  "# toriel settings. Every key is optional: delete a line, or comment it out, to get the default shown here.",
+  "# toriel settings. Every setting is shown below with its default, commented out: remove the # to change one.",
+  "# A setting left out (or commented) uses toriel's current default, so an upgrade can improve the defaults.",
   "# Environment variables (TORIEL_MODEL, TORIEL_SUMMARY_MODEL, ...) override this file.",
   "# The daemon re-reads it each time it starts a session, so an edit applies to new and restarted sessions;",
   "# the keys marked \"read when the daemon starts\" need a daemon restart.",
@@ -104,10 +105,16 @@ function entryText(key: string, value: unknown): string {
   return doc.toString({ lineWidth: 0, defaultStringType: "QUOTE_DOUBLE", defaultKeyType: "PLAIN", flowCollectionPadding: false }).trimEnd();
 }
 
+/** The settings the template shows with a fixed default: what the code uses when the file says nothing. */
+export function templateDefaults(): Record<string, unknown> {
+  return Object.fromEntries(SETTINGS_TEMPLATE.flatMap((g) => g.entries).flatMap((e) => (e.value === undefined ? [] : [[e.key, e.value] as const])));
+}
+
 /**
- * The settings file as text: every key, commented, with its default in effect. `values` are settings to
- * write instead of the defaults (the conversion of an old settings.json passes its contents); a key the
- * template does not know is kept at the end, so nothing a person wrote is lost.
+ * The settings file as text: every key, with a comment, commented out at its default. `values` are the
+ * settings a person actually set (the conversion of an old settings.json passes its contents): those lines
+ * are active, everything else stays a commented default. A key the template does not know is kept at the
+ * end, so nothing a person wrote is lost.
  */
 export function renderSettings(values: Record<string, unknown> = {}): string {
   const lines = [...HEADER];
@@ -115,8 +122,13 @@ export function renderSettings(values: Record<string, unknown> = {}): string {
     lines.push("", `# ${group.heading}`);
     for (const entry of group.entries) {
       lines.push("", ...entry.comment.map((c) => `# ${c}`));
-      const given = Object.hasOwn(values, entry.key) ? values[entry.key] : entry.value;
-      lines.push(given === undefined ? `# ${entry.key}: ${entry.example}` : entryText(entry.key, given));
+      if (Object.hasOwn(values, entry.key)) {
+        lines.push(entryText(entry.key, values[entry.key]));
+      } else if (entry.value !== undefined) {
+        lines.push(`# ${entryText(entry.key, entry.value)}`);
+      } else {
+        lines.push(`# ${entry.key}: ${entry.example}`);
+      }
     }
   }
   const extra = Object.keys(values).filter((k) => !SETTING_KEYS.includes(k));
@@ -153,7 +165,7 @@ export function hasSettingsFile(env: NodeJS.ProcessEnv = process.env): boolean {
 
 /**
  * Write the commented defaults when there is no settings file at all: the file is how a new install
- * finds out which knobs exist. Never touches an existing file (either vintage). Returns the path it
+ * finds out which knobs exist, and nothing in it is in effect until someone uncomments it. Never touches an existing file (either vintage). Returns the path it
  * created, or undefined when there was nothing to do.
  */
 export function ensureSettingsFile(env: NodeJS.ProcessEnv = process.env): string | undefined {

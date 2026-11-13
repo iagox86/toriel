@@ -73,6 +73,15 @@ describe("the settings file", () => {
     assert.equal(fs.existsSync(yaml), false);
   });
 
+  it("refuses a group that mixes a custom fix with a JSON edit, rather than dropping one", () => {
+    const s = legacySetup();
+    const [group] = plannedFixes(runDoctor(s.opts));
+    const mixed = [...(group?.fixes ?? []), { file: group?.file ?? "", summary: "x", edit: (c: Record<string, unknown>) => c }];
+    assert.throws(() => previewFixes(group?.file ?? "", mixed), /cannot mix/);
+    assert.throws(() => applyFixes(group?.file ?? "", mixed), /cannot mix/);
+    assert.ok(fs.existsSync(path.join(s.dir, "settings.json")), "nothing was moved");
+  });
+
   it("is quiet when TORIEL_SETTINGS names a file, even a JSON one", () => {
     const s = setup({ settings: '{"model":"m"}' });
     assert.deepEqual(collectFindings(s.opts).filter((f) => f.id === "settings-file" || f.id === "settings-yaml"), []);

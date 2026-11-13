@@ -8,7 +8,7 @@ import { DEFAULT_GRANT_DURATIONS } from "../src/dialogs.ts";
 import { DEFAULT_GRANT_LIMITS } from "../src/permissions.ts";
 import { DEFAULT_LIMITS } from "../src/scheduler.ts";
 import { DEFAULT_SANDBOX_WRITABLE, DEFAULT_TRASH_RETENTION_DAYS, loadSettings, resolveChildConfig, SETTING_KEYS, type TorielSettings } from "../src/settings.ts";
-import { convertLegacySettings, ensureSettingsFile, renderSettings, SETTINGS_TEMPLATE, updateSettings } from "../src/settings-file.ts";
+import { convertLegacySettings, ensureSettingsFile, renderSettings, SETTINGS_TEMPLATE, templateDefaults, updateSettings } from "../src/settings-file.ts";
 import { DEFAULT_KEEP_MS, DEFAULT_SUBAGENT_LIMITS, HARD_MAX_DEPTH, subagentKeepMs, subagentLimitsFrom } from "../src/subagents.ts";
 import { DEFAULT_INTERVAL_MINUTES, DEFAULT_MIN_NEW_MESSAGES, DEFAULT_SUMMARY_MODEL } from "../src/summarize.ts";
 
@@ -38,8 +38,18 @@ describe("the settings template", () => {
     }
   });
 
-  it("writes the defaults the code uses, so the file changes nothing until it is edited", () => {
-    const s = loadSettings(write(renderSettings())).settings;
+  it("has nothing in effect until a line is uncommented: absent means the code's current default", () => {
+    const loaded = loadSettings(write(renderSettings()));
+    assert.deepEqual(loaded, { settings: {}, problems: [] });
+    assert.match(renderSettings(), /^# summaryModel: "litellm\/local-model"$/m);
+    assert.doesNotMatch(renderSettings(), /^[a-zA-Z]/m, "every setting line is commented");
+  });
+
+  it("shows the defaults the code uses, so uncommenting every line changes nothing", () => {
+    const text = renderSettings();
+    const withDefault = Object.keys(templateDefaults());
+    const uncommented = text.split("\n").map((l) => (withDefault.some((k) => l.startsWith(`# ${k}: `)) ? l.slice(2) : l)).join("\n");
+    const s = loadSettings(write(uncommented)).settings;
     const expected: TorielSettings = {
       steeringMode: "all",
       summaryModel: DEFAULT_SUMMARY_MODEL,
@@ -71,7 +81,7 @@ describe("the settings template", () => {
     const text = renderSettings();
     assert.match(text, /^# model: /m);
     assert.match(text, /^# scopeGuardAcceptedAllows: /m);
-    assert.deepEqual(Object.keys(loadSettings(write(text)).settings).filter((k) => ["provider", "model", "thinking", "piCli", "scopeGuardAcceptedAllows"].includes(k)), []);
+    assert.deepEqual(Object.keys(loadSettings(write(renderSettings(templateDefaults()))).settings).filter((k) => ["provider", "model", "thinking", "piCli", "scopeGuardAcceptedAllows"].includes(k)), []);
   });
 });
 
@@ -116,6 +126,14 @@ describe("convertLegacySettings", () => {
     assert.deepEqual(loaded.problems, ['unknown setting "futureKey"'], "an unknown key survives, and is still reported");
     assert.match(text, /^# Model new sessions use/m, "the comments came with it");
     assert.match(text, /^futureKey:/m);
+  });
+
+  it("writes only what the person set as active lines; every default stays commented", () => {
+    const text = convertLegacySettings('{"model":"m1","sandbox":"bwrap"}');
+    const active = text.split("\n").filter((l) => /^[a-zA-Z]/.test(l));
+    assert.deepEqual(active, ['model: "m1"', 'sandbox: "bwrap"']);
+    assert.match(text, /^# steeringMode: "all"$/m);
+    assert.equal(loadSettings(write(text)).settings.steeringMode, undefined, "so a default that changes later still reaches this file");
   });
 
   it("refuses text it cannot read, so the old file is left alone", () => {
