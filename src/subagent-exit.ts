@@ -6,7 +6,15 @@ const TAIL_CHARS = 200;
 /** Drop what looks like a credential from text that is about to reach another model's context. */
 export function scrubSecrets(text: string): string {
   return text
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer ***")
+    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, "$1 ***")
+    // user:password@ in a URL
+    .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/gi, "$1***@")
+    // well-known provider token shapes, which error messages echo back
+    .replace(/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, "AKIA***")
+    .replace(/\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/g, "gh***")
+    .replace(/\bAIza[A-Za-z0-9_-]{30,}/g, "AIza***")
+    .replace(/\bxox[baprs]-[A-Za-z0-9-]{10,}/g, "xox***")
+    .replace(/\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}/g, "jwt***")
     .replace(/\b([A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|AUTH)[A-Za-z0-9_]*)\s*[=:]\s*\S+/gi, "$1=***")
     .replace(/\bsk-[A-Za-z0-9_-]{8,}/g, "sk-***");
 }

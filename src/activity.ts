@@ -52,6 +52,8 @@ export function reduceActivity(state: ActivityState, ev: Record<string, unknown>
       }
       break;
     case "message_end":
+      // any role: a non-assistant message_end mid-run would disarm the hint until the next assistant
+      // message_start, which errs on the quiet side
       if (state.activity) {
         state.activity.inference = undefined;
       }

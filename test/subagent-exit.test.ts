@@ -35,6 +35,30 @@ describe("stderrTail", () => {
   });
 });
 
+describe("scrubSecrets provider shapes", () => {
+  const cases: Array<[string, string]> = [
+    ["AWS key AKIAIOSFODNN7EXAMPLE rejected", "AKIAIOSFODNN7EXAMPLE"],
+    ["temp ASIAIOSFODNN7EXAMPLE rejected", "ASIAIOSFODNN7EXAMPLE"],
+    ["bad ghp_abcdefghijklmnopqrstuvwxyz0123456789 given", "ghp_abcdefghijklmnopqrstuvwxyz0123456789"],
+    ["pat github_pat_11ABCDEFG0abcdefghijkl_mnopqrstuvwxyz12 given", "github_pat_11ABCDEFG0abcdefghijkl_mnopqrstuvwxyz12"],
+    ["key AIzaSyA1234567890abcdefghijklmnopqrstuvw bad", "AIzaSyA1234567890abcdefghijklmnopqrstuvw"],
+    ["slack xoxb-123456789012-abcdefghijkl bad", "xoxb-123456789012-abcdefghijkl"],
+    ["jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.c2lnbmF0dXJl bad", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.c2lnbmF0dXJl"],
+    ["Authorization: Basic dXNlcjpwYXNz bad", "dXNlcjpwYXNz"],
+    ["connect postgres://admin:hunter2@db.internal:5432/x failed", "hunter2"],
+  ];
+  for (const [text, secret] of cases) {
+    it(`removes ${secret.slice(0, 12)}...`, () => {
+      assert.ok(!scrubSecrets(text).includes(secret), scrubSecrets(text));
+    });
+  }
+
+  it("keeps the rest of the message, and a URL without credentials", () => {
+    assert.match(scrubSecrets("connect postgres://admin:hunter2@db.internal/x failed"), /postgres:\/\/\*\*\*@db\.internal\/x failed/);
+    assert.equal(scrubSecrets("fetch https://example.com/a:b failed"), "fetch https://example.com/a:b failed");
+  });
+});
+
 describe("scrubSecrets", () => {
   it("leaves ordinary text alone", () => {
     assert.equal(scrubSecrets("TypeError: x is not a function (a=1)"), "TypeError: x is not a function (a=1)");

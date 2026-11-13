@@ -120,7 +120,7 @@ export function buildSessionList(inp: ListInputs): SwitcherSession[] {
  * instance. Adopted means the daemon has it (registry entry, not a presence
  * pseudo-entry) or ever ran a child on its file (`handled`); a session the
  * user filed into a group stays visible, and so do the `keep` keys (the one
- * being viewed, one being entered).
+ * being viewed; a hidden session cannot be entered until it is shown).
  */
 export function isExternalRow(row: SwitcherSession, handled: ReadonlySet<string>, keep: ReadonlySet<string> = new Set()): boolean {
   const daemonOwned = row.daemonId !== undefined && row.daemonId >= 0;
