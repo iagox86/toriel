@@ -1,7 +1,7 @@
 // /why: the last thinking block of a session, explained by the cheap summary
 // model. Runs entirely outside the session - the session's own model never
 // sees the request or the answer, so it costs the real model nothing.
-import { readEntries, type SessionEntryLike } from "./session-file.ts";
+import { readActiveEntries, type SessionEntryLike } from "./session-file.ts";
 import { runSummarizer, summaryModel } from "./summarize.ts";
 import { loadSettings, resolveChildConfig } from "./settings.ts";
 import { clipMiddle } from "./util.ts";
@@ -17,7 +17,7 @@ const PROMPT =
 /** The thinking text of the newest assistant message in a session file that has any, or undefined. */
 export function lastThinking(file: string): string | undefined {
   let found: string | undefined;
-  for (const entry of readEntries<SessionEntryLike & { message?: { role?: string; content?: unknown } }>(file)) {
+  for (const entry of readActiveEntries<SessionEntryLike & { message?: { role?: string; content?: unknown } }>(file)) {
     if (entry?.type !== "message" || entry.message?.role !== "assistant" || !Array.isArray(entry.message.content)) {
       continue;
     }

@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 import * as os from "node:os";
 import { prettyError } from "./error-format.ts";
 import { messageText } from "./format.ts";
-import { readEntries, type SessionEntryLike } from "./session-file.ts";
+import { readActiveEntries, type SessionEntryLike } from "./session-file.ts";
 import { loadSettings, resolveChildConfig } from "./settings.ts";
 import { clipMiddle, errText } from "./util.ts";
 
@@ -65,7 +65,7 @@ export function summaryModel(env: NodeJS.ProcessEnv = process.env): string {
  */
 export function transcriptOf(file: string, maxChars = DEFAULT_TRANSCRIPT_CHARS): { text: string; messages: number } {
   const parts: string[] = [];
-  for (const entry of readEntries<SessionEntryLike & { message?: { role?: string; content?: unknown } }>(file)) {
+  for (const entry of readActiveEntries<SessionEntryLike & { message?: { role?: string; content?: unknown } }>(file)) {
     const role = entry?.message?.role;
     if (entry?.type !== "message" || (role !== "user" && role !== "assistant")) {
       continue;
