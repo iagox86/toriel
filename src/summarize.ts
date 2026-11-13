@@ -7,7 +7,7 @@ import * as os from "node:os";
 import { prettyError } from "./error-format.ts";
 import { messageText } from "./format.ts";
 import { loadSettings, resolveChildConfig } from "./settings.ts";
-import { errText } from "./util.ts";
+import { clipMiddle, errText } from "./util.ts";
 
 export const DEFAULT_SUMMARY_MODEL = "litellm/local-model";
 /** Local models are slow; wait a good while before giving up. */
@@ -84,12 +84,7 @@ export function transcriptOf(file: string, maxChars = DEFAULT_TRANSCRIPT_CHARS):
       parts.push(`${role === "user" ? "User" : "Assistant"}: ${text.slice(0, PER_MESSAGE_CHARS)}`);
     }
   }
-  let text = parts.join("\n");
-  if (text.length > maxChars) {
-    const head = Math.floor(maxChars / 3);
-    text = `${text.slice(0, head)}\n[...]\n${text.slice(text.length - (maxChars - head))}`;
-  }
-  return { text, messages: parts.length };
+  return { text: clipMiddle(parts.join("\n"), maxChars), messages: parts.length };
 }
 
 /** First non-empty line of the model's reply, unquoted and capped. */
