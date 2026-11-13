@@ -775,11 +775,18 @@ class Controller {
   /**
    * Something the daemon did that the user should be able to read back later (a grant answered a prompt, a child died): a dim
    * row in that session's transcript, next to the tool call it explains, not a flash. Kept on the view so a history reload
-   * does not lose it.
+   * does not lose it. A session whose transcript was never loaded here has nothing to attach it to, and must not get a view
+   * made just for the note: an existing view is what stops the switcher replaying that session's file when it is opened.
    */
   private noteInTranscript(meta: SessionMeta, text: string): void {
     const key = this.keyFor(meta);
-    const view = this.viewFor(key);
+    const view = this.views.get(key);
+    if (!view) {
+      if (key === this.viewing) {
+        this.notify(text);
+      }
+      return;
+    }
     const item = noteRow(text);
     view.notes = [...(view.notes ?? []), item];
     this.addItem(view, key, item);
