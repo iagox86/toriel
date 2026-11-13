@@ -160,3 +160,33 @@ describe("naming: rename", () => {
     assert.equal(fileNames(s.file).length, 2, "converged: a refresh writes nothing");
   });
 });
+
+describe("naming: spawn, wake and subagents", () => {
+  it("gives two sessions spawned with one name at once the names N and N #2", async () => {
+    harness = await startDaemon({ FAKE_PI_NAME_MODE: "file" });
+    const a = await harness.connect();
+    const b = await harness.connect();
+    const [x, y] = await Promise.all([
+      a.request({ type: "spawn", cwd: harness.dir, name: "Same", ready: true }),
+      b.request({ type: "spawn", cwd: harness.dir, name: "same", ready: true }),
+    ]);
+    assert.deepEqual([meta(a, x.sessionId)?.sessionName, meta(a, y.sessionId)?.sessionName].sort(), ["Same", "same #2"]);
+  });
+
+  it("shows the spawned name at once even when pi dropped the --name write", async () => {
+    harness = await startDaemon({ FAKE_PI_NAME_MODE: "ignore:1" });
+    const c = await harness.connect();
+    const { sessionId } = await c.request({ type: "spawn", cwd: harness.dir, name: "Dropped", ready: true });
+    assert.equal(meta(c, sessionId)?.sessionName, "Dropped");
+    await say(c, sessionId, "hello");
+    assert.equal(meta(c, sessionId)?.sessionName, "Dropped", "and keeps it after a refresh");
+  });
+
+  it("does not reserve the name of a spawn that failed", async () => {
+    harness = await startDaemon({ FAKE_PI_NAME_MODE: "file" });
+    const c = await harness.connect();
+    await assert.rejects(c.request({ type: "spawn", cwd: path.join(harness.dir, "no-such-dir"), name: "Ghost", ready: true }));
+    const { sessionId } = await c.request({ type: "spawn", cwd: harness.dir, name: "Ghost", ready: true });
+    assert.equal(meta(c, sessionId)?.sessionName, "Ghost");
+  });
+});

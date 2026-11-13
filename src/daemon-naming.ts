@@ -145,6 +145,11 @@ export class DaemonNaming {
     }
   }
 
+  /** `apply` without waiting: for a name `--name` already carried, where the check must not delay the first paint. A failure is logged, not thrown. */
+  applyInBackground(s: DaemonSession): void {
+    this.apply(s).catch((err: unknown) => log(`session ${s.id}: could not apply its name: ${errText(err)}`));
+  }
+
   private async applyToChild(s: DaemonSession, name: string): Promise<boolean> {
     let seen: string | undefined;
     for (let attempt = 0; attempt <= this.retryWaitsMs.length; attempt++) {
