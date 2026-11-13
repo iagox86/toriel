@@ -19,7 +19,17 @@ export interface DaemonSession {
   /** Socket holding the exclusive input attach; undefined = nobody. */
   attachedTo?: net.Socket;
   sessionId?: string;
+  /** The name the registry shows: `wantedName` when there is one, else what pi last reported. */
   sessionName?: string;
+  /** The name toriel decided this session has (claimed, unique); pi's own report is only an observation of it. docs/design.md "Naming". */
+  wantedName?: string;
+  /** Who set `wantedName`: a user's choice outranks the auto-namer's. */
+  nameSource?: "user" | "fork" | "spawn" | "subagent" | "auto";
+  /** When pi last had to be told the wanted name again, and how many times in a row without it sticking. */
+  nameAssertAt?: number;
+  nameAsserts?: number;
+  /** Re-asserting stopped after too many tries; reset when the name converges or is set again. */
+  nameGaveUp?: boolean;
   model: string;
   provider?: string;
   thinkingLevel?: string;

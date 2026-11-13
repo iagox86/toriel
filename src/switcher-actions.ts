@@ -34,6 +34,7 @@ import { restoreFromTrash } from "./switcher-trash.ts";
 import { isLiveState, type SwitcherSession } from "./switcher.ts";
 import { itemsFromFile, newView } from "./transcript.ts";
 import { runDoctorCommand } from "./doctor-commands.ts";
+import { renameNotice } from "./session-id.ts";
 import { runPermissions } from "./permission-commands.ts";
 import { operateSchedule, showSchedules } from "./schedule-commands.ts";
 import { errText, fireAndReport } from "./util.ts";
@@ -487,15 +488,15 @@ export class SwitcherActions {
         }
         try {
           const unique = this.h.uniqueSessionName(arg, t.key);
-          await this.h.request({
+          const r = (await this.h.request({
             type: "rename",
             session: t.daemonId,
             path: t.daemonId === undefined ? t.key : undefined,
             name: unique,
-          });
+          })) as { name?: string; nameVerified?: boolean } | undefined;
           await this.h.loadLocal();
           this.refresh();
-          this.h.switcher.hint = unique === arg ? `renamed to ${arg}` : `renamed to ${unique} (${arg} is taken)`;
+          this.h.switcher.hint = renameNotice(arg, r?.name ?? unique, r?.nameVerified);
         } catch (err) {
           this.h.switcher.hint = `rename failed: ${errText(err)}`;
         }

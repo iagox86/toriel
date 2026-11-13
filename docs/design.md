@@ -423,6 +423,10 @@ state when the daemon was first built.
   RpcClient.promptAndWait() does this internally.
 - Nested terminal context: controller inside tmux needs extended-keys
   (already configured). Kitty keyboard protocol passthrough to verify.
+- Session names are not a pi write you can trust once: pi resolves the name by walking the session file
+  from the active leaf for the latest `session_info`, and a fork's file starts as a COPY of its parent's, so
+  until the fork's own entry lands pi reports the PARENT's name. A write that was never read back is how
+  forks ended up with the parent's name (156). All names go through `DaemonNaming` (see "Naming" below).
 - Mouse: with mouse reporting on, middle-click arrives as a TuiMouseEvent;
   primary selection must be fetched via xclip (X11) / wl-paste (Wayland).
   Highlight-copy: implement selection like pi does (copy-on-select /
@@ -1448,3 +1452,43 @@ doctor flags operator allows on the covered surfaces); the last matching pattern
 alias bypasses a pattern match, so a link must match the boundary value; a throwing link blocks with
 a generic reason, so a link must never throw; a headless deny never hangs. Some of this predates the
 bwrap sandbox (#38) and may be superseded; read it as history.
+
+## Naming: one authority (ticket 156, PR 1 built 2026-11-13)
+
+Design of record: docs/naming-design.md (the review). What is built:
+
+- The daemon decides a session's name; pi's report is only an observation. `DaemonSession.wantedName`
+  (with `nameSource`) is the name toriel meant it to have; `sessionName`, which controllers display, is
+  `wantedName` while there is one, so a fork never shows its parent's name. `src/daemon-naming.ts`
+  (`DaemonNaming`, on `DaemonContext.naming`) is the only code that decides or writes a name.
+- `claim(s, requested, {source, ifUnset?})` is synchronous: trim, one line, cap 120, then `uniqueName`
+  over every other session's `wantedName ?? sessionName` (inactive ones included) - ` #2`, ` #3`, never a
+  refusal - recorded before any await, so two simultaneous requests cannot both get a name. `source: "auto"`
+  never overrides a `"user"` name; `ifUnset` is a compare-and-set for the future auto-namer (62).
+- `apply(s)` writes it. With a child: `set_session_name`, then `get_state` must report it, up to three
+  attempts (waits 100, 300 ms), each rpc raced against 5 s because pi's RpcClient has no timeout. Not
+  confirmed = `verified: false`, never a throw (a fork's file exists already; orphaning it over a name would
+  be worse); the wanted name stays and the guard below keeps asserting it. Without a child: pi's own
+  `SessionManager.appendSessionInfo`, read back; a failure there is a real error and gives the claim back.
+- The guard: `refreshMeta` (every settle, `compaction_end`, most handlers) already fetches pi's name, so
+  `noteObserved` is one comparison. A mismatch re-sends the wanted name, fire and forget (the next refresh is
+  the verification): at most once per 30 s and five in a row, then it logs once and stops until the name
+  converges or is set again. Not while the session is starting or a write is being verified. This is what
+  repairs a compaction that leaves the name entry off the active branch.
+- Callers: `/fork` (`handleAdopt`: claim before the start so `--name` and the fork record use the final
+  name, `apply` inside the `spawning` window, non-fatal, `recordFork` records the applied name) and
+  `/rename` (`handleRename`: also covers a session with no process and a bare file). Both answer with
+  `{name, nameVerified}` (PROTOCOL 6); the controller still makes a name unique first, now only as a preview,
+  and says "renamed to X #2 (X is taken)" and when pi has not confirmed it.
+- Test double: `FAKE_PI_NAME_MODE` in test/fixtures/fake-pi.mjs resolves names like pi (entries in the file,
+  a fork starting as a copy, the latest on-branch entry wins) and injects `ignore:N` / `fail:N` / `delay:MS`
+  faults; `FAKE_PI_COMPACT_ORPHANS_NAME=1` models the compaction case. test/naming.test.ts is the module,
+  test/naming-daemon.test.ts the daemon.
+
+Next (PR 2, not built): move the remaining writers onto it - `/new`, spawn and wake (`--name` plus an
+unverified `setSessionName`; fire and forget) and subagents (`daemon-subagents.ts` keeps its own `uniqueName`
+over registry names; its claim must stay synchronous because of the parallel-call limit) - then delete
+`Controller.uniqueSessionName`. Parked: what to do about a rename pi reports that the daemon did not issue
+(an external or in-session `/name`; today the wanted name is re-asserted up to five times, then left),
+`uniqueName` turning a user's own `Task #5` into `Task #2`, and reading the names of session files the daemon
+has never registered into the taken set.

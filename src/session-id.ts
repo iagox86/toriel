@@ -63,3 +63,12 @@ export function uniqueName(wanted: string, taken: Iterable<string>): string {
     }
   }
 }
+
+/**
+ * What to tell the user after a rename: the name that was applied (the daemon may have made it
+ * unique), and when pi has not yet confirmed it (the daemon keeps asserting it).
+ */
+export function renameNotice(asked: string, applied: string, verified: boolean | undefined): string {
+  const base = applied === asked ? `renamed to ${applied}` : `renamed to ${applied} (${asked} is taken)`;
+  return verified === false ? `${base} - pi has not confirmed it yet; toriel keeps asserting it` : base;
+}
