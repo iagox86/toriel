@@ -2,7 +2,12 @@
 // remark after it, but CommonMark forbids a backtick in a backtick fence's info
 // string, so the line renders literally with its backticks. For text the user
 // typed, drop the backticks from such an info string so the block renders as code.
+//
+// A fence that ends a line of prose ("like this: ```") is no CommonMark fence, but pi-tui opens a block at it
+// anyway and leaves the prose line as it was, so only the closing fence is hidden and the rest of the message
+// renders as code (ticket 134). Move such a fence onto its own line.
 const OPENING = /^( {0,3})(`{3,}|~{3,})(.*)$/;
+const INLINE_OPENING = /^(.*\S.*?)[ \t]*(`{3,})[ \t]*$/;
 const CLOSING = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
 
 export function repairFences(text: string): string {
@@ -21,6 +26,12 @@ export function repairFences(text: string): string {
     }
     const m = OPENING.exec(line);
     if (!m) {
+      const inline = INLINE_OPENING.exec(line);
+      // the run must be the only one on the line: "use ```x``` here" and "a ```b``` ```" are inline code spans
+      if (inline && !inline[1]?.includes("```")) {
+        open = { char: "`", length: (inline[2] as string).length };
+        return `${inline[1]}\n${inline[2]}`;
+      }
       return line;
     }
     const [, indent, ticks, info] = m as unknown as [string, string, string, string];
