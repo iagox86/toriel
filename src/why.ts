@@ -1,7 +1,7 @@
 // /why: the last thinking block of a session, explained by the cheap summary
 // model. Runs entirely outside the session - the session's own model never
 // sees the request or the answer, so it costs the real model nothing.
-import * as fs from "node:fs";
+import { readEntries, type SessionEntryLike } from "./session-file.ts";
 import { runSummarizer, summaryModel } from "./summarize.ts";
 import { loadSettings, resolveChildConfig } from "./settings.ts";
 import { clipMiddle } from "./util.ts";
@@ -17,17 +17,8 @@ const PROMPT =
 /** The thinking text of the newest assistant message in a session file that has any, or undefined. */
 export function lastThinking(file: string): string | undefined {
   let found: string | undefined;
-  for (const line of fs.readFileSync(file, "utf8").split("\n")) {
-    if (!line) {
-      continue;
-    }
-    let entry: { type?: string; message?: { role?: string; content?: unknown } };
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (entry.type !== "message" || entry.message?.role !== "assistant" || !Array.isArray(entry.message.content)) {
+  for (const entry of readEntries<SessionEntryLike & { message?: { role?: string; content?: unknown } }>(file)) {
+    if (entry?.type !== "message" || entry.message?.role !== "assistant" || !Array.isArray(entry.message.content)) {
       continue;
     }
     const blocks = (entry.message.content as Array<{ type?: string; thinking?: string }>)

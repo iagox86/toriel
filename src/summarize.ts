@@ -2,10 +2,10 @@
 // model run through pi's print mode (no session, no tools, no extensions), so
 // it uses whatever providers pi is already set up with - including local ones.
 import { spawn } from "node:child_process";
-import * as fs from "node:fs";
 import * as os from "node:os";
 import { prettyError } from "./error-format.ts";
 import { messageText } from "./format.ts";
+import { readEntries, type SessionEntryLike } from "./session-file.ts";
 import { loadSettings, resolveChildConfig } from "./settings.ts";
 import { clipMiddle, errText } from "./util.ts";
 
@@ -65,18 +65,9 @@ export function summaryModel(env: NodeJS.ProcessEnv = process.env): string {
  */
 export function transcriptOf(file: string, maxChars = DEFAULT_TRANSCRIPT_CHARS): { text: string; messages: number } {
   const parts: string[] = [];
-  for (const line of fs.readFileSync(file, "utf8").split("\n")) {
-    if (!line) {
-      continue;
-    }
-    let entry: { type?: string; message?: { role?: string; content?: unknown } };
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    const role = entry.message?.role;
-    if (entry.type !== "message" || (role !== "user" && role !== "assistant")) {
+  for (const entry of readEntries<SessionEntryLike & { message?: { role?: string; content?: unknown } }>(file)) {
+    const role = entry?.message?.role;
+    if (entry?.type !== "message" || (role !== "user" && role !== "assistant")) {
       continue;
     }
     const text = messageText(entry.message as { content?: unknown }).replace(/\s+/g, " ").trim();

@@ -1,7 +1,7 @@
 // The transcript model: one renderer for both live event streams and replays
 // of session files, so the two views cannot drift apart. Items are pi's own
 // message/tool components; this module builds and updates them.
-import * as fs from "node:fs";
+import { readEntries, type SessionEntryLike } from "./session-file.ts";
 import { Text, type TuiAltScreen } from "@earendil-works/pi-tui";
 import { ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import { AssistantMessage, BashRow, CompactionRow, UserMessage } from "./components.ts";
@@ -523,48 +523,42 @@ export function itemsFromMessages(messages: unknown[], tui: TuiAltScreen, cwd: s
  */
 export function messagesFromFile(file: string): unknown[] {
   const entries: Array<{ id?: string; message: Record<string, unknown> }> = [];
-  for (const line of fs.readFileSync(file, "utf8").split("\n")) {
-    if (!line) {
+  type FileEntry = SessionEntryLike & {
+    message?: Record<string, unknown>;
+    customType?: string;
+    content?: unknown;
+    display?: boolean;
+    details?: unknown;
+    summary?: string;
+    firstKeptEntryId?: string;
+    tokensBefore?: number;
+    timestamp?: string;
+  };
+  for (const e of readEntries<FileEntry>(file)) {
+    if (typeof e !== "object" || e === null) {
       continue;
     }
-    try {
-      const e = JSON.parse(line) as {
-        type?: string;
-        id?: string;
-        message?: Record<string, unknown>;
-        customType?: string;
-        content?: unknown;
-        display?: boolean;
-        details?: unknown;
-        summary?: string;
-        firstKeptEntryId?: string;
-        tokensBefore?: number;
-        timestamp?: string;
+    if (e.type === "message" && e.message) {
+      entries.push({ id: e.id, message: e.message });
+    } else if (e.type === "custom_message") {
+      entries.push({
+        id: e.id,
+        message: { role: "custom", customType: e.customType, content: e.content, display: e.display, details: e.details },
+      });
+    } else if (e.type === "compaction" && typeof e.summary === "string") {
+      const marker = {
+        role: "compactionSummary",
+        summary: e.summary,
+        tokensBefore: e.tokensBefore ?? 0,
+        timestamp: Date.parse(e.timestamp ?? "") || Date.now(),
       };
-      if (e.type === "message" && e.message) {
-        entries.push({ id: e.id, message: e.message });
-      } else if (e.type === "custom_message") {
-        entries.push({
-          id: e.id,
-          message: { role: "custom", customType: e.customType, content: e.content, display: e.display, details: e.details },
-        });
-      } else if (e.type === "compaction" && typeof e.summary === "string") {
-        const marker = {
-          role: "compactionSummary",
-          summary: e.summary,
-          tokensBefore: e.tokensBefore ?? 0,
-          timestamp: Date.parse(e.timestamp ?? "") || Date.now(),
-        };
-        const keptAt = e.firstKeptEntryId ? entries.findIndex((x) => x.id === e.firstKeptEntryId) : -1;
-        const summarized = keptAt === -1 ? entries.length : keptAt;
-        for (let i = 0; i < summarized; i++) {
-          entries[i] = { ...entries[i]!, message: { ...entries[i]!.message, outOfContext: true } };
-        }
-        // where it happened, so it is the thing seen at the bottom right after compacting
-        entries.push({ message: marker });
+      const keptAt = e.firstKeptEntryId ? entries.findIndex((x) => x.id === e.firstKeptEntryId) : -1;
+      const summarized = keptAt === -1 ? entries.length : keptAt;
+      for (let i = 0; i < summarized; i++) {
+        entries[i] = { ...entries[i]!, message: { ...entries[i]!.message, outOfContext: true } };
       }
-    } catch {
-      // tolerate a torn trailing line
+      // where it happened, so it is the thing seen at the bottom right after compacting
+      entries.push({ message: marker });
     }
   }
   return entries.map((x) => x.message);
