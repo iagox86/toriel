@@ -231,6 +231,16 @@ describe("daemon: permission grants", () => {
       assert.deepEqual(dialog.request.toriel, { protectedAsk: true });
     });
 
+    it("marks a protected prompt however the path is spelled: relative, or with a detour", async () => {
+      for (const command of ["cat ../.pi/agent/mcp.json", "cat x/../.pi/agent/mcp.json"]) {
+        const h = await start({ FAKE_PI_ASK_COMMAND: command });
+        const { c, session } = await savedSession(h);
+        await c.request({ type: "prompt", session, message: "/ask-select" });
+        const dialog = await c.waitFor((m) => m.type === "ui_request" && m.request?.id === "ask-select-1");
+        assert.deepEqual(dialog.request.toriel, { protectedAsk: true }, command);
+      }
+    });
+
     it("does not mark an ordinary prompt", async () => {
       const { dialog } = await pathPrompt();
       assert.equal(dialog.request.toriel?.protectedAsk, undefined);

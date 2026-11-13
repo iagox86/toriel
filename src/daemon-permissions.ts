@@ -72,12 +72,28 @@ export function answerablePrompt(grants: GrantStore, uuid: string | undefined, r
   return touchesProtected([value ?? "", typeof request.title === "string" ? request.title : ""].join("\n"), protectedFiles) ? undefined : grants.covers(uuid, asked, true);
 }
 
-/** Whether `text` (what an ask is about) names a protected file, spelled absolutely or with `~`. Whitespace is ignored, since pi wraps long commands across lines; matching too much only means one more prompt. */
+/**
+ * Whether `text` (what an ask is about) names a protected file. Three spellings count: the absolute path, the `~` form, and the
+ * path's last two segments (`.pi/agent`), which is what a relative spelling such as `../.pi/agent/mcp.json` or a repo-local `.pi/`
+ * directory still contains. The text is also tried with `..` and `.` segments collapsed, so `/home/u/x/../.pi/agent` is seen as
+ * what it is. Whitespace is ignored, since pi wraps long commands across lines. Matching too much only means one more prompt.
+ */
 export function touchesProtected(text: string, protectedFiles: readonly string[] = protectedPaths()): boolean {
   const home = os.homedir();
   const squash = (t: string) => t.replace(/\s+/g, "");
+  const collapse = (t: string): string => {
+    let cur = t.replace(/\/{2,}/g, "/").replace(/\/\.(?=\/)/g, "");
+    for (let prev = ""; prev !== cur; ) {
+      prev = cur;
+      cur = cur.replace(/[^/]+\/\.\.(?=\/|$)\/?/, "");
+    }
+    return cur;
+  };
   const flat = squash(text);
-  return protectedFiles.some((p) => flat.includes(squash(p)) || flat.includes(squash(p.startsWith(home) ? `~${p.slice(home.length)}` : p)));
+  const haystacks = [flat, collapse(flat)];
+  const tail = (p: string) => p.split("/").filter(Boolean).slice(-2).join("/");
+  const needles = protectedFiles.flatMap((p) => [squash(p), squash(p.startsWith(home) ? `~${p.slice(home.length)}` : p), squash(tail(p))]);
+  return needles.some((n) => n.length > 0 && haystacks.some((h) => h.includes(n)));
 }
 
 /** A file-path grant comes only from answering the file-path prompt the daemon holds open for the session, with a pattern that covers what pi asked about. */

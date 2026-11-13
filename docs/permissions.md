@@ -127,13 +127,25 @@ matching); a project config overlay (above).
     (dormant until `/permissions restore`, like all grants);
   - the grants file and pi's own config (`~/.pi/agent`) are never answered from a grant,
     however wide the pattern: those prompts always reach the user, and answering one with a
-    toriel row is refused up front rather than storing a grant that would never fire;
+    toriel row is refused up front rather than storing a grant that would never fire. "Names
+    a protected file" (`touchesProtected` in `src/daemon-permissions.ts`) means the absolute
+    path, the `~` form, or the path's last two segments (`.pi/agent`, `toriel/permissions.json`),
+    so `../.pi/agent/mcp.json` and a repo-local `.pi/agent` count, and the text is also tried
+    with `..`, `.` and doubled `/` collapsed. Whitespace is ignored (pi wraps long commands).
+    It errs toward matching: the cost of a false positive is one more prompt, never a grant.
+    Not covered: a path built at run time (`$HOME/...`, a symlink, a command that computes
+    it), which the title does not show; the sandbox, not this check, is the answer there;
   - the surface stays exact (`path_write` does not cover `path_read`), the pattern is a glob
     over the path text pi suggested, and an ask with several suggested patterns (a
     directory) offers the rows but no pattern edit.
   The socket is still only guarded by the "controller announced itself" check, so a caller
   holding the socket that learns an open prompt's id could still answer it; that is the
   same trust as answering the prompt directly.
+- The layout that hides pi's session row is drawn by the controller, and `protectedAsk` is set
+  by the daemon, with no protocol bump (both are optional fields). An old controller against a
+  new daemon still shows pi's native session row, so "pi's session answer cannot bypass the
+  protected-path check" holds only when both ends are new. They launch together, and the
+  degraded state is how it was before.
 - pi's own native session grants stay invisible to toriel. `/permissions` says so in a
   footer line instead of pretending the list is complete.
 - A small latency cost on every ask (one local socket round trip). Measured in the

@@ -73,7 +73,8 @@ export function withOwnLayout(d: DialogRequest, durations: readonly string[]): D
   add("Yes, this once", "Yes");
   if (grants.length > 0) {
     const what = grants.map((g) => JSON.stringify(g.pattern)).join(" + ");
-    for (const life of durations) {
+    // once, the allow rows, No and the reason must stay within nine, so every row has a digit
+    for (const life of durations.slice(0, 6)) {
       const row = { label: `Yes, and allow ${what} for ${life === "session" ? "this session, kept across restarts" : durationWords(life)}`, for: life };
       rows.push(row);
       labels.push(row.label);

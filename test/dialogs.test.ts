@@ -186,6 +186,13 @@ describe("toriel's own layout on a permission prompt", () => {
     assert.equal(isPermissionPrompt(other), false);
   });
 
+  it("keeps every row reachable by a digit however many durations are configured", () => {
+    const d = withOwnLayout(ask, ["1m", "2m", "3m", "4m", "5m", "6m", "7m", "8m"]);
+    assert.equal(d.options?.length, 9);
+    assert.equal(d.options?.at(-1), "No, with a reason");
+    assert.equal(d.extraRows?.length, 6);
+  });
+
   it("never lays out twice", () => {
     const once = withOwnLayout(ask, ["1h"]);
     assert.equal(withOwnLayout(once, ["8h"]), once);

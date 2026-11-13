@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { answerablePrompt } from "../src/daemon-permissions.ts";
+import { answerablePrompt, touchesProtected } from "../src/daemon-permissions.ts";
 import { cappedReason, GrantStore, isCappedSurface } from "../src/permissions.ts";
 
 const HOUR = 3_600_000;
@@ -331,5 +331,46 @@ describe("answerablePrompt: a file-path prompt the daemon may answer itself", ()
     assert.equal(answerablePrompt(s, A, ask("x"), "/home/me/.local/share/toriel/permissions.json", PROTECTED), undefined, "by the asked path");
     assert.equal(answerablePrompt(s, A, ask("write /home/me/.pi/agent/settings.json"), undefined, PROTECTED), undefined, "by the title when the value is not a bare path");
     assert.equal(answerablePrompt(s, A, ask("x"), "/home/me/notes/a.md", PROTECTED)?.length, 1, "other files are fine");
+  });
+});
+
+describe("touchesProtected: every spelling of a protected file", () => {
+  const PROTECTED = ["/home/me/.local/share/toriel/permissions.json", "/home/me/.pi/agent"];
+  const touches = (text: string) => touchesProtected(text, PROTECTED);
+
+  it("sees the absolute path, the ~ form, and a command pi wrapped across lines", () => {
+    assert.equal(touches("write /home/me/.pi/agent/settings.json"), true);
+    assert.equal(touches("cat ~/.pi/agent/mcp.json"), true);
+    assert.equal(touches("cat /home/me/.pi/ag\nent/mcp.json"), true);
+  });
+
+  it("sees relative spellings, which still contain the tail of the path", () => {
+    assert.equal(touches("../.pi/agent/mcp.json"), true);
+    assert.equal(touches("x/../.pi/agent/mcp.json"), true);
+    assert.equal(touches("../../toriel/permissions.json"), true);
+    assert.equal(touches("repo/.pi/agent/models.json"), true, "a repo-local .pi/agent is matched too");
+  });
+
+  it("collapses .. and . segments, so a path that only resolves to a protected file is seen", () => {
+    assert.equal(touches("/home/me/notes/../.pi/agent/auth.json"), true);
+    assert.equal(touches("/home/me/./.pi/./agent/auth.json"), true);
+    assert.equal(touches("/home/me//.pi//agent/auth.json"), true);
+    assert.equal(touches("/home/me/.pi/x/../agent/auth.json"), true, "only the collapse sees this one: the tail is split by the detour");
+    assert.equal(touches("/home/me/.local/share/y/../toriel/permissions.json"), true);
+    assert.equal(touches("/home/me/a/b/../../.local/share/toriel/permissions.json"), true);
+  });
+
+  it("leaves other files alone, at the price of nothing but the odd extra prompt", () => {
+    assert.equal(touches("/home/me/notes/a.md"), false);
+    assert.equal(touches("/home/me/.pi/other/a.md"), false);
+    assert.equal(touches("../notes/../toriel/readme.md"), false);
+    assert.equal(touches(""), false);
+  });
+
+  it("makes answerablePrompt refuse a relative spelling, grant or no grant", () => {
+    const s = make();
+    s.add({ session: A, surface: "path_write", pattern: "*", source: "dialog" }, true);
+    const request = { id: "d", method: "select", title: "Permission Required\npath : x/../.pi/agent/mcp.json", options: ["Yes", "No"], toriel: { grants: [{ surface: "path_write", pattern: "x/../.pi/agent/mcp.json" }] } };
+    assert.equal(answerablePrompt(s, A, request, "x/../.pi/agent/mcp.json", PROTECTED), undefined);
   });
 });
