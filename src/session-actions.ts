@@ -642,7 +642,7 @@ export class SessionActions {
 
   private async sendToLive(key: string, meta: SessionMeta, out: Outgoing): Promise<boolean> {
     if (out.echo) {
-      this.h.echoPrompt(key, out.sent);
+      this.h.echoPrompt(key, out.sent, out.images.length);
     }
     await this.h.request({ type: "prompt", session: meta.id, message: out.sent, images: out.images.length > 0 ? out.images : undefined });
     return true;
@@ -673,7 +673,7 @@ export class SessionActions {
     // lands in that window there is no pending echo to consume, so the
     // text would render twice. dropEcho retracts the echo on a refusal.
     if (out.echo) {
-      this.h.echoPrompt(key, out.sent);
+      this.h.echoPrompt(key, out.sent, out.images.length);
     }
     const data = (await this.h.request({
       type: "prompt",

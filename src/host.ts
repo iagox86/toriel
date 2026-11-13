@@ -55,7 +55,7 @@ export interface Host {
   reloadView(key: string): void;
   syncHistory(force?: boolean): void;
   /** Show a sent prompt immediately in the session's transcript (and start the spinner). */
-  echoPrompt(key: string, text: string): void;
+  echoPrompt(key: string, text: string, images?: number): void;
   /** `wanted`, suffixed (" #2") if another session already has that name; `selfKey` is the session being renamed. */
   uniqueSessionName(wanted: string, selfKey?: string): string;
   /** Re-read lineage.json on the next redraw (after the link between two sessions changed). */

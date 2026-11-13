@@ -740,9 +740,9 @@ class Controller {
     }
   }
 
-  echoPrompt(key: string, text: string): void {
+  echoPrompt(key: string, text: string, images = 0): void {
     const view = this.viewFor(key);
-    echoUser(view, text, { addItem: (item) => this.addItem(view, key, item) });
+    echoUser(view, text, { addItem: (item) => this.addItem(view, key, item) }, images);
     if (key === this.viewing) {
       this.scroll.scrollToEnd();
       this.syncActivity();

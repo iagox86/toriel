@@ -57,6 +57,11 @@ export function firstMessageLabel(text: string, width: number): string {
 }
 
 /** Plain text of a message whose content is a string or content blocks. */
+/** How many image blocks a message carries (the transcript shows a marker for each; the image itself is not drawn). */
+export function imageCount(m: { content?: unknown }): number {
+  return Array.isArray(m.content) ? m.content.filter((b) => (b as { type?: string } | null)?.type === "image").length : 0;
+}
+
 export function messageText(m: { content?: unknown }): string {
   if (typeof m.content === "string") {
     return m.content;

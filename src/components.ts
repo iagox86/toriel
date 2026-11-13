@@ -4,6 +4,7 @@ import { AssistantMessageComponent, BashExecutionComponent, CompactionSummaryMes
 import type { Component } from "@earendil-works/pi-tui";
 import { prettyError } from "./error-format.ts";
 import { linkifyLines } from "./linkify.ts";
+import { dim as dimText } from "./theme.ts";
 
 /** What pi-tui's markdown draws for a fence line; such lines are dropped. */
 export const FENCE_MARK = "⁣toriel-fence⁣";
@@ -54,8 +55,15 @@ export class AssistantMessage extends AssistantMessageComponent {
  * Fence lines are dropped as for assistant text: a large paste expands into a fenced block.
  */
 export class UserMessage extends UserMessageComponent {
+  /** Images the message carries; each is shown as a dim marker line, the image itself is not drawn. */
+  images = 0;
+
   override render(width: number): string[] {
-    return ["", ...super.render(width).filter((line) => !line.includes(FENCE_MARK))];
+    const lines = ["", ...super.render(width).filter((line) => !line.includes(FENCE_MARK))];
+    if (this.images > 0) {
+      lines.push(dimText(this.images === 1 ? " [image]" : ` [${this.images} images]`));
+    }
+    return lines;
   }
 }
 

@@ -16,7 +16,7 @@ import type { DialogRequest } from "./dialogs.ts";
 import { parseLocalCommand } from "./local-command.ts";
 import { displayText } from "./received.ts";
 import { displayScheduled } from "./schedule-label.ts";
-import { messageText, oneLineFlat } from "./format.ts";
+import { imageCount, messageText, oneLineFlat } from "./format.ts";
 import { mdTheme } from "./pi-theme.ts";
 import { attention, dim } from "./theme.ts";
 
@@ -137,8 +137,10 @@ export function newView(): SessionView {
 }
 
 /** Show a just-sent prompt at once; pi's own user message later adopts it instead of adding a second. */
-export function echoUser(view: SessionView, text: string, env: Pick<EventEnv, "addItem">): void {
-  const item: UserItem = { kind: "user", component: new UserMessage(repairFences(text), mdTheme, 1) };
+export function echoUser(view: SessionView, text: string, env: Pick<EventEnv, "addItem">, images = 0): void {
+  const component = new UserMessage(repairFences(text), mdTheme, 1);
+  component.images = images;
+  const item: UserItem = { kind: "user", component };
   view.echoes.push({ text: text.trim(), item });
   env.addItem(item);
   if (!view.activity) {
@@ -298,7 +300,7 @@ export function applyEvent(view: SessionView, ev: Record<string, unknown>, env: 
       // an inject delivered at a turn boundary arrives as an appended entry, not as message events
       const e = ev.entry as { type?: string; customType?: string; content?: unknown } | undefined;
       if (e?.type === "custom_message" && isInjectType(e.customType)) {
-        env.addItem(userItem(messageText({ content: e.content }), env.tui));
+        env.addItem(userItem(messageText({ content: e.content }), env.tui, imageCount({ content: e.content })));
         effects.messageEnded = true;
       }
       break;
@@ -306,14 +308,14 @@ export function applyEvent(view: SessionView, ev: Record<string, unknown>, env: 
     case "message_start": {
       const m = ev.message as { role?: string; content?: unknown } | undefined;
       if (isInject(m)) {
-        env.addItem(userItem(messageText(m), env.tui));
+        env.addItem(userItem(messageText(m), env.tui, imageCount(m)));
       } else if (m?.role === "user") {
         const text = messageText(m).trim();
         const echoed = view.echoes.findIndex((e) => e.text === text);
         if (echoed !== -1) {
           view.echoes.splice(echoed, 1);
         } else {
-          env.addItem(userItem(messageText(m), env.tui));
+          env.addItem(userItem(messageText(m), env.tui, imageCount(m)));
         }
       } else if (m?.role === "assistant") {
         const item = assistantItem(m as Record<string, unknown>);
@@ -426,12 +428,14 @@ interface BashExecutionMessage {
 }
 
 /** A user message as shown: a `!command` result as a command block, a message from another session labelled, anything else as typed. */
-function userItem(text: string, tui: TuiAltScreen): UserItem | BashItem {
+function userItem(text: string, tui: TuiAltScreen, images = 0): UserItem | BashItem {
   const local = parseLocalCommand(text);
   if (local) {
     return bashItem(local, tui);
   }
-  return { kind: "user", component: new UserMessage(repairFences(displayScheduled(displayText(text))), mdTheme, 1) };
+  const component = new UserMessage(repairFences(displayScheduled(displayText(text))), mdTheme, 1);
+  component.images = images;
+  return { kind: "user", component };
 }
 
 /** A finished `!command` replayed from the session. */
@@ -474,9 +478,9 @@ export function itemsFromMessages(messages: unknown[], tui: TuiAltScreen, cwd: s
     } else if (m.role === "bashExecution") {
       items.push(bashItem(m as unknown as BashExecutionMessage, tui));
     } else if (m.role === "user") {
-      items.push(userItem(messageText(m), tui));
+      items.push(userItem(messageText(m), tui, imageCount(m)));
     } else if (m.role === "custom" && isInjectType(m.customType)) {
-      items.push(userItem(messageText(m), tui));
+      items.push(userItem(messageText(m), tui, imageCount(m)));
     } else if (m.role === "assistant") {
       items.push(assistantItem(m as Record<string, unknown>));
     } else if (m.role === "toolResult") {

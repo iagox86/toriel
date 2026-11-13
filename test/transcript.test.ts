@@ -224,6 +224,24 @@ describe("applyEvent", () => {
     assert.doesNotMatch(text, /\[from Boss/);
   });
 
+  it("marks images in a user message with a dim placeholder line: on replay, live, and on the local echo", () => {
+    const tui = { requestRender() {} } as never;
+    const img = { type: "image", data: "AAAA", mimeType: "image/png" };
+    const render = (item: Item | undefined) => (item?.component as unknown as { render(w: number): string[] }).render(60).join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+    const replay = itemsFromMessages([{ role: "user", content: [{ type: "text", text: "look at this" }, img] }], tui, "/w");
+    assert.match(render(replay[0]), /look at this[\s\S]*\[image\]/);
+    const two = itemsFromMessages([{ role: "user", content: [{ type: "text", text: "two" }, img, img] }], tui, "/w");
+    assert.match(render(two[0]), /\[2 images\]/);
+    const none = itemsFromMessages([{ role: "user", content: [{ type: "text", text: "plain" }] }], tui, "/w");
+    assert.doesNotMatch(render(none[0]), /image/);
+    const shown: Item[] = [];
+    applyEvent(newView(), { type: "message_start", message: { role: "user", content: [{ type: "text", text: "live" }, img] } }, { tui, cwd: "/w", addItem: (i: Item) => shown.push(i) });
+    assert.match(render(shown[0]), /\[image\]/);
+    const echoed: Item[] = [];
+    echoUser(newView(), "echo", { addItem: (i: Item) => echoed.push(i) }, 1);
+    assert.match(render(echoed[0]), /echo[\s\S]*\[image\]/);
+  });
+
   it("draws a !command result sent to the agent as a command block, live and on replay", () => {
     const tui = { requestRender() {} } as never;
     const text = formatLocalCommand("ls /x", { output: "a\nb\n", exitCode: 0, cancelled: false, truncated: false });
