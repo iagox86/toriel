@@ -31,6 +31,17 @@ describe("repairFences", () => {
     assert.equal(repairFences("```a\r\n```b `c`\r\n```"), "```a\r\n```b `c`\r\n```");
   });
 
+  it("moves a fence that ends a line of prose onto its own line, so both fences are handled (ticket 134)", () => {
+    assert.equal(repairFences("starts on a line, like ```\nthis is some code\n```\n\ntrailing"), "starts on a line, like\n```\nthis is some code\n```\n\ntrailing");
+    assert.equal(repairFences("like ```\r\ncode\r\n```\r\n"), "like\n```\r\ncode\r\n```\r\n");
+  });
+
+  it("leaves inline code spans with triple backticks, and fences inside a block, alone", () => {
+    assert.equal(repairFences("use ```x``` here"), "use ```x``` here");
+    assert.equal(repairFences("a ```b``` ```"), "a ```b``` ```");
+    assert.equal(repairFences("```\nlike ```\n```"), "```\nlike ```\n```");
+  });
+
   it("does not touch a backtick fence line inside a tilde fence, and a tilde line does not close a backtick fence", () => {
     assert.equal(repairFences("~~~\n```x `y`\n~~~"), "~~~\n```x `y`\n~~~");
     assert.equal(repairFences("```a\n~~~\n```b `c`\n```"), "```a\n~~~\n```b `c`\n```");
