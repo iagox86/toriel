@@ -8,6 +8,7 @@ import { messageText } from "./format.ts";
 import { parseLocalCommand } from "./local-command.ts";
 import { parseReceived } from "./received.ts";
 import { parseScheduled } from "./schedule-label.ts";
+import { readLines, type SessionEntryLike, type SessionLine } from "./session-file.ts";
 import { writeFileAtomic } from "./util.ts";
 
 export interface RewindTarget {
@@ -32,24 +33,11 @@ export interface RewindResult {
   trashedTo: string;
 }
 
-interface ParsedLine {
-  raw: string;
-  entry?: { type?: string; id?: string; timestamp?: string; message?: { role?: string; content?: unknown } };
-}
+type ParsedLine = SessionLine<SessionEntryLike & { timestamp?: string; message?: { role?: string; content?: unknown } }>;
 
+/** The non-blank lines with their parse, as written (no migration: rewind writes these lines back). A torn line has no entry; it is kept or trimmed like any other. */
 function parseLines(file: string): ParsedLine[] {
-  const lines: ParsedLine[] = [];
-  for (const raw of fs.readFileSync(file, "utf8").split("\n")) {
-    if (!raw) {
-      continue;
-    }
-    try {
-      lines.push({ raw, entry: JSON.parse(raw) });
-    } catch {
-      lines.push({ raw }); // tolerate a torn line; it is kept or trimmed like any other
-    }
-  }
-  return lines;
+  return readLines(file).filter((l) => l.raw !== "") as ParsedLine[];
 }
 
 /** A message another session sent: not something the user typed, so it is not offered as a rewind point. */

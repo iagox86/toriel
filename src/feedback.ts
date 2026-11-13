@@ -5,6 +5,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { FEEDBACK_FILE } from "./config.ts";
+import { readLines } from "./session-file.ts";
 
 /**
  * One line of feedback.jsonl. To investigate a record: open `session.file`; line
@@ -75,24 +76,18 @@ export function sessionPosition(sessionFile: string | undefined): SessionPositio
   if (!sessionFile || !fs.existsSync(sessionFile)) {
     return undefined;
   }
-  const lines = fs.readFileSync(sessionFile, "utf8").split("\n");
-  while (lines.length > 0 && lines[lines.length - 1] === "") {
+  // physical lines as written: the position is a line number in the file, so no migration and blank lines count
+  const lines = readLines(sessionFile);
+  while (lines.length > 0 && lines[lines.length - 1]?.raw === "") {
     lines.pop();
   }
-  const parse = (line: string | undefined): Record<string, unknown> | undefined => {
-    try {
-      return JSON.parse(line as string) as Record<string, unknown>;
-    } catch {
-      return undefined;
-    }
-  };
-  const header = parse(lines[0]);
+  const header = lines[0]?.entry;
   const pos: SessionPosition = {
     sessionId: header?.type === "session" && typeof header.id === "string" ? header.id : undefined,
     entries: Math.max(0, lines.length - 1),
   };
   for (let i = lines.length - 1; i >= 1; i--) {
-    const entry = parse(lines[i]); // the last line may be torn
+    const entry = lines[i]?.entry; // the last line may be torn
     if (typeof entry?.id === "string") {
       pos.entryId = entry.id;
       pos.entryLine = i + 1;

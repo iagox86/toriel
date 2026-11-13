@@ -3,7 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { readHeader, sessionIdOfFile } from "../src/session-file.ts";
+import { messagesFromFile } from "../src/transcript.ts";
+import { parseLines, readEntries, readHeader, readLines, sessionIdOfFile } from "../src/session-file.ts";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-session-file-"));
 const write = (name: string, text: string): string => {
@@ -41,5 +42,55 @@ describe("readHeader", () => {
 
   it("gives undefined for a first line longer than any header", () => {
     assert.equal(readHeader(write("long.jsonl", `{"id":"${"y".repeat(70_000)}"}\n`)), undefined);
+  });
+});
+
+const lines = (...entries: unknown[]): string => `${entries.map((e) => JSON.stringify(e)).join("\n")}\n`;
+
+describe("readEntries", () => {
+  it("skips a torn trailing line and does not touch the file", () => {
+    const text = `${lines({ type: "session", id: "s", version: 3 }, { type: "message", id: "a", message: { role: "user", content: "hi" } })}{"type":"mess`;
+    const file = write("torn.jsonl", text);
+    assert.deepEqual(readEntries(file).map((e) => e.type), ["session", "message"]);
+    assert.equal(fs.readFileSync(file, "utf8"), text, "reading a file pi may be writing must not append to it");
+  });
+
+  it("brings a version-1 file (no ids, compaction by index) to the current format", () => {
+    const file = write(
+      "v1.jsonl",
+      lines(
+        { type: "session", id: "s", version: 1 },
+        { type: "message", message: { role: "user", content: "old" } },
+        { type: "message", message: { role: "user", content: "kept" } },
+        { type: "compaction", summary: "sum", firstKeptEntryIndex: 2, tokensBefore: 1 },
+      ),
+    );
+    const entries = readEntries(file);
+    assert.ok(entries.every((e) => e.type === "session" || typeof e.id === "string"), "every entry has an id");
+    assert.equal(entries[3]?.firstKeptEntryId, entries[2]?.id);
+    // and the transcript built from it flags exactly what the summary replaced
+    const ms = messagesFromFile(file) as Array<{ role: string; outOfContext?: boolean }>;
+    assert.deepEqual(ms.map((m) => [m.role, Boolean(m.outOfContext)]), [["user", true], ["user", false], ["compactionSummary", false]]);
+  });
+
+  it("renames the old hookMessage role", () => {
+    const file = write("v2.jsonl", lines({ type: "session", id: "s", version: 2 }, { type: "message", id: "a", parentId: null, message: { role: "hookMessage", content: "x" } }));
+    const message = readEntries(file)[1]?.message as { role: string } | undefined;
+    assert.equal(message?.role, "custom");
+  });
+});
+
+describe("readLines", () => {
+  it("keeps every physical line, blank ones too, and leaves a torn one without an entry", () => {
+    const file = write("raw.jsonl", `${HEADER}\n\n{"type":"mess\n`);
+    const got = readLines(file);
+    assert.deepEqual(got.map((l) => l.raw), [HEADER, "", '{"type":"mess', ""]);
+    assert.deepEqual(got.map((l) => l.entry !== undefined), [true, false, false, false]);
+  });
+
+  it("does not migrate: a version-1 file's lines come back as written", () => {
+    const file = write("raw1.jsonl", lines({ type: "session", id: "s" }, { type: "message", message: { role: "user", content: "x" } }));
+    assert.equal(readLines(file)[1]?.entry?.id, undefined);
+    assert.equal(parseLines('{"a":1}\n').length, 2);
   });
 });

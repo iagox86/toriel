@@ -287,7 +287,7 @@ describe("compaction in a session file", () => {
 
   it("puts a summary marker where the compaction happened and flags what the summary replaced", () => {
     const f = file([
-      { type: "session", id: "s" },
+      { type: "session", id: "s", version: 3 },
       msg("a", "user", "old question"),
       msg("b", "assistant", "old answer"),
       msg("c", "user", "recent question"),
@@ -302,6 +302,7 @@ describe("compaction in a session file", () => {
 
   it("replays the marker as its own row, after the kept rows, dimming only what it replaced", () => {
     const f = file([
+      { type: "session", id: "s", version: 3 },
       msg("a", "user", "old"),
       msg("c", "user", "kept"),
       { type: "compaction", id: "k", summary: "s", firstKeptEntryId: "c", tokensBefore: 1 },

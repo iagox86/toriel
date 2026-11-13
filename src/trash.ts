@@ -4,6 +4,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { messageText } from "./format.ts";
+import { readEntries, type SessionEntryLike } from "./session-file.ts";
 import { moveFile } from "./util.ts";
 
 /** Move `file` into `trashDir`; returns the new location. */
@@ -46,31 +47,21 @@ function describeSessionFile(file: string): Pick<TrashedSession, "sessionId" | "
   let firstMessage: string | undefined;
   let cwd: string | undefined;
   let messages = 0;
-  for (const line of fs.readFileSync(file, "utf8").split("\n")) {
-    if (!line) {
+  type Entry = SessionEntryLike & { cwd?: string; name?: string; message?: { role?: string; content?: unknown } };
+  for (const e of readEntries<Entry>(file)) {
+    if (typeof e !== "object" || e === null) {
       continue;
     }
-    try {
-      const e = JSON.parse(line) as {
-        type?: string;
-        id?: string;
-        cwd?: string;
-        name?: string;
-        message?: { role?: string; content?: unknown };
-      };
-      if (e.type === "session") {
-        sessionId = e.id;
-        cwd = e.cwd;
-      } else if (e.type === "session_info" && e.name) {
-        name = e.name;
-      } else if (e.type === "message" && (e.message?.role === "user" || e.message?.role === "assistant")) {
-        messages++;
-        if (e.message.role === "user" && firstMessage === undefined) {
-          firstMessage = messageText(e.message);
-        }
+    if (e.type === "session") {
+      sessionId = e.id;
+      cwd = e.cwd;
+    } else if (e.type === "session_info" && e.name) {
+      name = e.name;
+    } else if (e.type === "message" && (e.message?.role === "user" || e.message?.role === "assistant")) {
+      messages++;
+      if (e.message.role === "user" && firstMessage === undefined) {
+        firstMessage = messageText(e.message);
       }
-    } catch {
-      // a torn line is skipped
     }
   }
   return { sessionId, name, firstMessage, messages, cwd };

@@ -7,11 +7,11 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { parseLines, type SessionEntryLike } from "./session-file.ts";
 
-interface Entry {
-  type?: string;
+type Entry = SessionEntryLike & {
   message?: { role?: string; content?: unknown; toolCallId?: string };
-}
+};
 
 export interface Snapshot {
   /** The file the copy is made from: the session file itself, or a trimmed copy of it. */
@@ -36,15 +36,14 @@ function callIds(entry: Entry): string[] {
  * waiting for its result. `dropped` counts the lines left out.
  */
 export function settledPrefix(text: string): { text: string; dropped: number } {
-  const lines = text.split("\n").filter((l) => l.length > 0);
+  // the copy is made from the file's own lines, so no migration here
+  const parsedLines = parseLines<Entry>(text).filter((l) => l.raw.length > 0);
+  const lines = parsedLines.map((l) => l.raw);
   const pending = new Set<string>();
   let safe = 0;
   let parsed = 0;
-  for (const line of lines) {
-    let entry: Entry;
-    try {
-      entry = JSON.parse(line) as Entry;
-    } catch {
+  for (const { entry } of parsedLines) {
+    if (!entry) {
       break; // a line pi is still writing: nothing after it counts either
     }
     parsed++;
