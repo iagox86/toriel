@@ -61,6 +61,7 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: "sandbox-bwrap", level: "feature", title: 'bubblewrap works (needed only when the "sandbox" setting is "bwrap": scoped sessions run each bash command sandboxed)' },
   { id: "sleep-lock", level: "feature", title: "the machine is kept awake for scheduled runs (systemd-inhibit)" },
   { id: "clipboard", level: "feature", title: "clipboard tools for paste and copy (wl-clipboard on Wayland, xclip on X11)" },
+  { id: "tmux-keys", level: "feature", title: "tmux passes Shift+Enter through (extended-keys)" },
   { id: "truecolor", level: "feature", title: "the terminal shows toriel's theme as intended (truecolor)" },
   { id: "grants-path-rule", level: "hardening", title: "an agent cannot edit the permission grants file unasked (a path rule)", needsPermissionPackage: true },
   { id: "permission-package-scope-patch", level: "hardening", title: "the installed pi-permission-system carries the toriel scope patch (a trusted project config cannot override a scope root)", needsPermissionPackage: true },
@@ -92,6 +93,14 @@ export interface DoctorOptions extends AuditOptions {
   tty?: boolean;
   /** Runs bwrap once and says why it cannot, or undefined when it works (default: really runs it; tests inject). */
   probeBwrap?: () => string | undefined;
+  /** tmux's `extended-keys` option ("off", "on", "always"), or undefined when it cannot be read (default: asks tmux; tests inject). */
+  probeTmuxExtendedKeys?: () => string | undefined;
+}
+
+/** What tmux's `extended-keys` is set to, asked of the server this process runs under. */
+export function probeTmuxExtendedKeys(): string | undefined {
+  const r = spawnSync("tmux", ["show-options", "-gv", "extended-keys"], { encoding: "utf8", timeout: 2000 });
+  return r.error === undefined && r.status === 0 ? r.stdout.trim() || undefined : undefined;
 }
 
 /**
@@ -280,6 +289,12 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
     const term = `${env.COLORTERM ?? ""} ${env.TERM ?? ""}`;
     if (!/truecolor|24bit/i.test(term) && !/kitty|ghostty|wezterm|contour|foot/i.test(term)) {
       out.push({ id: "truecolor", level: "feature", message: "the terminal does not advertise truecolor (COLORTERM/TERM), so toriel's theme colors are approximated; a terminal with truecolor support shows them as intended", manual: "the terminal emulator's capability, not a config file" });
+    }
+  }
+  // tmux answers pi-tui's keyboard negotiation itself and, with extended-keys off, sends Shift+Enter as a plain Enter (ticket 142)
+  if (opts.tty === true && env.TMUX) {
+    if ((opts.probeTmuxExtendedKeys ?? probeTmuxExtendedKeys)() === "off") {
+      out.push({ id: "tmux-keys", level: "feature", message: "tmux has extended-keys off, so Shift+Enter sends the message instead of adding a newline (Alt+Enter works either way); add `set -g extended-keys on` to ~/.tmux.conf and reload it (`tmux source-file ~/.tmux.conf`)", manual: "~/.tmux.conf is not toriel's file, and the setting changes how tmux encodes keys for every program in it" });
     }
   }
   return out;

@@ -115,16 +115,16 @@ describe("daemon: schedules", () => {
   });
 
   it("runs --until / --while checks in the session's directory with no model call until they pass", async () => {
-    harness = await startDaemon();
+    harness = await startDaemon({ TORIEL_SCHEDULE_MIN_CHECK_MS: "1000" });
     const { c, session } = await savedSession(harness);
     const marker = `${harness.dir}/ready`;
-    const added = await c.request({ type: "schedule_add", session, mode: "every", when: ["10s", "go"], until: `test -f ${marker}` });
+    const added = await c.request({ type: "schedule_add", session, mode: "every", when: ["1s", "go"], until: `test -f ${marker}` });
     assert.match(added.echo, /until `test -f .*ready` succeeds/);
     const before = c.messages.length;
-    await new Promise((r) => setTimeout(r, 11_500));
+    await new Promise((r) => setTimeout(r, 2_500));
     assert.ok(!c.messages.slice(before).some((m) => m.type === "event" && JSON.stringify(m).includes("[scheduled #")), "nothing was sent while the file was missing");
     await import("node:fs").then((fs) => fs.writeFileSync(marker, ""));
-    await c.waitFor((m) => m.type === "event" && m.event?.type === "message_end" && JSON.stringify(m.event.message).includes("[scheduled #1, run 1]: go"), 15_000);
+    await c.waitFor((m) => m.type === "event" && m.event?.type === "message_end" && JSON.stringify(m.event.message).includes("[scheduled #1, run 1]: go"), 8_000);
     assert.deepEqual((await c.request({ type: "schedule_list", session })).schedules, []);
     await assert.rejects(c.request({ type: "schedule_add", session, mode: "in", when: ["5m", "x"], until: "true" }), /\/in|until/);
   });

@@ -9,6 +9,7 @@ import { isPlainLeft } from "./editor.ts";
 import { fmtAge } from "./format.ts";
 import { TRASH_DIR } from "./config.ts";
 import { latestClearBackup, rewindTargets } from "./rewind.ts";
+import { messagesFromFile } from "./transcript.ts";
 import type { Host } from "./host.ts";
 import type { SessionMeta } from "./shared.ts";
 import { SessionCommands } from "./session-commands.ts";
@@ -166,6 +167,7 @@ export class SessionActions {
       this.h.notify("nothing to rewind yet");
       return;
     }
+    this.syncWithFile(key);
     let targets = rewindTargets(key);
     if (targets.length === 0) {
       // an emptied session offers to undo its /clear instead
@@ -185,6 +187,30 @@ export class SessionActions {
     }
     this.h.rewindPicker.open(targets);
     this.h.tui.requestRender();
+  }
+
+  /**
+   * The picker lists the file, but a live view shows what its own child streamed, so another instance that appended to
+   * the same session file leaves entries the transcript never showed, and rewinding to one destroys messages nobody
+   * saw (ticket 127). Idle, with more messages in the file than the view holds: re-read the view from the file first, so
+   * what the picker offers is what is on screen. A running session is left alone (its file lags the stream).
+   */
+  private syncWithFile(key: string): void {
+    const view = this.h.views.get(key);
+    const meta = this.h.metaForPath(key);
+    if (!view || view.messages === undefined || view.activity || view.streaming || view.echoes.length > 0 || meta?.streaming) {
+      return;
+    }
+    let inFile: number;
+    try {
+      inFile = messagesFromFile(key).length;
+    } catch {
+      return;
+    }
+    if (inFile > view.messages) {
+      this.h.reloadView(key);
+      this.h.notify(`the session file holds ${inFile - view.messages} message${inFile - view.messages === 1 ? "" : "s"} this transcript had not shown (another toriel instance wrote to it?) - reloaded from the file`);
+    }
   }
 
   /** Keys while the rewind list is open; it swallows everything. */
