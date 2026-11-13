@@ -55,6 +55,7 @@ describe("the settings template", () => {
       summaryModel: DEFAULT_SUMMARY_MODEL,
       summaryIntervalMinutes: DEFAULT_INTERVAL_MINUTES,
       summaryMinNewMessages: DEFAULT_MIN_NEW_MESSAGES,
+      autoName: true,
       preventSleep: true,
       showExternalSessions: false,
       trashRetentionDays: DEFAULT_TRASH_RETENTION_DAYS,

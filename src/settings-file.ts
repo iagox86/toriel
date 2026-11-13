@@ -39,6 +39,7 @@ export const SETTINGS_TEMPLATE: readonly Group[] = [
     heading: "Sessions",
     entries: [
       { key: "steeringMode", value: "all", comment: ["How messages sent while the agent is working are delivered:", '"all" = together at the next turn boundary, "one-at-a-time" = pi\'s own default of one per turn.'] },
+      { key: "autoName", value: true, comment: ["Name a session nobody named from its first message, with the summary model, when its first turn ends.", "A failure only leaves the session unnamed. Names you set yourself are never replaced."] },
       { key: "preventSleep", value: true, comment: ["Keep the machine from sleeping while a session is working or a scheduled run is near (needs systemd-inhibit)."] },
       { key: "showExternalSessions", value: false, comment: ["List sessions toriel never ran (plain pi, other instances) in the switcher. /external flips it for one run."] },
       { key: "trashRetentionDays", value: 90, comment: ["Deleted sessions, and rewind and clear backups, stay in the trash this many days. 0 = keep forever."] },

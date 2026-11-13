@@ -44,6 +44,7 @@ import { collectFindings } from "./doctor.ts";
 import { DEFAULT_TRASH_RETENTION_DAYS, loadSettings } from "./settings.ts";
 import { ensureSettingsFile } from "./settings-file.ts";
 import { PROTOCOL, type UsageReport } from "./shared.ts";
+import { AutoNamer } from "./daemon-autoname.ts";
 import { DaemonNaming } from "./daemon-naming.ts";
 import { errText, rotateLog } from "./util.ts";
 
@@ -98,8 +99,10 @@ function createContext(shutdown: () => void): DaemonContext {
   const naming = new DaemonNaming(registry, hub);
   const ctx: DaemonContext = { registry, hub, children, presence, bridges, scheduler, watches: new WatchManager(scheduler, new FileWatcher()), grants, subagents: new SubagentManager(() => ctx, subagentLimits, subagentKeepMs(startSettings, process.env.TORIEL_SUBAGENT_KEEP_MS)), naming, shutdown };
   // a session going idle is what a waiting schedule is looking for, and what starts a gap loop's countdown
+  const autoNamer = new AutoNamer(naming, { log });
   children.onSettled = (s) => {
     ctx.subagents.onSettled(s);
+    void autoNamer.onSettled(s);
     if (s.sessionId) {
       ctx.scheduler.runFinished(s.sessionId);
     }

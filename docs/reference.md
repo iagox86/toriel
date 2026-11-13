@@ -367,6 +367,7 @@ A session's address is its UUID (pi's session id). toriel picks it before pi sta
   fleets); unset = your normal pi settings
 - `TORIEL_SETTINGS` - path of the toriel settings file, instead of `settings.yaml` in the config directory (see Settings)
 - `TORIEL_SUMMARY_MODEL` - model for /summarize and /why (overrides `summaryModel`)
+- `TORIEL_AUTO_NAME=0` - never name sessions automatically (the `autoName` setting does the same from the file; tests set it)
 - `TORIEL_AGENTS_DIR` - replaces the user agent-profile directory (default `~/.config/toriel/agents`; tests)
 - `TORIEL_SUBAGENT_KEEP_MS` - how long a finished subagent stays in the switcher before it is deleted (default 1800000, 30 minutes; overrides `subagentKeepMinutes`; tests)
 - `TORIEL_PERMISSIONS` - path of the permission grants file (default `$XDG_DATA_HOME/toriel/permissions.json`, mode 0600; tests)
@@ -415,7 +416,7 @@ Daemon side:
   `daemon-children.ts` (starting/stopping pi children, their events), `daemon-meta.ts` (session list per
   controller), `daemon-history.ts` (what a controller shows for a session)
 - `daemon-server.ts` (socket server), `daemon-dispatch.ts` (command -> handler), `daemon-handlers-lifecycle.ts`
-  (prompt, spawn, adopt, attach, delete, rename), `daemon-naming.ts` (the one place session names are decided, made unique and verified; docs/design.md "Naming"), `daemon-handlers-ops.ts` (model, compact, reload, clear,
+  (prompt, spawn, adopt, attach, delete, rename), `daemon-naming.ts` (the one place session names are decided, made unique and verified; docs/design.md "Naming"), `daemon-autoname.ts` (names an unnamed session from its first message with the summary model, once; an "auto" claim), `daemon-handlers-ops.ts` (model, compact, reload, clear,
   rewind, dialogs); handlers get a `DaemonContext` (`daemon-context.ts`) - no module-level mutable state
 - `presence.ts` - sessions open in external pi processes (heartbeat/pid/ghost pruning)
 - `agents.ts` (agent profile files: parse, load, launch arguments), `session-agents.ts` (profile saved per session), `agents-completion.ts` (`/new -a` completion, `/agents` panel); the shipped profiles are in `../agents/`, see `agents/README.md`

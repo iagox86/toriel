@@ -24,6 +24,8 @@ export interface TorielSettings {
   piCli?: string;
   /** Model /summarize uses (provider/id); default litellm/local-model. */
   summaryModel?: string;
+  /** Name an unnamed session from its first message with the summary model once its first turn ends (default true; a failure leaves it unnamed). */
+  autoName?: boolean;
   /** Re-summarize changed sessions this often while toriel is open (default 60; 0 = never). */
   summaryIntervalMinutes?: number;
   /** A summary is refreshed once its session has this many new messages (default 6). */
@@ -105,7 +107,7 @@ export function settingsMtime(file: string = settingsFile()): number | null {
 }
 
 const NUMBER_KEYS = ["summaryIntervalMinutes", "summaryMinNewMessages", "scheduleUsagePause", "scheduleDailyLimit", "permissionGrantLimit", "trashRetentionDays", "subagentMaxConcurrent", "subagentMaxDepth", "subagentMaxSpawns", "subagentBudgetTokens", "subagentKeepMinutes"] as const;
-const BOOLEAN_KEYS = ["warnNoPermissionSystem", "preventSleep", "showExternalSessions"] as const;
+const BOOLEAN_KEYS = ["warnNoPermissionSystem", "preventSleep", "showExternalSessions", "autoName"] as const;
 /** Number settings where 0 is a meaningful "off". */
 const ZERO_OK: readonly string[] = ["summaryIntervalMinutes", "scheduleUsagePause", "trashRetentionDays", "subagentKeepMinutes"];
 const STRING_KEYS = ["provider", "model", "thinking", "piCli", "summaryModel"] as const;
