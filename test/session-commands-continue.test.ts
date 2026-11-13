@@ -19,7 +19,11 @@ describe("/continue", () => {
     const sent: string[] = [];
     let text = "/continue and focus on the tests";
     const host = {
-      editor: { setText: (t: string) => void (text = t) },
+      editor: {
+        setText: (t: string) => {
+          text = t;
+        },
+      },
       tui: { requestRender: () => {} },
       notify: () => {},
       session: { prompt: async (p: string) => void sent.push(p) },

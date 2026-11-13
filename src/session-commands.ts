@@ -22,6 +22,7 @@ import { loadSettings, resolveChildConfig } from "./settings.ts";
 import { explainLastThinking } from "./why.ts";
 import { newView } from "./transcript.ts";
 import { continuePrompt } from "./continue-prompt.ts";
+import { styleHelp, styleListing } from "./help-format.ts";
 import { INIT_PROMPT } from "./init-prompt.ts";
 import type { SessionMeta } from "./shared.ts";
 import { runDoctorCommand } from "./doctor-commands.ts";
@@ -65,7 +66,7 @@ export class SessionCommands {
       case "unknown":
         return false;
       case "help":
-        this.h.infoPanel.show(parsed.text);
+        this.h.infoPanel.show(styleHelp(parsed.text));
         this.h.tui.requestRender();
         break;
       case "error":
@@ -101,7 +102,7 @@ export class SessionCommands {
       performance: (c) => this.performance(c.opts.model as string | undefined),
       comment: (c) => this.comment(c.args.join(" "), c.opts.clear === true),
       help: () => {
-        this.h.infoPanel.show(listing(SESSION_COMMANDS));
+        this.h.infoPanel.show(styleListing(listing(SESSION_COMMANDS)));
         this.h.tui.requestRender();
       },
       abort: () => this.abort(),
