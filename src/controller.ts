@@ -58,6 +58,7 @@ import {
 import type { ClientCommand, DaemonMessage, DistributiveOmit, SessionMeta } from "./shared.ts";
 import { drifted } from "./drift.ts";
 import { MOUSE_OFF, MOUSE_ON, mouseNotice, nextMouse, parseMouseArg } from "./mouse.ts";
+import { openUrl } from "./open-url.ts";
 import { collectFindings } from "./doctor.ts";
 import { summarizeFindings } from "./resources.ts";
 import { clearTransient, viewFromHistory } from "./resync.ts";
@@ -203,6 +204,7 @@ class Controller {
       new TuiAltScreen(new ClipboardTerminal(() => this.clip.onMiddleClick()), true, undefined, {
         wheelScrollLines: wheelScrollLines(),
         copySelection: (text) => this.clip.copyText(text),
+        openUrl: (url) => openUrl(url, (text) => this.notify(text)),
       }),
     );
     this.scroll = new ScrollView(this.chatRoot, { follow: "end", primary: true, overscroll: "chain", scrollbar: "auto" });

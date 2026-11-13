@@ -1,8 +1,9 @@
 // Small adjustments to pi's message components that pi's own options don't
 // offer: no ``` fences around code blocks, and air above user messages.
-import { AssistantMessageComponent, BashExecutionComponent, CompactionSummaryMessageComponent, UserMessageComponent } from "@earendil-works/pi-coding-agent";
+import { AssistantMessageComponent, BashExecutionComponent, CompactionSummaryMessageComponent, ToolExecutionComponent, UserMessageComponent } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { prettyError } from "./error-format.ts";
+import { linkifyLines } from "./linkify.ts";
 
 /** What pi-tui's markdown draws for a fence line; such lines are dropped. */
 export const FENCE_MARK = "⁣toriel-fence⁣";
@@ -100,6 +101,13 @@ export function fillExpandKey(line: string): string {
 export class CompactionRow extends CompactionSummaryMessageComponent {
   override render(width: number): string[] {
     return super.render(width).filter((l) => !l.includes(FENCE_MARK)).map(fillExpandKey);
+  }
+}
+
+/** pi's tool call row, with URLs in its output made clickable (linkify.ts). */
+export class ToolRow extends ToolExecutionComponent {
+  override render(width: number): string[] {
+    return linkifyLines(super.render(width), width);
   }
 }
 

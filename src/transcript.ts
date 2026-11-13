@@ -3,8 +3,7 @@
 // message/tool components; this module builds and updates them.
 import { readActiveEntries, type SessionEntryLike } from "./session-file.ts";
 import { Text, type TuiAltScreen } from "@earendil-works/pi-tui";
-import { ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
-import { AssistantMessage, BashRow, CompactionRow, UserMessage } from "./components.ts";
+import { AssistantMessage, BashRow, CompactionRow, ToolRow, UserMessage } from "./components.ts";
 import { type ActivityState, reduceActivity } from "./activity.ts";
 import { messagesAdded } from "./drift.ts";
 import { repairFences } from "./fence-repair.ts";
@@ -371,7 +370,7 @@ export function applyEvent(view: SessionView, ev: Record<string, unknown>, env: 
       break;
     }
     case "tool_execution_start": {
-      const component = new ToolExecutionComponent(
+      const component = new ToolRow(
         ev.toolName as string,
         ev.toolCallId as string,
         ev.args,
@@ -485,7 +484,7 @@ export function itemsFromMessages(messages: unknown[], tui: TuiAltScreen, cwd: s
       // interesting output (command results, file contents).
       if (m.toolName) {
         const call = m.toolCallId ? argsById.get(m.toolCallId) : undefined;
-        const component = new ToolExecutionComponent(
+        const component = new ToolRow(
           m.toolName,
           m.toolCallId ?? `replay-${items.length}`,
           call?.args ?? {},
