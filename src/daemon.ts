@@ -44,6 +44,7 @@ import { collectFindings } from "./doctor.ts";
 import { DEFAULT_TRASH_RETENTION_DAYS, loadSettings } from "./settings.ts";
 import { ensureSettingsFile } from "./settings-file.ts";
 import { PROTOCOL, type UsageReport } from "./shared.ts";
+import { DaemonNaming } from "./daemon-naming.ts";
 import { errText, rotateLog } from "./util.ts";
 
 /** Wire the daemon's collaborators together; `shutdown` is late-bound because they need each other first. */
@@ -94,7 +95,8 @@ function createContext(shutdown: () => void): DaemonContext {
     SCHEDULES_FILE,
     { ...DEFAULT_LIMITS, dailyFires: loadSettings().settings.scheduleDailyLimit ?? DEFAULT_LIMITS.dailyFires },
   );
-  const ctx: DaemonContext = { registry, hub, children, presence, bridges, scheduler, watches: new WatchManager(scheduler, new FileWatcher()), grants, subagents: new SubagentManager(() => ctx, subagentLimits, subagentKeepMs(startSettings, process.env.TORIEL_SUBAGENT_KEEP_MS)), shutdown };
+  const naming = new DaemonNaming(registry, hub);
+  const ctx: DaemonContext = { registry, hub, children, presence, bridges, scheduler, watches: new WatchManager(scheduler, new FileWatcher()), grants, subagents: new SubagentManager(() => ctx, subagentLimits, subagentKeepMs(startSettings, process.env.TORIEL_SUBAGENT_KEEP_MS)), naming, shutdown };
   // a session going idle is what a waiting schedule is looking for, and what starts a gap loop's countdown
   children.onSettled = (s) => {
     ctx.subagents.onSettled(s);
@@ -105,6 +107,7 @@ function createContext(shutdown: () => void): DaemonContext {
   };
   children.onAssistantMessage = (s, message) => ctx.subagents.onMessage(s, message);
   children.onStopped = (s, crash) => ctx.subagents.onStopped(s, crash);
+  children.onNameObserved = (s, observed) => naming.noteObserved(s, observed);
   return ctx;
 }
 

@@ -26,6 +26,7 @@ import { styleHelp, styleListing } from "./help-format.ts";
 import { INIT_PROMPT } from "./init-prompt.ts";
 import type { SessionMeta } from "./shared.ts";
 import { runDoctorCommand } from "./doctor-commands.ts";
+import { renameNotice } from "./session-id.ts";
 import { runPermissions } from "./permission-commands.ts";
 import { addSchedule, addWatch, operateSchedule, showSchedules } from "./schedule-commands.ts";
 import { errText } from "./util.ts";
@@ -287,8 +288,8 @@ export class SessionCommands {
     }
     try {
       const unique = this.h.uniqueSessionName(name, key ?? undefined);
-      await this.h.request(meta ? { type: "rename", session: meta.id, name: unique } : { type: "rename", path: key!, name: unique });
-      this.h.notify(unique === name ? `renamed to ${name}` : `renamed to ${unique} (${name} is taken)`);
+      const r = (await this.h.request(meta ? { type: "rename", session: meta.id, name: unique } : { type: "rename", path: key!, name: unique })) as { name?: string; nameVerified?: boolean } | undefined;
+      this.h.notify(renameNotice(name, r?.name ?? unique, r?.nameVerified));
     } catch (err) {
       this.fail("rename", err);
     }
@@ -401,12 +402,13 @@ export class SessionCommands {
         name: this.h.uniqueSessionName(name ?? forkName(parentName)),
         parentName,
         keepPermissions,
-      })) as { sessionId?: number; sessionUuid?: string; grantsCopied?: number };
+      })) as { sessionId?: number; sessionUuid?: string; grantsCopied?: number; name?: string; nameVerified?: boolean };
       if (typeof r?.sessionId !== "number") {
         throw new Error("no session id");
       }
       this.placeInSwitcher(meta?.sessionId ?? this.h.local.get(key)?.id, r.sessionUuid);
       const extras = [
+        r.nameVerified === false ? `pi has not confirmed the name ${r.name ?? ""}; toriel keeps asserting it` : "",
         busy ? "copied up to the last finished step; the original keeps running" : "",
         keepPermissions ? `${r.grantsCopied ?? 0} permission${r.grantsCopied === 1 ? "" : "s"} copied` : "",
       ].filter(Boolean);

@@ -9,6 +9,16 @@
 // step lasts FAKE_PI_STEP_MS (default 400). Prompts that arrive mid-run queue
 // (queue_update) and are delivered together when the turn ends, like pi's
 // steeringMode "all".
+//
+// Names (board 156). By default the name is a plain variable. FAKE_PI_NAME_MODE turns on the way real pi
+// resolves it: a name is a session_info entry written to the session file (once the file exists), a fork
+// starts as a COPY of its parent's file so it reports the parent's name until its own entry lands, and
+// get_state reports the latest entry that is still on the active branch. The mode also injects faults:
+//   file       the model only
+//   ignore:N   the first N name writes are silently dropped (the --name flag counts as the first), yet answered success
+//   fail:N     the first N set_session_name calls answer success:false
+//   delay:MS   a set_session_name is answered at once but lands MS later
+// FAKE_PI_COMPACT_ORPHANS_NAME=1 makes a compaction move the active branch off the name entries.
 import { tmpdir } from "node:os";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -29,6 +39,16 @@ if (!sessionFile) {
   sessionFile = join(dir, `${new Date().toISOString().replace(/[:.]/g, "-")}_${sessionId}.jsonl`);
 }
 let sessionName = flag("--name");
+const nameMode = process.env.FAKE_PI_NAME_MODE ?? "";
+const nameModel = nameMode !== "";
+const nameFault = (kind) => {
+  const m = new RegExp(`(?:^|,)${kind}:(\\d+)`).exec(nameMode);
+  return m ? Number(m[1]) : 0;
+};
+const nameEntries = []; // { name, orphan }
+let inheritedName;
+let nameWrites = 0; // name writes seen: the --name flag first, then each set_session_name
+let nameSetCalls = 0;
 // let tests see how the daemon launched this child
 mkdirSync(dirname(sessionFile), { recursive: true });
 writeFileSync(`${sessionFile}.argv.json`, JSON.stringify(args));
@@ -50,12 +70,48 @@ function loadMessages(file) {
   }
 }
 loadMessages(forkFrom ?? sessionFile);
+if (nameModel && forkFrom && existsSync(forkFrom)) {
+  // pi's fork is a copy of the parent's file: its entries, and so its name, come along
+  const lines = readFileSync(forkFrom, "utf8").split("\n").filter(Boolean);
+  for (const line of lines) {
+    const entry = JSON.parse(line);
+    if (entry.type === "session_info" && entry.name) {
+      inheritedName = entry.name;
+    }
+  }
+  mkdirSync(dirname(sessionFile), { recursive: true });
+  writeFileSync(sessionFile, `${[JSON.stringify({ type: "session", id: sessionId }), ...lines.filter((l) => JSON.parse(l).type !== "session")].join("\n")}\n`);
+}
+if (nameModel && existsSync(sessionFile) && !forkFrom) {
+  for (const line of readFileSync(sessionFile, "utf8").split("\n").filter(Boolean)) {
+    const entry = JSON.parse(line);
+    if (entry.type === "session_info" && entry.name) {
+      nameEntries.push({ name: entry.name, orphan: false });
+    }
+  }
+}
 
 const out = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
 const ok = (id, command, data) => out({ type: "response", id, command, success: true, data });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 let lastEntryId = null;
+
+// one name write: dropped, or kept in memory and (when the file exists) appended as a session_info entry
+function writeName(name) {
+  nameWrites++;
+  if (nameWrites <= nameFault("ignore")) {
+    return;
+  }
+  nameEntries.push({ name, orphan: false });
+  if (existsSync(sessionFile)) {
+    appendFileSync(sessionFile, `${JSON.stringify({ type: "session_info", id: randomUUID().slice(0, 8), parentId: lastEntryId, timestamp: new Date().toISOString(), name })}\n`);
+  }
+}
+const resolveName = () => (nameModel ? [...nameEntries].reverse().find((e) => !e.orphan)?.name ?? inheritedName : sessionName);
+if (nameModel && sessionName) {
+  writeName(sessionName);
+}
 let model = { provider: "fake", id: "fake-model", contextWindow: 100000 };
 let thinkingLevel = "medium";
 
@@ -203,7 +259,7 @@ async function handle(cmd) {
         isStreaming: streaming,
         sessionFile,
         sessionId,
-        sessionName,
+        sessionName: resolveName(),
         messageCount: messages.length,
         pendingMessageCount: queue.length,
       });
@@ -214,9 +270,23 @@ async function handle(cmd) {
     }
     case "get_messages":
       return ok(cmd.id, "get_messages", { messages });
-    case "set_session_name":
-      sessionName = cmd.name;
+    case "set_session_name": {
+      if (!nameModel) {
+        sessionName = cmd.name;
+        return ok(cmd.id, "set_session_name", null);
+      }
+      nameSetCalls++;
+      if (nameSetCalls <= nameFault("fail")) {
+        return out({ type: "response", id: cmd.id, command: "set_session_name", success: false, error: "name rejected" });
+      }
+      const delayMs = nameFault("delay");
+      if (delayMs > 0) {
+        setTimeout(() => writeName(cmd.name), delayMs);
+      } else {
+        writeName(cmd.name);
+      }
       return ok(cmd.id, "set_session_name", null);
+    }
     case "get_available_models":
       return ok(cmd.id, "get_available_models", {
         models: [
@@ -247,6 +317,11 @@ async function handle(cmd) {
       out({ type: "compaction_start", reason: "manual" });
       await sleep(Number(process.env.FAKE_PI_COMPACT_MS ?? 0));
       compacting = false;
+      if (process.env.FAKE_PI_COMPACT_ORPHANS_NAME === "1") {
+        for (const e of nameEntries) {
+          e.orphan = true;
+        }
+      }
       out({ type: "compaction_end", reason: "manual", result: { tokensBefore: 5000, estimatedTokensAfter: 800 }, aborted: false, willRetry: false });
       return ok(cmd.id, "compact", { summary: "s", firstKeptEntryId: "x", tokensBefore: 5000, estimatedTokensAfter: 800 });
     case "bash":

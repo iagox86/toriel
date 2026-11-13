@@ -2,6 +2,7 @@
 // explicitly instead of read from module-level state.
 import type * as net from "node:net";
 import type { BridgeTracker } from "./daemon-bridge.ts";
+import type { DaemonNaming } from "./daemon-naming.ts";
 import type { ChildManager } from "./daemon-children.ts";
 import type { ClientHub } from "./daemon-hub.ts";
 import type { WatchManager } from "./daemon-watch.ts";
@@ -28,6 +29,8 @@ export interface DaemonContext {
   grants: GrantStore;
   /** Subagents started by the toriel_agent tool (docs/design.md item 9). */
   subagents: SubagentManager;
+  /** The one authority on session names (docs/design.md "Naming"). */
+  naming: DaemonNaming;
   shutdown(): void;
 }
 

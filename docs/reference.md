@@ -415,7 +415,7 @@ Daemon side:
   `daemon-children.ts` (starting/stopping pi children, their events), `daemon-meta.ts` (session list per
   controller), `daemon-history.ts` (what a controller shows for a session)
 - `daemon-server.ts` (socket server), `daemon-dispatch.ts` (command -> handler), `daemon-handlers-lifecycle.ts`
-  (prompt, spawn, adopt, attach, delete, rename), `daemon-handlers-ops.ts` (model, compact, reload, clear,
+  (prompt, spawn, adopt, attach, delete, rename), `daemon-naming.ts` (the one place session names are decided, made unique and verified; docs/design.md "Naming"), `daemon-handlers-ops.ts` (model, compact, reload, clear,
   rewind, dialogs); handlers get a `DaemonContext` (`daemon-context.ts`) - no module-level mutable state
 - `presence.ts` - sessions open in external pi processes (heartbeat/pid/ghost pruning)
 - `agents.ts` (agent profile files: parse, load, launch arguments), `session-agents.ts` (profile saved per session), `agents-completion.ts` (`/new -a` completion, `/agents` panel); the shipped profiles are in `../agents/`, see `agents/README.md`

@@ -53,6 +53,8 @@ export class ChildManager {
   private readonly bridges: BridgeTracker;
   /** Called when a session's run settles or its compaction ends (the daemon uses it to wake waiting schedules). */
   onSettled?: (s: DaemonSession) => void;
+  /** Called with the name pi reports for a session that has a wanted name, on every refresh (the naming authority re-asserts it when they differ). */
+  onNameObserved?: (s: DaemonSession, observed: string | undefined) => void;
   /** Processes that have been spawned but whose start has not finished: not on any session yet, so a shutdown must find them here. */
   private readonly launching = new Set<RpcClient>();
   /** Called with each finished assistant message (the subagent manager counts turns and tokens with it). */
@@ -327,7 +329,11 @@ export class ChildManager {
       s.sessionFile = state.sessionFile ?? s.sessionFile;
       s.messageCount = state.messageCount;
       s.streaming = state.isStreaming;
-      s.sessionName = state.sessionName;
+      // the registry shows the name toriel decided, not whatever pi resolves (a fork starts out reporting its parent's)
+      s.sessionName = s.wantedName ?? state.sessionName;
+      if (s.wantedName !== undefined) {
+        this.onNameObserved?.(s, state.sessionName);
+      }
       s.provider = state.model?.provider;
       s.thinkingLevel = state.thinkingLevel;
       s.ctxMax = state.model?.contextWindow;
@@ -604,6 +610,10 @@ export class ChildManager {
       s.compacting = false;
       this.hub.broadcastSessions();
       this.onSettled?.(s);
+      // compaction can move the active branch off the name entry, so pi reports an older name: look now, not at the next settle
+      if (s.wantedName !== undefined) {
+        void this.refreshMeta(s).then(() => this.hub.broadcastSessions());
+      }
     }
   }
 

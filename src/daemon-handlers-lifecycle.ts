@@ -2,7 +2,6 @@
 // spawning, adopting, attaching, deleting, renaming.
 import * as fs from "node:fs";
 import type * as net from "node:net";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { findAgent } from "./agents.ts";
 import { TRASH_DIR } from "./config.ts";
 import type { Cmd, DaemonContext, Responder } from "./daemon-context.ts";
@@ -209,22 +208,22 @@ export async function handleRename(
   cmd: Cmd<"rename">,
   res: Responder,
 ): Promise<void> {
-  const name = cmd.name.trim();
-  if (!name) {
-    throw new Error("name is empty");
-  }
   const s = ctx.registry.find(cmd);
-  if (s?.child) {
-    await s.child.setSessionName(name);
-    await ctx.children.refreshMeta(s);
-    ctx.hub.broadcastSessions();
+  if (s) {
+    // a session still starting has no process to ask yet: wait for it rather than writing to a file it does not have
+    await s.starting?.catch(() => undefined);
+    // the name is decided here, unique across sessions, and checked against what pi reports; the answer says what was applied
+    const claimed = ctx.naming.claim(s, cmd.name, { source: "user" });
+    if (claimed === undefined) {
+      throw new Error("could not name the session");
+    }
+    const { name, verified } = await ctx.naming.apply(s);
+    res(true, undefined, { name, nameVerified: verified });
   } else if (cmd.path) {
-    const mgr = SessionManager.open(cmd.path);
-    mgr.appendSessionInfo(name);
+    res(true, undefined, { name: ctx.naming.renameFile(cmd.path, cmd.name), nameVerified: true });
   } else {
     throw new Error("rename requires a session or path");
   }
-  res(true);
 }
 
 /** Replace one controller's view of a live session with its current history. Needs a running child; changes nothing in the session. */
@@ -335,6 +334,9 @@ export async function handleAdopt(
   if (!cmd.cwd) {
     throw new Error("adopt requires cwd");
   }
+  if (cmd.name !== undefined && !cmd.name.trim()) {
+    throw new Error("name is empty");
+  }
   const existing = cmd.fork ? undefined : ctx.registry.byFile(cmd.path);
   if (existing?.child) {
     // already daemon-managed and live: nothing to adopt
@@ -345,12 +347,15 @@ export async function handleAdopt(
   if (s.attachedTo && s.attachedTo !== socket) {
     throw new Error("session is attached to another controller");
   }
+  // the controller's name is a request: the daemon makes it unique now (two forks at once cannot share one) and verifies it below
+  const wanted = cmd.name ? ctx.naming.claim(s, cmd.name, { source: cmd.fork ? "fork" : "user" }) : undefined;
   s.attachedTo = socket;
   s.spawning = true;
   ctx.hub.broadcastSessions();
   const parentId = sessionIdOfFile(cmd.path);
   const parentFile = cmd.path;
   const parentName = cmd.parentName ?? "(unnamed)";
+  let nameVerified = true;
   // a parent that is mid-run has a file that may end in the middle of a turn: fork from its last settled point
   const snapshot = cmd.fork ? forkSnapshot(cmd.path) : undefined;
   try {
@@ -360,19 +365,20 @@ export async function handleAdopt(
     // through start(), so a fork comes up the way every other session does (recorded as handled, bridge detected)
     await ctx.children.start(s, {
       forkPath: snapshot?.path ?? cmd.path,
-      name: cmd.name,
+      name: wanted,
       // a fork of a profiled session (a subagent, say) is the same kind of agent: same tools and scope, kept across respawns
       agent: cmd.fork ? profileOfSession(parentId) : undefined,
       appendSystemPrompt: parentId ? forkNote({ id: parentId, name: parentName, file: parentFile }) : undefined,
     });
-    if (cmd.name) {
-      await s.child?.setSessionName(cmd.name);
-      await ctx.children.refreshMeta(s);
+    if (wanted !== undefined) {
+      // not fatal: the fork's file exists already, so a name pi will not take is repaired later, not a reason to orphan it
+      nameVerified = (await ctx.naming.apply(s)).verified;
     }
     log(`session ${s.id} adopted (forked from ${cmd.path}${snapshot && snapshot.dropped > 0 ? `, without its last ${snapshot.dropped} unfinished entries` : ""})`);
   } catch (err) {
-    // do not leave a half-registered session (attached, no child) behind
+    // do not leave a half-registered session (attached, no child) behind, or one holding a name it never got
     s.attachedTo = undefined;
+    ctx.naming.release(s);
     throw err;
   } finally {
     snapshot?.cleanup();
@@ -382,7 +388,7 @@ export async function handleAdopt(
   if (parentId && s.sessionId && s.sessionFile) {
     recordFork(
       { id: parentId, name: parentName, file: parentFile },
-      { id: s.sessionId, name: cmd.name ?? s.sessionName ?? "(unnamed)", file: s.sessionFile },
+      { id: s.sessionId, name: s.sessionName ?? wanted ?? "(unnamed)", file: s.sessionFile },
     );
   }
   let grantsCopied = 0;
@@ -394,7 +400,7 @@ export async function handleAdopt(
     }
   }
   await sendHistory(ctx, socket, s);
-  res(true, undefined, { sessionId: s.id, sessionUuid: s.sessionId, grantsCopied });
+  res(true, undefined, { sessionId: s.id, sessionUuid: s.sessionId, grantsCopied, name: s.sessionName, nameVerified });
 }
 
 export function handleRestore(cmd: Cmd<"restore">, res: Responder): void {
