@@ -22,6 +22,12 @@ export interface Fix {
   file: string;
   summary: string;
   edit(config: Record<string, unknown>): Record<string, unknown>;
+  /**
+   * For a file that is not a JSON config to edit (the toriel settings file, which is YAML and may not exist
+   * yet): shows what would be written, and writes it. `apply` returns the path the original was moved
+   * to, or undefined when there was no original. `edit` is unused then.
+   */
+  custom?: { preview(): string; apply(now: Date): string | undefined };
 }
 
 /**

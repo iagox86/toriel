@@ -131,7 +131,7 @@ describe("expiredSubagents", () => {
 
 describe("keepMsFrom", () => {
   it("reads a non-negative number of ms (0 included) and falls back to 30 minutes for anything else", () => {
-    assert.deepEqual(["1500", "0", "-5", "abc", "", undefined].map(keepMsFrom), [1500, 0, 1_800_000, 1_800_000, 1_800_000, 1_800_000]);
+    assert.deepEqual(["1500", "0", "-5", "abc", "", undefined].map((raw) => keepMsFrom(raw)), [1500, 0, 1_800_000, 1_800_000, 1_800_000, 1_800_000]);
   });
 });
 

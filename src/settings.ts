@@ -1,10 +1,12 @@
-// toriel's own settings file (~/.config/toriel/settings.json). Layers, lowest
-// first: built-in defaults, this file, TORIEL_* environment variables (which
+// toriel's own settings file (~/.config/toriel/settings.yaml; a settings.json left
+// from before the YAML switch is still read until `toriel doctor --fix` converts
+// it). Layers, lowest first: built-in defaults, this file, TORIEL_* environment variables (which
 // tests and smoke runs use to isolate a daemon). The daemon reads it each time
 // it starts a child, so a change applies to new and respawned sessions without
 // a restart; its mtime tells the switcher which running sessions are behind.
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { parseDocument } from "yaml";
 import { DEFAULT_PI_CLI } from "./config.ts";
 import { errText } from "./util.ts";
 import { parseDurationText } from "./when.ts";
@@ -48,6 +50,16 @@ export interface TorielSettings {
   sandboxWritable?: string[];
   /** Deleted sessions (and rewind/clear backups) stay in the trash this many days (default 90; 0 = keep forever; read daily by the daemon). */
   trashRetentionDays?: number;
+  /** Subagents running at once, daemon-wide (default 3; read when the daemon starts). */
+  subagentMaxConcurrent?: number;
+  /** How many subagent links may sit above a session that spawns (default 1: only your own sessions spawn; at most 2; read when the daemon starts). */
+  subagentMaxDepth?: number;
+  /** Subagents one session may start over its lifetime in this daemon (default 20; read when the daemon starts). */
+  subagentMaxSpawns?: number;
+  /** Token budget of one subagent whose profile sets none (default 150000; read when the daemon starts). */
+  subagentBudgetTokens?: number;
+  /** A finished subagent stays in the switcher this many minutes before it is deleted to the trash (default 30; 0 = at once; read when the daemon starts; TORIEL_SUBAGENT_KEEP_MS wins). */
+  subagentKeepMinutes?: number;
 }
 
 /** How long the trash keeps a deleted session unless the settings say otherwise. */
@@ -62,12 +74,25 @@ export interface LoadedSettings {
   problems: string[];
 }
 
+function configDir(env: NodeJS.ProcessEnv): string {
+  return path.join(env.XDG_CONFIG_HOME ?? path.join(env.HOME ?? "", ".config"), "toriel");
+}
+
+/** Where the settings file lives (settings.yaml), whether or not it exists yet. TORIEL_SETTINGS names a file of any name. */
+export function yamlSettingsFile(env: NodeJS.ProcessEnv = process.env): string {
+  return env.TORIEL_SETTINGS || path.join(configDir(env), "settings.yaml");
+}
+
+/** The settings.json of before the YAML switch; undefined when TORIEL_SETTINGS names the file (nothing to convert). */
+export function legacySettingsFile(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return env.TORIEL_SETTINGS ? undefined : path.join(configDir(env), "settings.json");
+}
+
+/** The file settings are read from: settings.yaml, or a not-yet-converted settings.json when that is all there is. */
 export function settingsFile(env: NodeJS.ProcessEnv = process.env): string {
-  if (env.TORIEL_SETTINGS) {
-    return env.TORIEL_SETTINGS;
-  }
-  const config = env.XDG_CONFIG_HOME ?? path.join(env.HOME ?? "", ".config");
-  return path.join(config, "toriel", "settings.json");
+  const yaml = yamlSettingsFile(env);
+  const legacy = legacySettingsFile(env);
+  return legacy !== undefined && !fs.existsSync(yaml) && fs.existsSync(legacy) ? legacy : yaml;
 }
 
 /** Modification time of the settings file; null when it does not exist. */
@@ -79,11 +104,13 @@ export function settingsMtime(file: string = settingsFile()): number | null {
   }
 }
 
-const NUMBER_KEYS = ["summaryIntervalMinutes", "summaryMinNewMessages", "scheduleUsagePause", "scheduleDailyLimit", "permissionGrantLimit", "trashRetentionDays"] as const;
+const NUMBER_KEYS = ["summaryIntervalMinutes", "summaryMinNewMessages", "scheduleUsagePause", "scheduleDailyLimit", "permissionGrantLimit", "trashRetentionDays", "subagentMaxConcurrent", "subagentMaxDepth", "subagentMaxSpawns", "subagentBudgetTokens", "subagentKeepMinutes"] as const;
 const BOOLEAN_KEYS = ["warnNoPermissionSystem", "preventSleep", "showExternalSessions"] as const;
 /** Number settings where 0 is a meaningful "off". */
-const ZERO_OK: readonly string[] = ["summaryIntervalMinutes", "scheduleUsagePause", "trashRetentionDays"];
+const ZERO_OK: readonly string[] = ["summaryIntervalMinutes", "scheduleUsagePause", "trashRetentionDays", "subagentKeepMinutes"];
 const STRING_KEYS = ["provider", "model", "thinking", "piCli", "summaryModel"] as const;
+/** Every key the file may hold; the commented template (settings-file.ts) must cover all of them. */
+export const SETTING_KEYS: readonly string[] = ["steeringMode", "permissionGrantDurations", "sandbox", "sandboxWritable", "scopeGuardAcceptedAllows", ...BOOLEAN_KEYS, ...STRING_KEYS, ...NUMBER_KEYS];
 /** The surfaces a scopeGuardAcceptedAllows entry may name ("*" is the config fallback). */
 const SCOPE_GUARD_SURFACES = ["external_directory_write", "external_directory", "*"] as const;
 
@@ -130,14 +157,17 @@ function parseSettingsFile(file: string): LoadedSettings {
   } catch {
     return { settings: {}, problems: [] }; // no file is normal
   }
-  let json: unknown;
-  try {
-    json = JSON.parse(raw);
-  } catch (err) {
-    return { settings: {}, problems: [`${file}: ${errText(err)}`] };
+  // YAML, of which JSON is a subset, so a settings.json (or a TORIEL_SETTINGS file written as JSON) still reads
+  const doc = parseDocument(raw);
+  if (doc.errors.length > 0) {
+    return { settings: {}, problems: [`${file}: ${errText(doc.errors[0])}`] };
   }
-  if (typeof json !== "object" || json === null || Array.isArray(json)) {
-    return { settings: {}, problems: [`${file}: expected a JSON object`] };
+  const json: unknown = doc.toJS();
+  if (json === null || json === undefined) {
+    return { settings: {}, problems: [] }; // an empty file, or one that is all comments
+  }
+  if (typeof json !== "object" || Array.isArray(json)) {
+    return { settings: {}, problems: [`${file}: expected a mapping of setting names to values`] };
   }
   const obj = json as Record<string, unknown>;
   const settings: TorielSettings = {};

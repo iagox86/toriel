@@ -36,14 +36,15 @@ export function runDoctorCommand(h: Host, call: Invocation, opts: DoctorOptions 
   });
   h.infoPanel.show(`${report}\n\nProposed changes:\n\n${shown.join("\n\n")}`);
   if (doable.length > 0) {
-    h.choicePanel.open("Apply these changes? (each original is kept as <file>.bak-<time>)", ["Apply", "Cancel"], undefined, (choice) => {
+    h.choicePanel.open("Apply these changes? (an original is kept as <file>.bak-<time>)", ["Apply", "Cancel"], undefined, (choice) => {
       if (choice !== "Apply") {
         h.notify("doctor: nothing changed");
         return;
       }
       const results = doable.map(({ file, fixes }) => {
         try {
-          return `changed ${file} (original kept at ${applyFixes(file, fixes)})`;
+          const backup = applyFixes(file, fixes);
+          return `changed ${file}${backup ? ` (original kept at ${backup})` : ""}`;
         } catch (err) {
           return `could not change ${file}: ${errText(err)}`;
         }

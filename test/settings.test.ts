@@ -83,10 +83,32 @@ describe("loadSettings", () => {
     assert.equal(problems.length, 2);
   });
 
-  it("reports unparseable JSON without throwing", () => {
+  it("reports unparseable text without throwing", () => {
     const { settings, problems } = loadSettings(tmp("{ not json"));
     assert.deepEqual(settings, {});
     assert.equal(problems.length, 1);
+  });
+
+  it("reads YAML with comments, and an old JSON file with tab indentation", () => {
+    const yaml = loadSettings(tmp("# a comment\nmodel: m # trailing\npermissionGrantDurations: [1h, session]\nsandboxWritable:\n  - ~/.npm\n"));
+    assert.deepEqual(yaml.problems, []);
+    assert.deepEqual(yaml.settings, { model: "m", permissionGrantDurations: ["1h", "session"], sandboxWritable: ["~/.npm"] });
+    assert.deepEqual(loadSettings(tmp('{\n\t"thinking": "low"\n}\n')).settings, { thinking: "low" });
+  });
+
+  it("treats an empty file, or one that is all comments, as no settings", () => {
+    assert.deepEqual(loadSettings(tmp("")), { settings: {}, problems: [] });
+    assert.deepEqual(loadSettings(tmp("# nothing set\n# model: x\n")), { settings: {}, problems: [] });
+  });
+
+  it("refuses a file that is not a mapping, and a duplicated key", () => {
+    assert.match(loadSettings(tmp("- a\n- b\n")).problems[0] ?? "", /mapping/);
+    assert.equal(loadSettings(tmp("model: a\nmodel: b\n")).problems.length, 1);
+  });
+
+  it("takes the subagent keys, with 0 allowed only for the keep time", () => {
+    assert.deepEqual(loadSettings(tmp("subagentMaxConcurrent: 5\nsubagentKeepMinutes: 0\n")).settings, { subagentMaxConcurrent: 5, subagentKeepMinutes: 0 });
+    assert.match(loadSettings(tmp("subagentMaxConcurrent: 0\n")).problems[0] ?? "", /at least 1/);
   });
 });
 
@@ -105,8 +127,20 @@ describe("resolveChildConfig", () => {
 describe("settingsFile / settingsMtime", () => {
   it("honors TORIEL_SETTINGS, then XDG_CONFIG_HOME", () => {
     assert.equal(settingsFile({ TORIEL_SETTINGS: "/x/s.json" }), "/x/s.json");
-    assert.equal(settingsFile({ XDG_CONFIG_HOME: "/cfg", HOME: "/h" }), "/cfg/toriel/settings.json");
-    assert.equal(settingsFile({ HOME: "/h" }), "/h/.config/toriel/settings.json");
+    assert.equal(settingsFile({ XDG_CONFIG_HOME: "/cfg", HOME: "/h" }), "/cfg/toriel/settings.yaml");
+    assert.equal(settingsFile({ HOME: "/h" }), "/h/.config/toriel/settings.yaml");
+  });
+
+  it("reads a settings.json left from before the YAML switch until settings.yaml exists", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-set-"));
+    const env = { XDG_CONFIG_HOME: dir };
+    fs.mkdirSync(path.join(dir, "toriel"));
+    assert.equal(settingsFile(env), path.join(dir, "toriel", "settings.yaml"), "neither: the new name");
+    fs.writeFileSync(path.join(dir, "toriel", "settings.json"), '{"model":"old"}');
+    assert.equal(settingsFile(env), path.join(dir, "toriel", "settings.json"));
+    assert.equal(loadSettings(settingsFile(env)).settings.model, "old");
+    fs.writeFileSync(path.join(dir, "toriel", "settings.yaml"), "model: new\n");
+    assert.equal(settingsFile(env), path.join(dir, "toriel", "settings.yaml"), "both: the YAML one wins");
   });
 
   it("is null for a missing file", () => {

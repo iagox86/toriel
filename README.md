@@ -125,9 +125,15 @@ pi processes toriel did not start); continuing one in toriel forks it.
 
 ## Settings
 
-`~/.config/toriel/settings.json` (all keys optional): `steeringMode`, `provider`,
-`model`, `thinking`, `piCli`, `warnNoPermissionSystem`, `scopeGuardAcceptedAllows`, `sandbox`, `sandboxWritable`. Environment variables (`TORIEL_*`) override it.
-Full list and semantics: [docs/reference.md](docs/reference.md).
+`~/.config/toriel/settings.yaml` (all keys optional). The first time the daemon starts it writes
+this file with every setting shown commented out at its default, a comment above each saying what it does,
+so open it to see what you can change (remove the `#` to change one; one you leave alone follows
+toriel's defaults as they improve): models (`provider`, `model`, `thinking`, `summaryModel`), session behaviour
+(`steeringMode`, `preventSleep`, `showExternalSessions`, `trashRetentionDays`), summaries, scheduled
+prompts, subagent limits, permissions and the command sandbox. Edits apply to sessions started
+afterwards. Environment variables (`TORIEL_*`) override it. A `settings.json` from an earlier
+version is still read; `toriel doctor --fix` converts it. Full list and semantics:
+[docs/reference.md](docs/reference.md).
 
 ### Sandboxing agent commands (optional)
 

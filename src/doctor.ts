@@ -9,13 +9,14 @@
 // changes or goes away, change or remove its check. test/doctor.test.ts fails when a finding
 // carries an id the catalog does not list.
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, readFileSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, readFileSync, renameSync, statSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { mcpWarnings, mergeMcpServers, loadAgents } from "./agents.ts";
 import { piAgentDir } from "./pi-dir.ts";
 import { startupProblems } from "./preflight.ts";
 import { type AuditOptions, auditFindings, type Finding, type Fix, type Level, PI_RESOURCES_DIR, piPackageListed, resolution } from "./resources.ts";
-import { loadSettings, resolveChildConfig } from "./settings.ts";
+import { legacySettingsFile, loadSettings, resolveChildConfig, settingsFile, yamlSettingsFile } from "./settings.ts";
+import { convertLegacySettings, renderSettings } from "./settings-file.ts";
 import { onPathDirs as onPath, writeFileAtomic } from "./util.ts";
 
 const WEB_PACKAGE = "pi-web-access";
@@ -49,6 +50,8 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: "toriel-files", level: "required", title: "toriel's own extensions and skills are all present" },
   { id: "stale-links", level: "required", title: "no old toriel links in pi's agent directory" },
   { id: "settings", level: "recommended", title: "the toriel settings file is valid" },
+  { id: "settings-file", level: "recommended", title: "toriel has a settings file (the defaults, written out with a comment each, to edit)" },
+  { id: "settings-yaml", level: "feature", title: "the toriel settings are in settings.yaml (an old settings.json is converted, comments added)" },
   { id: "permission-package", level: "recommended", title: "pi-permission-system is installed and has a usable config" },
   { id: "grants-chain", level: "feature", title: 'permission grants are switched on ("toriel-grants" in authorizerChain)', needsPermissionPackage: true },
   { id: "mcp-git-direct", level: "feature", title: 'the git MCP server is configured with "exposure": "direct" (the code-review, git-archaeology and advisory-diff agents need it)' },
@@ -123,6 +126,61 @@ export function locatePermissionPackageSrc(piCli: string, execPath: string): str
   return undefined;
 }
 
+/** The text a fix would write, shown as added lines. */
+function asAddition(text: string): string {
+  return text.trimEnd().split("\n").map((line) => `+ ${line}`).join("\n");
+}
+
+/** No settings file at all, or an old settings.json beside no settings.yaml: each with the fix that writes the new file. */
+function settingsFileFindings(explicit: string | undefined, env: NodeJS.ProcessEnv): Finding[] {
+  const yaml = explicit ?? yamlSettingsFile(env);
+  const legacy = explicit === undefined ? legacySettingsFile(env) : undefined;
+  if (existsSync(yaml)) {
+    return [];
+  }
+  if (legacy !== undefined && existsSync(legacy)) {
+    const from = legacy;
+    return [{
+      id: "settings-yaml",
+      level: "feature",
+      message: `the toriel settings are still in ${from}; they now live in ${yaml}, a YAML file that can carry comments (the old file is still read until it is converted)`,
+      fix: {
+        file: yaml,
+        summary: `write ${yaml} from ${from}, with a comment above each setting, and set ${from} aside`,
+        edit: (c) => c,
+        custom: {
+          preview: () => `${yaml} would hold:\n${asAddition(convertLegacySettings(readFileSync(from, "utf8")))}\n${from} would be renamed (kept as a backup).`,
+          apply: (now) => {
+            // converted first, so a file that cannot be read leaves both untouched
+            const text = convertLegacySettings(readFileSync(from, "utf8"));
+            writeFileAtomic(yaml, text);
+            const backup = backupPath(from, now);
+            renameSync(from, backup);
+            return backup;
+          },
+        },
+      },
+    }];
+  }
+  return [{
+    id: "settings-file",
+    level: "recommended",
+    message: `there is no toriel settings file (${yaml}): everything runs on built-in defaults, and nothing shows which of them you can change`,
+    fix: {
+      file: yaml,
+      summary: `create ${yaml} holding the defaults, a comment above each`,
+      edit: (c) => c,
+      custom: {
+        preview: () => `${yaml} would hold:\n${asAddition(renderSettings())}`,
+        apply: () => {
+          writeFileAtomic(yaml, renderSettings());
+          return undefined;
+        },
+      },
+    },
+  }];
+}
+
 /** Everything wrong that doctor can see, graded; the resource audit's findings plus the ones that need settings and the environment. */
 export function collectFindings(opts: DoctorOptions = {}): Finding[] {
   const env = opts.env ?? process.env;
@@ -130,11 +188,13 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
   for (const message of opts.startup ?? startupProblems(env, opts.nodeVersion)) {
     out.push({ id: "startup", level: "required", message, manual: "node, the dependencies and the runtime directory belong to the machine, not to a config file doctor edits" });
   }
-  const loaded = loadSettings(opts.settingsFile);
+  const settingsPath = opts.settingsFile ?? settingsFile(env);
+  const loaded = loadSettings(settingsPath);
   out.push(...auditFindings(opts.agentDir ?? piAgentDir(), opts.root ?? PI_RESOURCES_DIR, { ...opts, scopeGuardAcceptedAllows: loaded.settings.scopeGuardAcceptedAllows }));
   for (const problem of loaded.problems) {
     out.push({ id: "settings", level: "recommended", message: `toriel settings: ${problem}`, manual: "the settings file is yours; doctor will not guess which value you meant" });
   }
+  out.push(...settingsFileFindings(opts.settingsFile, env));
   const piCli = opts.piCli ?? resolveChildConfig(loaded.settings, env).piCli;
   if (!existsSync(piCli)) {
     out.push({ id: "pi-cli", level: "required", message: `pi's cli.js is not at ${piCli}: run npm install in the toriel checkout, or set piCli in the toriel settings`, manual: "needs npm install in the checkout (a package install) or a piCli path only you know" });
@@ -399,16 +459,36 @@ export function lineDiff(before: string, after: string): string {
 
 /** What applying `fixes` to `file` would change, as a diff. Throws when the file cannot be read as a JSON object. */
 export function previewFixes(file: string, fixes: readonly Fix[]): string {
+  if (fixes.some((f) => f.custom)) {
+    requireOnlyCustom(fixes);
+    return fixes.map((f) => f.custom?.preview() ?? "").join("\n");
+  }
   const { before, after } = edited(file, fixes);
   return lineDiff(before, after);
 }
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
-/** Apply `fixes` to `file`: the original is copied to `<file>.bak-<time>` first, then the file is replaced in one step (same mode). Returns the backup's path. */
-export function applyFixes(file: string, fixes: readonly Fix[], now: Date = new Date()): string {
+/** A file's fixes are all JSON edits or all custom: a mix would silently drop one kind. */
+function requireOnlyCustom(fixes: readonly Fix[]): void {
+  if (fixes.some((f) => !f.custom)) {
+    throw new Error("cannot mix a custom fix with JSON edits for one file");
+  }
+}
+
+/** `<file>.bak-<time>`: where the original of a changed file is kept. */
+function backupPath(file: string, now: Date): string {
+  return `${file}.bak-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+}
+
+/** Apply `fixes` to `file`: the original is copied to `<file>.bak-<time>` first, then the file is replaced in one step (same mode). Returns the backup's path, or undefined when a fix created a file and there was no original. */
+export function applyFixes(file: string, fixes: readonly Fix[], now: Date = new Date()): string | undefined {
+  if (fixes.some((f) => f.custom)) {
+    requireOnlyCustom(fixes);
+    return fixes.map((f) => f.custom?.apply(now)).find((b) => b !== undefined);
+  }
   const { after } = edited(file, fixes);
-  const backup = `${file}.bak-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  const backup = backupPath(file, now);
   copyFileSync(file, backup);
   writeFileAtomic(file, `${after}\n`, statSync(file).mode & 0o777);
   return backup;

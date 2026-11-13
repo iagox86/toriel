@@ -115,7 +115,7 @@ export class SleepInhibitor {
   private giveUp(reason: string): void {
     if (!this.disabled) {
       this.disabled = true;
-      this.log(`cannot inhibit sleep (${reason}); not trying again. Set "preventSleep": false in settings.json to silence this.`);
+      this.log(`cannot inhibit sleep (${reason}); not trying again. Set preventSleep: false in the toriel settings to silence this.`);
     }
   }
 }

@@ -25,7 +25,7 @@ export const MAX_COOLDOWN_MS = 10 * 60_000;
 const SELF_PACED_FOOTER = '\n\n(Self-paced loop: when this pass is done, if more is needed call toriel_schedule_create with `when` set to how long to wait (for example "in 20m"; prefer long waits) and this same prompt, so the loop continues. If you do not, the loop ends here.)';
 
 /** Scheduled runs pause when a usage window of the session's provider reaches this percent (setting scheduleUsagePause; 0 = never). */
-const DEFAULT_USAGE_PAUSE = 95;
+export const DEFAULT_USAGE_PAUSE = 95;
 
 /** Fires later than this are labelled late in the prompt. */
 const LATE_AFTER_MS = 60_000;
