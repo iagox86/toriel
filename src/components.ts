@@ -1,10 +1,15 @@
 // Small adjustments to pi's message components that pi's own options don't
 // offer: no ``` fences around code blocks, and air above user messages.
 import { AssistantMessageComponent, BashExecutionComponent, CompactionSummaryMessageComponent, ToolExecutionComponent, UserMessageComponent } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
+import { type Component, getCapabilities, Image } from "@earendil-works/pi-tui";
+import type { ImageBlock } from "./format.ts";
 import { prettyError } from "./error-format.ts";
 import { linkifyLines } from "./linkify.ts";
 import { dim as dimText } from "./theme.ts";
+
+/** Largest a pasted image is drawn, in terminal cells (pi-tui keeps the aspect ratio). */
+const THUMB_WIDTH = 40;
+const THUMB_HEIGHT = 12;
 
 /** What pi-tui's markdown draws for a fence line; such lines are dropped. */
 export const FENCE_MARK = "⁣toriel-fence⁣";
@@ -55,13 +60,32 @@ export class AssistantMessage extends AssistantMessageComponent {
  * Fence lines are dropped as for assistant text: a large paste expands into a fenced block.
  */
 export class UserMessage extends UserMessageComponent {
-  /** Images the message carries; each is shown as a dim marker line, the image itself is not drawn. */
-  images = 0;
+  /**
+   * Images the message carries. On a terminal that draws images (kitty, iTerm2)
+   * a PNG is shown downscaled to a thumbnail; anything else, and every image on
+   * other terminals, is a dim marker line.
+   */
+  images: ImageBlock[] = [];
+  private thumbs = new Map<ImageBlock, Image>();
 
   override render(width: number): string[] {
     const lines = ["", ...super.render(width).filter((line) => !line.includes(FENCE_MARK))];
-    if (this.images > 0) {
-      lines.push(dimText(this.images === 1 ? " [image]" : ` [${this.images} images]`));
+    const drawn = getCapabilities().images !== null;
+    let marked = 0;
+    for (const image of this.images) {
+      if (drawn && image.mimeType === "image/png") {
+        let thumb = this.thumbs.get(image);
+        if (!thumb) {
+          thumb = new Image(image.data, image.mimeType, { fallbackColor: dimText }, { maxWidthCells: THUMB_WIDTH, maxHeightCells: THUMB_HEIGHT });
+          this.thumbs.set(image, thumb);
+        }
+        lines.push(...thumb.render(width));
+      } else {
+        marked += 1;
+      }
+    }
+    if (marked > 0) {
+      lines.push(dimText(marked === 1 ? " [image]" : ` [${marked} images]`));
     }
     return lines;
   }

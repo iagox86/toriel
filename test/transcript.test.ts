@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
+import { resetCapabilitiesCache, setCapabilities } from "@earendil-works/pi-tui";
 import { formatLocalCommand } from "../src/local-command.ts";
 import { applyDelta, applyEvent, type AssistantItem, dropEcho, echoUser, type Item, itemsFromFile, itemsFromMessages, errorRow, softFailure, lengthNotice, showRawError, messagesFromFile, newView, isInjectType } from "../src/transcript.ts";
 
@@ -227,7 +228,8 @@ describe("applyEvent", () => {
   it("marks images in a user message with a dim placeholder line: on replay, live, and on the local echo", () => {
     const tui = { requestRender() {} } as never;
     const img = { type: "image", data: "AAAA", mimeType: "image/png" };
-    const render = (item: Item | undefined) => (item?.component as unknown as { render(w: number): string[] }).render(60).join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+    setCapabilities({ images: null, trueColor: true, hyperlinks: true }); // whatever terminal runs the tests, draw nothing
+    const render = (item: Item | undefined) => ((item as Item).component as unknown as { render(w: number): string[] }).render(60).join("\n").replace(/\x1b\[[0-9;]*m/g, "");
     const replay = itemsFromMessages([{ role: "user", content: [{ type: "text", text: "look at this" }, img] }], tui, "/w");
     assert.match(render(replay[0]), /look at this[\s\S]*\[image\]/);
     const two = itemsFromMessages([{ role: "user", content: [{ type: "text", text: "two" }, img, img] }], tui, "/w");
@@ -238,8 +240,29 @@ describe("applyEvent", () => {
     applyEvent(newView(), { type: "message_start", message: { role: "user", content: [{ type: "text", text: "live" }, img] } }, { tui, cwd: "/w", addItem: (i: Item) => shown.push(i) });
     assert.match(render(shown[0]), /\[image\]/);
     const echoed: Item[] = [];
-    echoUser(newView(), "echo", { addItem: (i: Item) => echoed.push(i) }, 1);
+    echoUser(newView(), "echo", { addItem: (i: Item) => echoed.push(i) }, [{ data: "AAAA", mimeType: "image/png" }]);
     assert.match(render(echoed[0]), /echo[\s\S]*\[image\]/);
+    resetCapabilitiesCache();
+  });
+
+  it("draws a PNG as a downscaled image on a terminal that shows images, and still marks other types", () => {
+    const tui = { requestRender() {} } as never;
+    // a real 1x1 PNG, so pi-tui can read its size
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+    setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+    try {
+      const items = itemsFromMessages(
+        [{ role: "user", content: [{ type: "text", text: "see" }, { type: "image", data: png, mimeType: "image/png" }, { type: "image", data: "AAAA", mimeType: "image/webp" }] }],
+        tui,
+        "/w",
+      );
+      const lines = ((items[0] as Item).component as unknown as { render(w: number): string[] }).render(80);
+      assert.ok(lines.some((l) => l.includes("\x1b_G")), "the PNG is drawn");
+      assert.ok(lines.some((l) => l.includes("[image]")), "the webp, which kitty cannot take as is, is marked");
+      assert.ok(lines.length <= 1 + 3 + 12 + 1, "the thumbnail stays within its height cap");
+    } finally {
+      resetCapabilitiesCache();
+    }
   });
 
   it("draws a !command result sent to the agent as a command block, live and on replay", () => {

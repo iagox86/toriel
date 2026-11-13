@@ -388,7 +388,12 @@ Pasting and selecting (Linux; `wl-clipboard` on Wayland, `xclip` on X11):
 - `ctrl-v` pastes the clipboard: its text, or - when it holds only an image - an
   `[image #1 png 340 KB]` marker in the chat box; the picture is sent with the
   message (delete the marker to drop it). Refused with a message when the model
-  takes no images, or the image is over 8 MB. Not shown in the transcript yet.
+  takes no images, or the image is over 8 MB. In the transcript a message's
+  images show as a PNG thumbnail (at most 40 x 12 cells, aspect kept) on a
+  terminal that draws images (kitty, iTerm2; pi-tui decides, and turns it off
+  under tmux/screen), and as a dim `[image]` / `[2 images]` line everywhere
+  else and for non-PNG types. Live echo, live events and file replays all use
+  the one `UserMessage` component. The base64 stays in memory with the row.
 - Middle click pastes the primary selection (whatever you last highlighted).
 - Text selected inside toriel is copied to both the clipboard and the primary
   selection, so either paste finds it. Shift+click still hands the mouse to the

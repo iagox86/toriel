@@ -1,6 +1,7 @@
 // What the action classes need from the Controller. The Controller satisfies
 // this structurally; keeping it as an interface makes the dependency explicit
 // and lets the action classes be read (and later tested) on their own.
+import type { ImageBlock } from "./format.ts";
 import type { Attachments } from "./attachments.ts";
 import type { InputEditor } from "./editor.ts";
 import type { SessionMeta, ClientCommand, DistributiveOmit } from "./shared.ts";
@@ -55,7 +56,7 @@ export interface Host {
   reloadView(key: string): void;
   syncHistory(force?: boolean): void;
   /** Show a sent prompt immediately in the session's transcript (and start the spinner). */
-  echoPrompt(key: string, text: string, images?: number): void;
+  echoPrompt(key: string, text: string, images?: ImageBlock[]): void;
   /** `wanted`, suffixed (" #2") if another session already has that name; `selfKey` is the session being renamed. */
   uniqueSessionName(wanted: string, selfKey?: string): string;
   /** Re-read lineage.json on the next redraw (after the link between two sessions changed). */

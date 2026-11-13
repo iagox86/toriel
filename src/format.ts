@@ -57,9 +57,19 @@ export function firstMessageLabel(text: string, width: number): string {
 }
 
 /** Plain text of a message whose content is a string or content blocks. */
-/** How many image blocks a message carries (the transcript shows a marker for each; the image itself is not drawn). */
-export function imageCount(m: { content?: unknown }): number {
-  return Array.isArray(m.content) ? m.content.filter((b) => (b as { type?: string } | null)?.type === "image").length : 0;
+export interface ImageBlock {
+  data: string;
+  mimeType: string;
+}
+
+/** The image blocks a message carries (the transcript draws them, or marks them when the terminal cannot). */
+export function imageBlocks(m: { content?: unknown }): ImageBlock[] {
+  if (!Array.isArray(m.content)) {
+    return [];
+  }
+  return m.content
+    .filter((b) => (b as { type?: string } | null)?.type === "image")
+    .map((b) => ({ data: String((b as { data?: unknown }).data ?? ""), mimeType: String((b as { mimeType?: unknown }).mimeType ?? "image/png") }));
 }
 
 export function messageText(m: { content?: unknown }): string {

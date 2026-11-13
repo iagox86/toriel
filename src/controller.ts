@@ -36,7 +36,7 @@ import { buildLayouts } from "./layout.ts";
 import { dialogOwner } from "./dialog-route.ts";
 import { DEFAULT_GRANT_DURATIONS, type DialogRequest, DialogPanel, isTextDialog, withOrigin, withOwnLayout } from "./dialogs.ts";
 import { configureEditorKeys, InputEditor, } from "./editor.ts";
-import { lastLine } from "./format.ts";
+import { type ImageBlock, lastLine } from "./format.ts";
 import { RewindPicker } from "./rewind-picker.ts";
 import { CommandAutocomplete } from "./autocomplete.ts";
 import { HistorySearch } from "./history-search.ts";
@@ -740,7 +740,7 @@ class Controller {
     }
   }
 
-  echoPrompt(key: string, text: string, images = 0): void {
+  echoPrompt(key: string, text: string, images: ImageBlock[] = []): void {
     const view = this.viewFor(key);
     echoUser(view, text, { addItem: (item) => this.addItem(view, key, item) }, images);
     if (key === this.viewing) {
