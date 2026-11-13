@@ -370,6 +370,7 @@ A session's address is its UUID (pi's session id). toriel picks it before pi sta
 - `TORIEL_AUTO_NAME=0` - never name sessions automatically (the `autoName` setting does the same from the file; tests set it)
 - `TORIEL_AGENTS_DIR` - replaces the user agent-profile directory (default `~/.config/toriel/agents`; tests)
 - `TORIEL_SUBAGENT_KEEP_MS` - how long a finished subagent stays in the switcher before it is deleted (default 1800000, 30 minutes; overrides `subagentKeepMinutes`; tests)
+- `TORIEL_SCHEDULE_MIN_CHECK_MS` - shortest repeat interval of a schedule with `--until` / `--while` (default 10000; tests)
 - `TORIEL_PERMISSIONS` - path of the permission grants file (default `$XDG_DATA_HOME/toriel/permissions.json`, mode 0600; tests)
 - `TORIEL_HISTORY`, `TORIEL_LINEAGE`, `TORIEL_SESSION_AGENTS`, `TORIEL_HANDLED`, `TORIEL_FEEDBACK` - paths of the slash-command history, fork lineage, per-session agent profile, handled-files and feedback files (default: under `$XDG_DATA_HOME/toriel/`; tests)
 - `TORIEL_CACHE_TTL_FILE` - where the cache-warning extension keeps what it has learned about prompt-cache lifetimes (default `~/.config/toriel/cache-ttl.json`)
@@ -490,7 +491,7 @@ npm run lint        # biome (lint only; see ../.editorconfig for style: 2-space 
 ```
 
 - Unit tests (`test/*.test.ts`) cover the pure modules.
-- `test/daemon.test.ts` runs a real daemon in a temp dir against `test/fixtures/fake-pi.mjs`
+- `test/daemon.test.ts` (and `test/daemon-lifecycle-1..3.test.ts`, one file split three ways so node runs the parts in parallel) runs a real daemon in a temp dir against `test/fixtures/fake-pi.mjs`
   (a stub speaking enough of pi's RPC protocol); `test/helpers.ts` is the harness.
   Daemon tests set `TORIEL_PI_CLI` to point the daemon at the stub.
 - `test/smoke-client.mjs` - manual: connect to a running daemon, prompt, wait for settle.

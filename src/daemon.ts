@@ -49,6 +49,11 @@ import { DaemonNaming } from "./daemon-naming.ts";
 import { errText, rotateLog } from "./util.ts";
 
 /** Wire the daemon's collaborators together; `shutdown` is late-bound because they need each other first. */
+/** A whole number of milliseconds from an env var; anything else (unset, negative, not a number) is undefined. */
+function wholeMs(v: string | undefined): number | undefined {
+  return v !== undefined && /^\d+$/.test(v) ? Number(v) : undefined;
+}
+
 function createContext(shutdown: () => void): DaemonContext {
   const registry = new SessionRegistry();
   const presence = new Presence();
@@ -94,7 +99,12 @@ function createContext(shutdown: () => void): DaemonContext {
       },
     },
     SCHEDULES_FILE,
-    { ...DEFAULT_LIMITS, dailyFires: loadSettings().settings.scheduleDailyLimit ?? DEFAULT_LIMITS.dailyFires },
+    {
+      ...DEFAULT_LIMITS,
+      dailyFires: loadSettings().settings.scheduleDailyLimit ?? DEFAULT_LIMITS.dailyFires,
+      // tests only: a shorter floor for --until / --while checks, so a test need not wait out 10 s
+      minCheckIntervalMs: wholeMs(process.env.TORIEL_SCHEDULE_MIN_CHECK_MS) ?? DEFAULT_LIMITS.minCheckIntervalMs,
+    },
   );
   const naming = new DaemonNaming(registry, hub);
   const ctx: DaemonContext = { registry, hub, children, presence, bridges, scheduler, watches: new WatchManager(scheduler, new FileWatcher()), grants, subagents: new SubagentManager(() => ctx, subagentLimits, subagentKeepMs(startSettings, process.env.TORIEL_SUBAGENT_KEEP_MS)), naming, shutdown };
