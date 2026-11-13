@@ -3,6 +3,8 @@ import { describe, it } from "node:test";
 import { type Component, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { getScrollViewsAt, renderLayoutFrame } from "@earendil-works/pi-tui/dist/layout.js";
 import { InfoPanel, wrapHanging } from "../src/info-panel.ts";
+import { listing } from "../src/cli.ts";
+import { SESSION_COMMANDS } from "../src/commands.ts";
 import { buildLayouts } from "../src/layout.ts";
 
 describe("info panel wrapping", () => {
@@ -24,6 +26,68 @@ describe("info panel wrapping", () => {
     const lines = wrapHanging(`  - ${long}`, 30);
     assert.ok(lines[0]?.startsWith("   - alpha"));
     assert.ok(lines.slice(1).every((l) => l.startsWith("     ") && !l.startsWith("      ")), lines.join("|"));
+  });
+
+  describe("two-column rows (the /help listing)", () => {
+    const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
+    const row = "/btw [options] <question...>   ask a side question about this session; the answer pops up and the session never sees it";
+
+    it("hangs a long description under its own column, not under the name", () => {
+      const lines = wrapHanging(row, 80);
+      assert.ok(lines.length > 1);
+      const col = lines[0]?.indexOf("ask a side") as number;
+      assert.ok(col > 10);
+      for (const l of lines.slice(1)) {
+        assert.ok(l.startsWith(" ".repeat(col)) && l[col] !== " ", l);
+      }
+      assert.ok(lines.every((l) => l.length <= 80));
+    });
+
+    it("finds the column by visible position when the row is styled", () => {
+      const styled = `\x1b[36m/btw\x1b[0m \x1b[2m[options] <question...>\x1b[0m   ask a side question about this session; the answer pops up and the session never sees it`;
+      const lines = wrapHanging(styled, 80);
+      const plain = lines.map(strip);
+      assert.ok(plain.length > 1);
+      const col = plain[0]?.indexOf("ask a side") as number;
+      assert.ok(plain.slice(1).every((l) => l.startsWith(" ".repeat(col)) && l[col] !== " "), plain.join("|"));
+      assert.ok(lines[0]?.includes("\x1b[36m/btw"), "the name keeps its style");
+    });
+
+    it("keeps the description's open style on the rows it wraps onto", () => {
+      const lines = wrapHanging(`/x   \x1b[2m${"word ".repeat(30)}\x1b[0m`, 60);
+      assert.ok(lines.length > 1);
+      assert.ok(lines.slice(1).every((l) => l.includes("\x1b[2m")), lines.join("|"));
+    });
+
+    it("keeps every real /help row's description out of the next row's name column", () => {
+      const rows = listing(SESSION_COMMANDS).split("\n");
+      const out = rows.flatMap((r) => wrapHanging(r, 80));
+      assert.ok(out.length > rows.length, "some descriptions wrap at 80 columns");
+      assert.equal(out.filter((l) => /^ \//.test(l)).length, rows.filter((r) => r.startsWith("/")).length, "a row starts at the name column only for a real row");
+      assert.ok(out.every((l) => l.length <= 80));
+    });
+
+    it("leaves a row that fits alone", () => {
+      assert.deepEqual(wrapHanging("/exit    leave toriel", 80), [" /exit    leave toriel"]);
+    });
+
+    it("falls back to the old hang when the column leaves too little room", () => {
+      const lines = wrapHanging(row, 40);
+      assert.ok(lines.length > 1);
+      assert.ok(lines.slice(1).every((l) => l.startsWith(" ") && !l.startsWith("  ")), lines.join("|"));
+    });
+
+    it("hangs Options rows of a per-command page under their description", () => {
+      const lines = wrapHanging("  -l, --list    show every session that matches the name given and nothing else at all", 60);
+      const col = lines[0]?.indexOf("show every") as number;
+      assert.ok(lines.length > 1 && lines.slice(1).every((l) => l.startsWith(" ".repeat(col)) && l[col] !== " "), lines.join("|"));
+    });
+
+    it("does not treat prose with a double space as columns unless it must wrap, and then only with room", () => {
+      const lines = wrapHanging("Sentence one.  Sentence two is a good deal longer than the others and wraps.", 40);
+      assert.ok(lines.length > 1);
+      assert.ok(lines.every((l) => l.length <= 40));
+    });
   });
 
   it("leaves short lines and blank lines alone", () => {
