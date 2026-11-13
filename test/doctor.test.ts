@@ -108,6 +108,7 @@ describe("doctor checks", () => {
       setup({ config: {} }).opts,
       { ...setup({}).opts, env: { WAYLAND_DISPLAY: "wayland-0" }, pathDirs: ["/nonexistent-path"], startup: [] },
       { ...setup({}).opts, tty: true, env: { TERM: "xterm-256color" }, startup: [] },
+      { ...setup({}).opts, tty: true, env: { TMUX: "/tmp/tmux-1000/default,1,0" }, probeTmuxExtendedKeys: () => "off", startup: [] },
       setup({ gitMcp: "none" }).opts,
       setup({ gdbMcp: "none", ghidraMcp: "codemode" }).opts,
       setup({ config: { authorizerChain: ["toriel-grants"], permission: { "*": "allow", path: { "*": "allow", [GRANTS_RULE]: "ask" } } } }).opts,
@@ -187,6 +188,19 @@ describe("doctor checks", () => {
     assert.match(finding({ TERM: "xterm-256color" }, true)[0]?.message ?? "", /truecolor/);
     assert.deepEqual(finding({ COLORTERM: "truecolor", TERM: "xterm-256color" }, true), [], "COLORTERM says truecolor");
     assert.deepEqual(finding({ TERM: "xterm-kitty" }, true), [], "a known truecolor terminal by name");
+  });
+
+  it("tmux-keys: only inside tmux in a real terminal, and only when extended-keys is off (ticket 142)", () => {
+    const finding = (env: NodeJS.ProcessEnv, value: string | undefined, tty = true) =>
+      collectFindings({ ...setup({}).opts, tty, env, startup: [], probeTmuxExtendedKeys: () => value }).filter((f) => f.id === "tmux-keys");
+    const inTmux = { TMUX: "/tmp/tmux-1000/default,1,0" };
+    assert.equal(finding(inTmux, "off").length, 1);
+    assert.match(finding(inTmux, "off")[0]?.message ?? "", /extended-keys on/);
+    assert.deepEqual(finding(inTmux, "on"), []);
+    assert.deepEqual(finding(inTmux, "always"), []);
+    assert.deepEqual(finding(inTmux, undefined), [], "tmux could not be asked: no guess");
+    assert.deepEqual(finding({}, "off"), [], "not under tmux");
+    assert.deepEqual(finding(inTmux, "off", false), [], "not a real terminal");
   });
 
   it("skips the checks that need the permission package when it is not there, and says so", () => {
@@ -286,7 +300,7 @@ describe("doctor report", () => {
     assert.match(text, /Required: all 5 ok/);
     assert.match(text, /Recommended: all 3 ok/);
     assert.doesNotMatch(text, / ok {7}/);
-    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(9 ok\)/);
+    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(10 ok\)/);
   });
 });
 
@@ -315,7 +329,7 @@ describe("doctor report colours", () => {
   it("colours the compact report too, with the passing checks' count dim", () => {
     const coloured = renderDoctor(checks(), { compact: true, style: ANSI_STYLE });
     assert.match(coloured, /Required\x1b\[22m: \x1b\[32mall 5 ok\x1b\[39m/);
-    assert.match(coloured, /\x1b\[2m {2}\(9 ok\)\x1b\[22m/);
+    assert.match(coloured, /\x1b\[2m {2}\(10 ok\)\x1b\[22m/);
   });
 });
 
