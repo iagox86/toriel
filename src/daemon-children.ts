@@ -13,7 +13,7 @@ import { randomUUID } from "node:crypto";
 import { type AgentProfile, loadAgents, profileArgs } from "./agents.ts";
 import { recordHandled } from "./handled-files.ts";
 import { exitNote, stderrTail } from "./subagent-exit.ts";
-import { historyOf } from "./daemon-history.ts";
+import { historyLength } from "./daemon-history.ts";
 import { resourceArgs, SPAWN_TOOLS, TORIEL_TOOLS } from "./resources.ts";
 import { lineageArgs, loadLineage, parentMap, subagentDepth } from "./lineage.ts";
 import { sessionIdOfFile } from "./session-file.ts";
@@ -621,7 +621,7 @@ export class ChildManager {
   private async announceDigest(s: DaemonSession): Promise<void> {
     try {
       // counted the way a history replay is built, so a resync always lands on the same number
-      const messages = s.child ? (await historyOf(s)).length : undefined;
+      const messages = s.child ? await historyLength(s) : undefined;
       if (messages !== undefined) {
         this.hub.broadcast({ type: "digest", session: s.id, messages, streaming: s.streaming });
       }
