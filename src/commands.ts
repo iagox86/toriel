@@ -448,6 +448,14 @@ export const SESSION_COMMANDS = [
     description: "have the agent survey the project and write an AGENTS.md (what it is, layout, conventions); updates one that exists and folds in CLAUDE.md and other agent-instruction files",
     help: "Sends the agent a prompt to survey the project and write AGENTS.md, or update the one that exists, folding in CLAUDE.md and other agent-instruction files. The agent does the scanning with its normal tools.",
   },
+  {
+    name: "continue",
+    description: "carry on after an accidental esc: tells the agent the interruption was a mistake (optional extra instruction)",
+    help: "Sends the agent \"That interruption was accidental, please continue where you left off.\" as an ordinary prompt, so it also wakes a stopped session. Any text after the command is added as extra instruction.\n\nExamples:\n  /continue\n  /continue and focus on the tests",
+    build: (cmd) => {
+      cmd.argument("[instruction...]", "extra instruction added after the standard sentence");
+    },
+  },
   { name: "clear", description: "wipe this session's conversation and start over (same name and model; old contents go to trash)",
     help: "Empties the conversation but keeps the session, its name and model. The old contents go to trash; esc esc offers to undo it." },
   {
