@@ -16,9 +16,13 @@ const saved = process.env.XDG_DATA_HOME;
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-sw-"));
   process.env.XDG_DATA_HOME = dir;
+  // the fixtures are plain files no daemon owns; these tests are not about hiding those
+  process.env.TORIEL_SETTINGS = path.join(dir, "settings.json");
+  fs.writeFileSync(process.env.TORIEL_SETTINGS, JSON.stringify({ showExternalSessions: true }));
 });
 
 afterEach(() => {
+  delete process.env.TORIEL_SETTINGS;
   process.env.XDG_DATA_HOME = saved;
   fs.rmSync(dir, { recursive: true, force: true });
 });

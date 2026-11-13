@@ -6,7 +6,8 @@ import { describe, it } from "node:test";
 import { loadHandled, recordHandled } from "../src/handled-files.ts";
 import { isExternalRow } from "../src/session-list.ts";
 import { loadSettings } from "../src/settings.ts";
-import type { SwitcherSession } from "../src/switcher.ts";
+import { type SwitcherSession, Switcher } from "../src/switcher.ts";
+import { SwitcherActions } from "../src/switcher-actions.ts";
 
 const row = (over: Partial<SwitcherSession>): SwitcherSession => ({ key: "/s/a.jsonl", name: "a", state: "inactive", cwd: "/s", ...over }) as SwitcherSession;
 
@@ -29,6 +30,56 @@ describe("isExternalRow", () => {
     assert.equal(isExternalRow(row({}), new Set(["/s/a.jsonl"])), false);
     assert.equal(isExternalRow(row({ group: "work" }), none), false);
     assert.equal(isExternalRow(row({}), none, new Set(["/s/a.jsonl"])), false);
+  });
+});
+
+describe("the switcher list", () => {
+  function setup() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-ext-"));
+    process.env.XDG_DATA_HOME = dir;
+    process.env.TORIEL_SETTINGS = path.join(dir, "settings.json");
+    const sw = new Switcher();
+    const local = new Map(
+      ["a", "b"].map((id) => [`/s/${id}.jsonl`, { path: `/s/${id}.jsonl`, id, cwd: "/w", firstMessage: id, lastActivity: "", modified: Date.now() - 3600_000, name: id }]),
+    );
+    const host = {
+      tui: { requestRender() {}, terminal: { rows: 30 } },
+      editor: { getText: () => "", setText() {} },
+      switcher: sw,
+      sessions: new Map(),
+      local,
+      views: new Map(),
+      summaries: new Map(),
+      viewing: "/s/b.jsonl",
+      send() {},
+      notify() {},
+      request: async () => ({}),
+      uniqueSessionName: (n: string) => n,
+      metaForPath: () => undefined,
+    };
+    const actions = new SwitcherActions(host as never);
+    (host as { switching?: unknown }).switching = actions;
+    return { sw, actions, dir };
+  }
+
+  it("hides files toriel never ran, except the one being viewed, and says how many", () => {
+    const { sw, actions } = setup();
+    actions.refresh();
+    assert.deepEqual(
+      sw.sessions.map((s) => s.key),
+      ["/s/b.jsonl"],
+    );
+    assert.match(sw.filterNote, /1 outside session hidden {2}- {2}\/external show/);
+  });
+
+  it("/external show lists them all, /external hide hides them again", async () => {
+    const { sw, actions } = setup();
+    actions.refresh();
+    await actions.runCommand("/external show", undefined);
+    assert.equal(sw.sessions.length, 2);
+    assert.equal(sw.filterNote, "");
+    await actions.runCommand("/external", undefined);
+    assert.equal(sw.sessions.length, 1);
   });
 });
 
