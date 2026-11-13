@@ -64,6 +64,7 @@ describe("historyLength (the settle digest, ticket 181)", () => {
     assert.equal(await historyLength(stub(7, path.join(os.tmpdir(), "toriel-no-such-file.jsonl")).s), 7);
   });
 
+  // JSON.stringify writes the quotes inside a string value as \", so the pattern can only match a real entry's structure; keep it that way
   it("does not take a compaction word inside a message for a compaction entry", async () => {
     const file = sessionFile([{ type: "message", id: "a", message: { role: "user", content: 'the "type": "compaction" entry', timestamp: 1 } }]);
     assert.equal(await historyLength(stub(1, file).s), 1);

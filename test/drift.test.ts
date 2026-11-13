@@ -16,7 +16,9 @@ describe("messagesAdded", () => {
 
   it("counts a completed compaction once (its marker row), not an aborted or failed one", () => {
     assert.equal(messagesAdded({ type: "compaction_end", reason: "manual", result: { summary: "s", tokensBefore: 5 }, aborted: false }), 1);
-    assert.equal(messagesAdded({ type: "compaction_end", result: { tokensBefore: 5 } }), 1);
+    // messagesFromFile makes a marker only for a string summary, so that is what counts
+    assert.equal(messagesAdded({ type: "compaction_end", result: { tokensBefore: 5 } }), 0);
+    assert.equal(messagesAdded({ type: "compaction_end", result: { summary: 7 } }), 0);
     assert.equal(messagesAdded({ type: "compaction_end", result: { summary: "s" }, aborted: true }), 0);
     assert.equal(messagesAdded({ type: "compaction_end", aborted: false, errorMessage: "failed" }), 0);
     assert.equal(messagesAdded({ type: "compaction_start" }), 0);

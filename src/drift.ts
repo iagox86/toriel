@@ -10,7 +10,10 @@
  * `messagesFromFile` / `get_messages` return counts here, or the next settled digest differs by one and the
  * controller asks for a full resync (ticket 181). That is a finished message of any role the history can
  * hold (pi stores its system prompt as `system` messages), an appended message entry, and a completed
- * compaction, which adds one marker row (an aborted or failed one adds nothing).
+ * compaction, which adds one marker row (an aborted or failed one adds nothing). The invariant holds for what
+ * is reachable through toriel's event surface: pi has shapes with a row and no event (a `!command` result
+ * as `bashExecution`, branch summaries, an extension's boundary-draft compaction), but toriel never drives
+ * them, and a miss only costs one self-healing resync.
  */
 export function messagesAdded(ev: Record<string, unknown>): number {
   if (ev.type === "message_end") {
@@ -18,7 +21,9 @@ export function messagesAdded(ev: Record<string, unknown>): number {
     return role === "user" || role === "assistant" || role === "toolResult" || role === "custom" || role === "system" ? 1 : 0;
   }
   if (ev.type === "compaction_end") {
-    return ev.aborted !== true && ev.result ? 1 : 0;
+    // the same test messagesFromFile applies: a compaction entry becomes a marker only with a string summary
+    const result = ev.result as { summary?: unknown } | undefined;
+    return ev.aborted !== true && typeof result?.summary === "string" ? 1 : 0;
   }
   if (ev.type === "entry_appended") {
     return (ev.entry as { type?: string } | undefined)?.type === "custom_message" ? 1 : 0;
