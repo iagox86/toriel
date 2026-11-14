@@ -6,6 +6,7 @@
 import type { Cmd, DaemonContext, Responder } from "./daemon-context.ts";
 import { type FoundSession, findSession } from "./daemon-resolve.ts";
 import { deliverToSession } from "./daemon-handlers-bridge.ts";
+import { startOnce } from "./daemon-handlers-lifecycle.ts";
 import type { DaemonSession } from "./daemon-session.ts";
 import { log } from "./log.ts";
 import { formatReceived } from "./received.ts";
@@ -46,10 +47,15 @@ export async function deliverToTarget(ctx: DaemonContext, target: FoundSession, 
   }
   if (!s.child) {
     if (s.spawning) {
+      // a start nobody shares (not through startOnce): there is nothing to join
       throw new Error("that session is starting; try again in a moment");
     }
-    await ctx.children.start(s, { sessionFile: target.file });
-    ctx.hub.broadcastSessions();
+    // this start is the one in flight: a prompt, another message or a schedule arriving meanwhile awaits s.starting above (ticket 201)
+    const session = s;
+    await startOnce(session, async () => {
+      await ctx.children.start(session, { sessionFile: target.file });
+      ctx.hub.broadcastSessions();
+    });
   }
   const busy = s.streaming;
   const how = await deliverToSession(ctx, s, body);

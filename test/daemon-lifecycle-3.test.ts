@@ -340,6 +340,27 @@ describe("daemon: lifecycle (3/3)", () => {
     assert.match(fs.readFileSync(file, "utf8"), new RegExp(`\\[from Sender \\(${a.uuid}\\)\\]: please check X`));
   });
 
+  it("delivers two messages that arrive while the idle session they wake is still starting, once each (ticket 201)", async () => {
+    harness = await startDaemon({ FAKE_PI_STARTUP_MS: "400" });
+    const c = await harness.connect();
+    const b = await c.request({ type: "spawn", cwd: harness.dir, name: "Sleeper" });
+    await c.waitFor(() => c.sessions().some((x) => x.sessionName === "Sleeper"));
+    await c.request({ type: "prompt", session: b.sessionId, message: "first" });
+    await c.waitFor(isSettled);
+    await c.request({ type: "deactivate", session: b.sessionId });
+    const sender = await harness.connect();
+    const first = sender.request({ type: "message", to: "Sleeper", text: "bridge-one" });
+    await new Promise((r) => setTimeout(r, 100)); // the start is in flight
+    const second = sender.request({ type: "message", to: "Sleeper", text: "bridge-two" });
+    const results = await Promise.all([first, second]);
+    assert.deepEqual(results.map((r) => r.delivered), [true, true], "the second joined the start instead of being refused with 'starting; try again'");
+    const file = c.sessions().find((x) => x.id === b.sessionId)?.sessionFile as string;
+    await c.waitFor((m) => m.type === "event" && JSON.stringify(m.event ?? {}).includes("bridge-two"));
+    const text = fs.readFileSync(file, "utf8");
+    assert.equal(text.split("bridge-one").length - 1, 1, "delivered once");
+    assert.equal(text.split("bridge-two").length - 1, 1, "delivered once");
+  });
+
   it("says why a message cannot be delivered", async () => {
     harness = await startDaemon();
     const c = await harness.connect();

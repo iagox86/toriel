@@ -218,7 +218,14 @@ describe("applyEvent", () => {
     const items: Item[] = [];
     const view = newView();
     const tui = { requestRender() {} } as never;
-    const e = { tui, cwd: "/w", addItem: (i: Item) => (items.push(i), view.items.push(i)) };
+    const e = {
+      tui,
+      cwd: "/w",
+      addItem: (i: Item) => {
+        items.push(i);
+        view.items.push(i);
+      },
+    };
     const plain =(item: Item | undefined) => ((item as Item).component as unknown as { render(w: number): string[] }).render(80).join("\n").replace(/\x1b\[[0-9;]*m/g, "");
     const expand = (item: Item | undefined) => ((item as Item).component as unknown as { expanded: boolean }).expanded = true;
     applyEvent(view, { type: "tool_execution_start", toolCallId: "a", toolName: "bash", args: { command: "one" } }, e);
