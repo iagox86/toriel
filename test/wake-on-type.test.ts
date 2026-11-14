@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { mayWake, WakeOnType, wantsWake } from "../src/wake-on-type.ts";
+import { SESSION_COMMANDS } from "../src/commands.ts";
+import { mayWake, NO_CHILD_COMMANDS, WakeOnType, wantsWake } from "../src/wake-on-type.ts";
 import { type Harness, startDaemon } from "./helpers.ts";
 
 describe("wantsWake", () => {
@@ -10,8 +11,20 @@ describe("wantsWake", () => {
     for (const text of ["/", "/mc", "/mcp explore ", "!ls", "!", "  /think", "\t!pwd"]) {
       assert.equal(wantsWake(text), true, text);
     }
+    for (const text of ["/help", "/exit", "/park", "/in 5m check", "/Name x", "  /watch notes.md"]) {
+      assert.equal(wantsWake(text), false, `${text}: toriel's own, no child needed`);
+    }
     for (const text of ["", " ", "hello", "what is /etc/passwd", "a ! b", "fix this\n/mcp"]) {
       assert.equal(wantsWake(text), false, JSON.stringify(text));
+    }
+  });
+});
+
+describe("NO_CHILD_COMMANDS", () => {
+  it("only names commands that exist, so a rename cannot leave a stale entry", () => {
+    const names = new Set(SESSION_COMMANDS.map((c) => c.name));
+    for (const n of NO_CHILD_COMMANDS) {
+      assert.ok(names.has(n), `/${n} is not a session command`);
     }
   });
 });

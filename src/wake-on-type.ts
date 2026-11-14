@@ -7,9 +7,22 @@ import type { SessionMeta } from "./shared.ts";
 /** How long the text must keep starting with `/` or `!` before the session is started, so typing `/` and deleting it spawns nothing. */
 export const WAKE_DELAY_MS = 400;
 
-/** Whether the editor text is the start of a /command or a !command. */
+/**
+ * toriel's own commands that never touch the session's pi process (the ones docs/reference.md lists as leaving a
+ * sleeping session asleep, plus the ones that only leave or show toriel's state): typing one needs no wake.
+ */
+export const NO_CHILD_COMMANDS: ReadonlySet<string> = new Set([
+  "help", "exit", "quit", "mouse", "park", "name", "rename", "comment", "btw", "performance", "fork", "parent", "detach", "why", "feedback", "abort", "background",
+  "in", "at", "every", "loop", "cron", "watch", "schedules", "cancel", "pause", "resume", "fire",
+]);
+
+/** Whether the editor text is the start of a /command or a !command that needs the session awake. */
 export function wantsWake(text: string): boolean {
-  return /^\s*[/!]\S*/.test(text);
+  const m = /^\s*([/!])(\S*)/.exec(text);
+  if (!m) {
+    return false;
+  }
+  return m[1] === "!" || !NO_CHILD_COMMANDS.has((m[2] as string).toLowerCase());
 }
 
 /** What a session must be, for typing into it to start it. */
