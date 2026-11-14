@@ -360,3 +360,53 @@ describe("registration", () => {
     assert.match(v.reason ?? "", /denying/);
   });
 });
+
+describe("checkAction (toriel_permission_check, ticket 94)", () => {
+  const service = (state: string, extra: Record<string, unknown> = {}) => ({ checkPermission: () => ({ state, ...extra }) });
+  const never = async () => {
+    throw new Error("the daemon must not be asked");
+  };
+
+  it("says allow and deny with the matched rule, and never asks the daemon", async () => {
+    const allow = await ext.checkAction(service("allow", { matchedPattern: "git status*" }), sock, "u", "bash", "git status", never);
+    assert.match(allow, /^allow: bash "git status" runs without a prompt \(rule "git status\*"\)/);
+    const deny = await ext.checkAction(service("deny", { matchedPattern: "rm *", reason: "no deleting" }), sock, "u", "bash", "rm x", never);
+    assert.match(deny, /^deny: bash "rm x" is refused \(rule "rm \*"\): no deleting/);
+    assert.match(allow, /snapshot.*whether anyone is there/);
+  });
+
+  it("on ask, reports a covering grant with its expiry, or that a prompt opens", async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const timed = await ext.checkAction(service("ask"), sock, "u", "bash", "npm test", async (_s, cmd) => {
+      seen.push(cmd);
+      return { allow: true, expiresAt: new Date(2026, 10, 14, 15, 30).getTime() };
+    });
+    assert.match(timed, /^granted: bash "npm test" would ask, but a permission grant for this session covers it until 15:30/);
+    assert.deepEqual([seen[0]?.type, seen[0]?.probe, seen[0]?.uuid], ["permission_check", true, "u"]);
+    assert.match(await ext.checkAction(service("ask"), sock, "u", "bash", "x", async () => ({ allow: true, expiresAt: null })), /until the user revokes it/);
+    const ask = await ext.checkAction(service("ask"), sock, "u", "bash", "x", async () => ({ allow: false }));
+    assert.match(ask, /^ask: bash "x" opens a permission prompt/);
+    assert.match(ask, /nobody may answer/);
+  });
+
+  it("reports the policy's own answer when the daemon is silent or the session unknown", async () => {
+    const failing = await ext.checkAction(service("ask"), sock, "u", "bash", "x", never);
+    assert.match(failing, /^ask:/);
+    assert.match(await ext.checkAction(service("ask"), sock, undefined, "bash", "x", never), /^ask:/);
+  });
+
+  it("never throws: no service, a throwing service, a strange state, an empty surface", async () => {
+    assert.match(await ext.checkAction(undefined, sock, "u", "bash", "x", never), /^Cannot check: the permission system is not available.*assume any action may prompt/);
+    const boom = { checkPermission: () => { throw new Error("boom"); } };
+    assert.match(await ext.checkAction(boom, sock, "u", "bash", "x", never), /^Cannot check bash "x": boom\. Assume it may prompt/);
+    assert.match(await ext.checkAction(service("maybe"), sock, "u", "bash", "x", never), /^Cannot tell/);
+    assert.match(await ext.checkAction(service("allow"), sock, "u", " ", undefined, never), /^Give a surface/);
+  });
+
+  it("registers the tool as opt-in (not active unless a profile names it)", () => {
+    const tools: Array<Record<string, unknown>> = [];
+    ext.default({ registerTool: (t: Record<string, unknown>) => tools.push(t), events: { on() {} }, on() {} } as never);
+    assert.equal(tools[0]?.name, "toriel_permission_check");
+    assert.equal(tools[0]?.defaultActive, false);
+  });
+});

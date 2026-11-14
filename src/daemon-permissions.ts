@@ -40,6 +40,12 @@ function specsOf(v: unknown): PermissionGrantSpec[] {
 export function handlePermissionCheck(ctx: DaemonContext, cmd: Cmd<"permission_check">, res: Responder): void {
   const asked = specsOf(cmd.grants);
   const covered = typeof cmd.uuid === "string" ? ctx.grants.covers(cmd.uuid, asked) : undefined;
+  if (cmd.probe === true) {
+    // an agent asking whether it would be prompted (toriel_permission_check): no log line per probe, and no suggestion, which belongs to a real ask
+    const timed = (covered ?? []).flatMap((g) => (g.expiresAt === null ? [] : [g.expiresAt]));
+    res(true, undefined, covered ? { allow: true, grants: covered.map((g) => g.id), expiresAt: timed.length > 0 ? Math.min(...timed) : null } : { allow: false });
+    return;
+  }
   if (covered) {
     log(`permission granted by ${covered.map((g) => `#${g.id}`).join(", ")} for session ${cmd.uuid}: ${asked.map((a) => `${a.surface} ${JSON.stringify(a.pattern)}`).join(", ")}`);
     res(true, undefined, { allow: true, grants: covered.map((g) => g.id) });

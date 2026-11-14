@@ -12,7 +12,7 @@
  * older daemon or controller cannot cope with. A mismatch blocks the controller
  * (see version-check.ts); a mere code difference with the same protocol only warns.
  */
-export const PROTOCOL = 7; // 7: spawn's optional `wake` (start a sleeping session because the user typed a command into it; answers `woke: false` with a reason instead of starting a file another pi may have open); 6: 6: rename and adopt answer with the applied `name` and `nameVerified` (the daemon makes names unique); 5: file-path prompts carry grant rows, and permission_add's `dialog` (4: the watch_add command (file-trigger schedules); 3: agent_spawn's optional cwd; 2: the `cd` command and adopt's `keepPermissions`)
+export const PROTOCOL = 8; // 8: permission_check's optional `probe` (answer from the grants without remembering a suggestion for a dialog; the reply says `expiresAt`), for the toriel_permission_check tool; 7: spawn's optional `wake` (start a sleeping session because the user typed a command into it; answers `woke: false` with a reason instead of starting a file another pi may have open); 6: 6: rename and adopt answer with the applied `name` and `nameVerified` (the daemon makes names unique); 5: file-path prompts carry grant rows, and permission_add's `dialog` (4: the watch_add command (file-trigger schedules); 3: agent_spawn's optional cwd; 2: the `cd` command and adopt's `keepPermissions`)
 
 /** Which toriel code a process runs (build-id.ts). */
 export interface BuildInfo {
@@ -224,8 +224,8 @@ type ClientCommandBody =
   | { type: "schedule_list"; id?: string; session?: number; uuid?: string }
   /** Act on schedules: `ref` is "#3", "3" or a name (within the session when one is given); `all` takes every schedule in scope. */
   | { type: "schedule_op"; id?: string; op: "pause" | "resume" | "fire" | "cancel"; ref?: string; all?: boolean; session?: number; uuid?: string }
-  /** From a child's toriel-grants link (docs/permissions.md): is this ask covered by a grant? `grants` is pi's suggested session grant for it, `value` the command or target asked about. The response is {allow, grants?}; when not covered the daemon remembers the suggestion for the dialog that follows. */
-  | { type: "permission_check"; id?: string; uuid: string; grants: PermissionGrantSpec[]; value?: string }
+  /** From a child's toriel-grants link (docs/permissions.md): is this ask covered by a grant? `grants` is pi's suggested session grant for it, `value` the command or target asked about. The response is {allow, grants?}; when not covered the daemon remembers the suggestion for the dialog that follows. With `probe` it only looks: nothing is remembered, and a covered answer also carries `expiresAt` (epoch ms of the soonest-ending grant used, null = until revoked) for the toriel_permission_check tool. */
+  | { type: "permission_check"; id?: string; uuid: string; grants: PermissionGrantSpec[]; value?: string; probe?: boolean }
   /** Permission grants of one session, or of all when neither `session` nor `uuid` is given. The response is {grants: GrantView[]}. */
   | { type: "permission_list"; id?: string; session?: number; uuid?: string }
   /** Grant a surface/pattern in a session. `for` is a duration ("1h"), or "session"/"never" for no expiry (the default). `dialog` is the id of the file-path prompt being answered: required, and checked against the prompt the daemon holds, for a file-path surface (those grants come only from a prompt). */

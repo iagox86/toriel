@@ -4,7 +4,7 @@ Built 2026-11-01 (branch `permissions`): tickets #81 (grant store and chain link
 #64 (`/permissions`), #47 (grants survive restarts) and #82 (dialog rows). User-facing
 description: docs/reference.md "Permission grants". This file is the design and the record
 of why; where the build differs from the design as first written, "As built" below says so.
-Related, not built: #79 (auto-deny after a timeout), #85 (agent tool `toriel_permission_check`).
+Related: #88 (auto-deny after a timeout; not built) and #94 (agent tool `toriel_permission_check`; built, see "The agent tool" below).
 
 ## As built: where it differs from the design below
 
@@ -429,9 +429,19 @@ Items not covered are marked.
 2. #64 (the command).
 3. #82 (dialog rows).
 
+## The agent tool: `toriel_permission_check` (ticket 94)
+
+`toriel_permission_check({surface, value?})` answers, for one action, whether it would run without a prompt: `allow` or `deny` with the matched rule (pi-permission-system's read-only `checkPermission`), `ask`, or `granted ... until HH:MM` when the policy says `ask` but a toriel grant of this session covers it. It lives in `pi/extensions/toriel-grants.ts` next to the authorizer link, because that file already holds both halves: the package's service (policy) and the daemon socket (grants).
+
+- **Opt-in.** The tool is registered with `defaultActive: false` and is not in `TORIEL_TOOLS`, so a session has it only when its profile names `toriel_permission_check` in `tools` (weaker models over-call tools; the point is unattended and batch work, not checking before every command). No shipped profile names it yet.
+- **One action at a time.** There is no list-everything tool: a dump invites policy shopping, and listing stays with the user (`/permissions`).
+- **The grant half is a probe.** The extension sends `permission_check` with `probe: true` (PROTOCOL 8). The daemon answers from the grants as usual but remembers no suggestion for a dialog (a probe is not an ask, and must not take the place of a real one) and adds `expiresAt` (soonest-ending grant used; null = until revoked). It only ever reads the asking session's own grants (the UUID in the payload, the same trust as the link; see the threat model).
+- **What it cannot say.** `ask` does not mean anyone is present or would approve; the tool's answer says so, and for an unattended run tells the agent to pick an allowed route or end with exactly what needs approval. Answers go stale (timed grants, rule edits). Failure of any part (no permission system, a daemon that does not answer, a throwing service) reports what is known or "cannot tell, assume a prompt", never an error that stops the run.
+- A prompt-injected agent learns which commands are unguarded; a shell-capable agent could find that out by trial, so this adds little.
+
 ## Later, not now
 
-- `--permit "<surface> <pattern>"` on schedules, for unattended runs (pairs with #79).
+- `--permit "<surface> <pattern>"` on schedules, for unattended runs (pairs with #88).
 - A `/permissions` picker with row actions.
 - Wider hand-written patterns; per-project scope as an explicit opt-in.
 - If path-surface grants ever matter, revisit carrying a patched fork (pi's `git:`
