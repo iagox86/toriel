@@ -16,13 +16,16 @@ hours=12
 pattern=
 while [ $# -gt 0 ]; do
   case $1 in
-    --leak) mode=leak; shift; if [ $# -gt 0 ] && [ "$1" -eq "$1" ] 2>/dev/null; then hours=$1; shift; fi ;;
+    --leak) mode=leak; shift; case ${1:-} in ''|*[!0-9]*) ;; *) hours=$1; shift ;; esac ;;
     -i) insensitive=1; shift ;;
+    --) shift; if [ $# -gt 0 ]; then pattern=$1; shift; fi; break ;;
     -h|--help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) echo "procs: unknown option $1 (try --help)" >&2; exit 2 ;;
     *) pattern=$1; shift ;;
   esac
 done
+if [ $# -gt 0 ]; then echo "procs: unexpected argument $1 (try --help)" >&2; exit 2; fi
+if [ "$mode" = leak ] && [ -n "$pattern" ]; then echo "procs: --leak takes only a whole number of hours, not \"$pattern\"" >&2; exit 2; fi
 
 # the processes that started this one (the shell, the tool that ran it) are left out: their command line holds the pattern
 skip=" $$ "
@@ -31,8 +34,11 @@ while [ "${p:-0}" -gt 1 ]; do
   p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ') || break
   [ -n "$p" ] && skip="$skip$p "
 done
-# pi children (their title is rewritten to a bare "pi"), pi's cli.js, toriel's daemon and launcher, and the test fake
-[ "$mode" = leak ] && pattern='^pi( |$)|cli\.js|fake-pi\.mjs|[/ ]daemon\.ts|/toriel( |$)'
+# Anchored so that the user's own tools never show up as leaks (an agent may be tempted to stop what this lists):
+# pi children (their title is rewritten to a bare "pi"), pi-coding-agent's own cli.js, toriel's launcher and its
+# daemon.ts/toriel.ts as a script argument, and the test fake. NOT any process that merely has "cli.js" or the
+# toriel directory somewhere in its arguments (Claude Code, npm, a language server, git -C).
+[ "$mode" = leak ] && pattern='^pi( |$)|pi-coding-agent/[^ ]*cli\.js|(^|[ /])bin/toriel( |$)|(^|[ ])[^ ]*/(daemon|toriel)\.ts( |$)|fake-pi\.mjs'
 min_age=0
 [ "$mode" = leak ] && min_age=$((hours * 3600))
 
@@ -50,8 +56,9 @@ printf '%s\n' "$snap" | while read -r pid ppid age user comm; do
   case $skip in *" $pid "*) continue ;; esac
   [ "$comm" = ps ] && continue
   [ "$age" -ge "$min_age" ] || continue
-  if [ -r "/proc/$pid/cmdline" ] && cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null) && [ -n "$cmd" ]; then
-    cmd=${cmd% }
+  # the redirect is inside the group: `<` is evaluated before a trailing 2>/dev/null would apply, so a process that vanished would print an error
+  if cmd=$({ tr '\0' ' ' < "/proc/$pid/cmdline"; } 2>/dev/null) && [ -n "$cmd" ]; then
+    while [ "${cmd% }" != "$cmd" ]; do cmd=${cmd% }; done # pi pads its rewritten title with spaces
   else
     cmd="[$comm]"
   fi

@@ -512,6 +512,15 @@ describe("file watches (board 98)", () => {
     assert.equal(host.delivered.length, 6, "a paused watch delivers nothing");
   });
 
+  it("forgets an ended agent-made watch's fire times", async () => {
+    const { host, sched } = make();
+    const s = sched.add({ session: "a", prompt: "p", trigger: watch(), by: "agent", max: 1 });
+    sched.triggered(s.id);
+    await host.advance(1000);
+    assert.deepEqual(host.ended(), [[s.id, "max"]]);
+    assert.equal((sched as unknown as { watchFires: Map<number, number[]> }).watchFires.has(s.id), false);
+  });
+
   it("an agent-made watch under the hourly limit is never paused, and a person's resume starts the hour again", async () => {
     const { host, sched } = make();
     const s = sched.add({ session: "a", prompt: "p", trigger: watch(), by: "agent" });

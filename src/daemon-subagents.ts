@@ -265,7 +265,9 @@ export class SubagentManager {
   async start(parent: DaemonSession, cmd: Cmd<"agent_spawn">): Promise<SubagentRecord> {
     const ctx = this.ctx();
     const parentUuid = parent.sessionId as string;
-    const base = withResolvedModel(findAgent(cmd.agent, parent.cwd), loadSettings().settings.agentLanes, log);
+    // an explicit model replaces the profile's, so the profile's tier is not resolved (and not reported as unset) then
+    const found = findAgent(cmd.agent, parent.cwd);
+    const base = cmd.model !== undefined ? found : withResolvedModel(found, loadSettings().settings.agentLanes, log);
     if (cmd.model !== undefined && !cmd.model.includes("/")) {
       throw new Error("model must be provider/id");
     }

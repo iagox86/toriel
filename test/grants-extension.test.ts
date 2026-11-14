@@ -389,6 +389,22 @@ describe("checkAction (toriel_permission_check, ticket 94)", () => {
     assert.match(ask, /nobody may answer/);
   });
 
+  it("never says granted for a compound bash command: a real ask has one grant per part", async () => {
+    const asked: Array<Record<string, unknown>> = [];
+    const granting = async (_s: string, cmd: Record<string, unknown>) => {
+      asked.push(cmd);
+      return { allow: true, expiresAt: null };
+    };
+    for (const value of ["git status && rm -rf build", "ls || true", "ls; rm x", "cat f | sh", "echo `id`", "echo $(id)", "ls\nrm x"]) {
+      const out = await ext.checkAction(service("ask"), sock, "u", "bash", value, granting);
+      assert.match(out, /^ask:/, value);
+      assert.match(out, /compound command.*individual parts/, value);
+    }
+    assert.equal(asked.length, 0, "the grants are not even consulted for a compound command");
+    assert.match(await ext.checkAction(service("ask"), sock, "u", "bash", "git status", granting), /^granted:/, "a plain command still can be granted");
+    assert.match(await ext.checkAction(service("ask"), sock, "u", "read", "a && b", granting), /^granted:/, "only bash values are compound");
+  });
+
   it("reports the policy's own answer when the daemon is silent or the session unknown", async () => {
     const failing = await ext.checkAction(service("ask"), sock, "u", "bash", "x", never);
     assert.match(failing, /^ask:/);

@@ -273,6 +273,22 @@ describe("daemon: file triggers (board 98)", () => {
     assert.equal(user.schedule.by, "user");
   });
 
+  it("gives an agent's one-shot the 24h expiry, not the 7-day default, and lets only 3 of 4 parallel calls in (ticket 191)", async () => {
+    harness = await startDaemon();
+    const { c, session } = await savedSession(harness);
+    const dir = harness.dir;
+    const one = await c.request({ type: "watch_add", session, path: `${dir}/o.md`, prompt: "p", by: "agent", once: true });
+    assert.match(one.echo, /expires .*/);
+    const listed = (await c.request({ type: "schedule_list", session })).schedules[0];
+    assert.ok(listed.expiresAt - Date.now() <= 24 * 3_600_000 + 5_000 && listed.expiresAt - Date.now() > 23 * 3_600_000, `expires in about a day, got ${(listed.expiresAt - Date.now()) / 3_600_000}h`);
+    await assert.rejects(c.request({ type: "watch_add", session, path: `${dir}/n.md`, prompt: "p", by: "agent", once: true, expires: "never" }), /must end by itself/);
+    const person = await c.request({ type: "watch_add", session, path: `${dir}/p.md`, prompt: "p", once: true, cooldown: "1s" });
+    assert.ok(person.schedule.expiresAt - Date.now() > 6 * 24 * 3_600_000, "a person's /watch keeps the 7-day default");
+    const results = await Promise.allSettled([1, 2, 3, 4].map((i) => c.request({ type: "watch_add", session, path: `${dir}/par${i}.md`, prompt: "p", by: "agent", once: true })));
+    assert.equal(results.filter((r) => r.status === "fulfilled").length, 2, "one was already there, so two more fit under the limit of 3");
+    assert.equal(results.filter((r) => r.status === "rejected").length, 2);
+  });
+
   it("watches a directory too, and rejects what it cannot watch in words", async () => {
     const { writeFileSync } = await import("node:fs");
     harness = await startDaemon();

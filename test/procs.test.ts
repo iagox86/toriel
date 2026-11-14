@@ -53,6 +53,25 @@ describe("procs (ticket 70)", () => {
     assert.ok(!run("--leak", "1").stdout.split("\n").some((l) => l.startsWith(`${k.pid} `)), "a process seconds old is not older than an hour");
   });
 
+  it("--leak leaves out the user's own tools: a process that merely mentions cli.js or the toriel directory is not a leak", () => {
+    const own = sleeper("/x/node_modules/pi-other/cli.js", "-C", "/home/me/projects/toriel", "70-own-tools");
+    const real = sleeper("/x/node_modules/@earendil-works/pi-coding-agent/dist/cli.js", "70-real-pi");
+    const script = sleeper("/x/toriel/src/daemon.ts", "70-daemon");
+    const listed = run("--leak", "0").stdout.split("\n");
+    assert.ok(!listed.some((l) => l.startsWith(`${own.pid} `)), "cli.js of another package and a repo-dir argument");
+    assert.ok(listed.some((l) => l.startsWith(`${real.pid} `)), "pi-coding-agent's cli.js");
+    assert.ok(listed.some((l) => l.startsWith(`${script.pid} `)), "daemon.ts as a script argument");
+  });
+
+  it("takes -- before a pattern that starts with a dash, and --leak takes only whole hours", () => {
+    sleeper("--", "-dash-marker-70");
+    assert.equal(run("--", "-dash-marker-70").stdout.trim().split("\n").length, 1);
+    const r = run("--leak", "1.5");
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /whole number of hours/);
+    assert.equal(run("--leak").status, 0, "--leak alone is the default 12 hours");
+  });
+
   it("rejects an unknown option", () => {
     const r = run("--bogus");
     assert.equal(r.status, 2);

@@ -335,6 +335,7 @@ export class Scheduler {
     this.schedules.delete(s.id);
     this.retryAt.delete(s.id);
     this.held.delete(s.id);
+    this.watchFires.delete(s.id);
     this.save();
     this.host.event({ type: "ended", schedule: s, reason });
     this.host.event({ type: "changed" });

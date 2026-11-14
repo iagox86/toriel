@@ -159,7 +159,9 @@ export async function checkAction(service: Service | undefined, sock: string, uu
   if (result.state !== "ask") {
     return `Cannot tell: the permission system answered ${JSON.stringify(result.state)} for ${what}. Assume it may prompt.`;
   }
-  if (uuid) {
+  // a real ask for a compound command is one grant per part; a grant that covers the whole string says nothing about the parts, so it is never reported as "granted"
+  const compound = surface === "bash" && value !== undefined && /&&|\|\||[;|`\n]|\$\(/.test(value);
+  if (uuid && !compound) {
     try {
       const reply = await send(sock, { type: "permission_check", uuid, grants: [{ surface, pattern: value ?? "*" }], value, probe: true }, CHECK_TIMEOUT_MS);
       if (reply.allow === true) {
@@ -170,7 +172,8 @@ export async function checkAction(service: Service | undefined, sock: string, uu
       // the daemon did not answer: report the policy's own answer, which is still true
     }
   }
-  return `ask: ${what} opens a permission prompt${rule}. ${WARN} In an unattended or scheduled run nobody may answer, so prefer an allowed route, or finish by saying exactly what you need approved.`;
+  const parts = compound ? " This is a compound command (&&, ||, ;, |, a pipe, backticks or $( )): it may still prompt for its individual parts even if grants exist, so check the parts separately." : "";
+  return `ask: ${what} opens a permission prompt${rule}.${parts} ${WARN} In an unattended or scheduled run nobody may answer, so prefer an allowed route, or finish by saying exactly what you need approved.`;
 }
 
 export default function (pi: Pi) {

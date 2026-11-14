@@ -309,22 +309,23 @@ export async function handleWatchAdd(ctx: DaemonContext, cmd: Cmd<"watch_add">, 
     }
   }
   if (agent) {
-    // a trigger an agent makes must end by itself: after its first fire, or within a day
-    if (!cmd.once) {
-      if (expiresIn === undefined || expiresIn === null) {
-        throw new Error(`a file trigger you make must end by itself: set once (it ends after the first change) or expires of at most ${fmtDuration(AGENT_MAX_EXPIRY_MS)}`);
-      }
-      if (expiresIn > AGENT_MAX_EXPIRY_MS) {
-        throw new Error(`expires can be at most ${fmtDuration(AGENT_MAX_EXPIRY_MS)} for a trigger you make; ask the user if it needs longer`);
-      }
+    // a trigger an agent makes must end by itself: after its first fire, or within a day; a one-shot with no expiry of its own gets the day too (not the 7-day default: an unchanging file would hold one of the few slots for a week)
+    if (expiresIn === undefined && cmd.once) {
+      expiresIn = AGENT_MAX_EXPIRY_MS;
     }
-    const mine = ctx.scheduler.list(uuid).filter((x) => x.by === "agent" && x.trigger.kind === "watch");
-    if (mine.length >= AGENT_MAX_WATCHES) {
-      throw new Error(`this session already has ${AGENT_MAX_WATCHES} file triggers made by an agent; cancel one first (toriel_schedule_list, toriel_schedule_cancel)`);
+    if (expiresIn === undefined || expiresIn === null) {
+      throw new Error(`a file trigger you make must end by itself: set once (it ends after the first change) or expires of at most ${fmtDuration(AGENT_MAX_EXPIRY_MS)}`);
+    }
+    if (expiresIn > AGENT_MAX_EXPIRY_MS) {
+      throw new Error(`expires can be at most ${fmtDuration(AGENT_MAX_EXPIRY_MS)} for a trigger you make; ask the user if it needs longer`);
     }
   }
   const cwd = ctx.registry.all().find((x) => x.sessionId === uuid)?.cwd ?? (await findSession(ctx, uuid).then((f) => f.cwd).catch(() => undefined));
   const target = resolveWatchTarget(cmd.path, cwd, process.env.HOME);
+  // the count is read here, with no await between it and the add below: parallel calls each passing an earlier check would otherwise all get in
+  if (agent && ctx.scheduler.list(uuid).filter((x) => x.by === "agent" && x.trigger.kind === "watch").length >= AGENT_MAX_WATCHES) {
+    throw new Error(`this session already has ${AGENT_MAX_WATCHES} file triggers made by an agent; cancel one first (toriel_schedule_list, toriel_schedule_cancel)`);
+  }
   const s = ctx.scheduler.add({
     session: uuid,
     prompt,
