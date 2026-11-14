@@ -57,6 +57,9 @@ function effectiveCalls(original: readonly string[], edit: Entry | undefined): s
  * result entries answer it. A call is pending while it has a source and no answer - in either direction,
  * since a removed answer re-arms its call (pi keeps the roles of an entry a replacement swaps, so only
  * a null replacement changes what a result entry answers).
+ * The scan is file-order while pi projects only the path from the newest compaction to the leaf, so a
+ * call that only survives on an abandoned branch over-trims: the copy loses lines it need not, never
+ * hands out an unanswered call.
  */
 function safeLineCount(parsedLines: Array<{ entry?: Entry }>): number {
   const edits = new Map<string, Entry>();
@@ -103,9 +106,14 @@ function safeLineCount(parsedLines: Array<{ entry?: Entry }>): number {
       const target = entry.targetId;
       const callId = resultOf.get(target);
       if (callId !== undefined) {
-        // the target is a result entry: pi swaps only its content, so it still answers unless removed
-        if (entry.replacement === null) {
+        // the target is a result entry: pi swaps only its content, so it still answers unless removed;
+        // a repeated null edit must not double-decrement, and a non-null edit after null restores it
+        const wasGone = edits.get(target) !== undefined && edits.get(target)?.replacement === null;
+        const isGone = entry.replacement === null;
+        if (!wasGone && isGone) {
           answer(callId, -1);
+        } else if (wasGone && !isGone) {
+          answer(callId, 1);
         }
       } else {
         const original = callsOf.get(target) ?? [];
@@ -147,11 +155,6 @@ function safeLineCount(parsedLines: Array<{ entry?: Entry }>): number {
   return safe;
 }
 
-/**
- * Whether a kept line is a toolResult whose call is absent from the kept entries' projection: pi
- * (session-manager.js) still sends such a result, and the providers reject an orphan result exactly
- * like an unanswered call.
- */
 /**
  * The last `context_edit` per target entry among `kept`, in file order: pi's projection applies the
  * last edit per target (buildSessionProjection collects them with a Map set).
@@ -204,11 +207,13 @@ export function forkSnapshot(file: string, tmpDir = os.tmpdir()): Snapshot {
     }
   }
   const orphans: string[] = [];
-  let parentId: string | undefined;
-  for (let i = 0; i < entries.length; i++) {
-    if (typeof entries[i].id === "string") {
-      parentId = entries[i].id as string;
+  let lastId: string | undefined;
+  for (const e of entries) {
+    if (typeof e.id === "string") {
+      lastId = e.id as string;
     }
+  }
+  for (let i = 0; i < entries.length; i++) {
     const e = entries[i];
     if (e.type !== "message" || e.message?.role !== "toolResult" || typeof e.id !== "string" || typeof e.message.toolCallId !== "string") {
       continue;
@@ -218,7 +223,9 @@ export function forkSnapshot(file: string, tmpDir = os.tmpdir()): Snapshot {
       continue; // already out of the projection
     }
     if (!surviving.has(e.message.toolCallId)) {
-      orphans.push(`${JSON.stringify({ type: "context_edit", id: `toriel-edit-${orphans.length + 1}`, parentId, targetId: e.id, replacement: null })}\n`);
+      const id = `toriel-edit-${orphans.length + 1}`;
+      orphans.push(`${JSON.stringify({ type: "context_edit", id, parentId: lastId, targetId: e.id, replacement: null })}\n`);
+      lastId = id; // chain a second orphan edit to the first, so the leaf path keeps them all
     }
   }
   if (safe === parsedLines.length && orphans.length === 0) {

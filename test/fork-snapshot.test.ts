@@ -36,8 +36,6 @@ describe("settledPrefix", () => {
   });
 
   describe("context_edit (pi's compaction machinery, ticket 210)", () => {
-
-
     it("does not wait for the result of a call whose entry was removed, and keeps the long tail", () => {
       const text = user("hi") + withId("A", call("a")) + edit("A", null) + user("later") + call("b") + result("b") + answer;
       assert.deepEqual(settledPrefix(text), { text, dropped: 0 });
@@ -59,6 +57,18 @@ describe("settledPrefix", () => {
 
     it("ignores an edit of an entry that made no calls", () => {
       const text = user("hi") + call("a") + withId("U", user("x")) + edit("U", null) + result("a");
+      assert.deepEqual(settledPrefix(text), { text, dropped: 0 });
+    });
+
+    it("removes the answer once however many null edits target the result entry", () => {
+      const done = user("hi") + withId("A", call("a")) + result("a", "R");
+      const r = settledPrefix(done + edit("R", null) + edit("R", null) + user("later") + call("b") + result("b") + answer);
+      assert.equal(r.text, done, "the projection of the edited result has no answer, so the call is pending");
+      assert.equal(r.dropped, 6);
+    });
+
+    it("restores the answer when a non-null edit follows a null one on the result entry", () => {
+      const text = user("hi") + withId("A", call("a")) + result("a", "R") + edit("R", null) + edit("R", { content: "kept" }) + user("later") + call("b") + result("b") + answer;
       assert.deepEqual(settledPrefix(text), { text, dropped: 0 });
     });
 
@@ -136,6 +146,30 @@ describe("forkSnapshot", () => {
     assert.equal(snap.dropped, 0);
     snap.cleanup();
     assert.equal(fs.existsSync(snap.path), false);
+  });
+
+  it("parents appended orphan edits to the copy's last entry, chained among themselves", () => {
+    const dir = tmp();
+    const file = path.join(dir, "s.jsonl");
+    const whole = withId("A", call("a")) + withId("B", call("b")) + result("a", "R1") + result("b", "R2") + edit("A", null) + edit("B", null) + withId("C", user("later"));
+    fs.writeFileSync(file, whole);
+    const snap = forkSnapshot(file, dir);
+    const first = `${JSON.stringify({ type: "context_edit", id: "toriel-edit-1", parentId: "C", targetId: "R1", replacement: null })}\n`;
+    const second = `${JSON.stringify({ type: "context_edit", id: "toriel-edit-2", parentId: "toriel-edit-1", targetId: "R2", replacement: null })}\n`;
+    assert.equal(fs.readFileSync(snap.path, "utf8"), whole + first + second, "both edits chain from C, the copy's last entry with an id");
+    assert.equal(snap.dropped, 0);
+    snap.cleanup();
+  });
+
+  it("appends the edit for an orphan that already has a non-null edit of its own", () => {
+    const dir = tmp();
+    const file = path.join(dir, "s.jsonl");
+    const whole = withId("A", call("a")) + result("a", "R") + edit("R", { content: "kept" }) + edit("A", null) + withId("C", user("later"));
+    fs.writeFileSync(file, whole);
+    const snap = forkSnapshot(file, dir);
+    const appended = `${JSON.stringify({ type: "context_edit", id: "toriel-edit-1", parentId: "C", targetId: "R", replacement: null })}\n`;
+    assert.equal(fs.readFileSync(snap.path, "utf8"), whole + appended, "the appended null is the last edit, so it wins");
+    snap.cleanup();
   });
 });
 
