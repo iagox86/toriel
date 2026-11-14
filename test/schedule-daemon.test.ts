@@ -253,6 +253,26 @@ describe("daemon: file triggers (board 98)", () => {
     }
   });
 
+  it("holds a trigger an agent made to its limits (ticket 191)", async () => {
+    harness = await startDaemon();
+    const { c, session } = await savedSession(harness);
+    const dir = harness.dir;
+    const agent = (over: Record<string, unknown> = {}) => c.request({ type: "watch_add", session, path: `${dir}/a.md`, prompt: "p", by: "agent", ...over });
+    await assert.rejects(agent(), /must end by itself: set once .* or expires of at most 1d/);
+    await assert.rejects(agent({ expires: "never" }), /must end by itself/);
+    await assert.rejects(agent({ expires: "3d" }), /expires can be at most 1d/);
+    await assert.rejects(agent({ once: true, cooldown: "5s" }), /cooldown must be at least 30s/);
+    const ok = await agent({ expires: "2h" });
+    assert.match(ok.echo, /quiet 30s first/, "an agent's default quiet time is 30s");
+    assert.equal(ok.schedule.by, "agent");
+    await agent({ once: true });
+    await agent({ once: true, cooldown: "45s" });
+    await assert.rejects(agent({ once: true }), /already has 3 file triggers made by an agent/);
+    // a person is not held to those limits
+    const user = await c.request({ type: "watch_add", session, path: `${harness.dir}/u.md`, prompt: "p", cooldown: "1s" });
+    assert.equal(user.schedule.by, "user");
+  });
+
   it("watches a directory too, and rejects what it cannot watch in words", async () => {
     const { writeFileSync } = await import("node:fs");
     harness = await startDaemon();

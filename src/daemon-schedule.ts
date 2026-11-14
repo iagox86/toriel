@@ -20,6 +20,10 @@ export const DEFAULT_COOLDOWN_MS = 2000;
 /** Bounds for --cooldown: shorter and one save can become several prompts; longer and the trigger feels broken. */
 export const MIN_COOLDOWN_MS = 1000;
 export const MAX_COOLDOWN_MS = 10 * 60_000;
+/** The limits on a file trigger an agent made (ticket 191): a file that is being written all the time must not become a stream of prompts. */
+export const AGENT_MIN_COOLDOWN_MS = 30_000;
+export const AGENT_MAX_EXPIRY_MS = 24 * 3_600_000;
+export const AGENT_MAX_WATCHES = 3;
 
 /** Added to a self-paced /loop's prompt: the loop only continues if the model schedules the next run. */
 const SELF_PACED_FOOTER = '\n\n(Self-paced loop: when this pass is done, if more is needed call toriel_schedule_create with `when` set to how long to wait (for example "in 20m"; prefer long waits) and this same prompt, so the loop continues. If you do not, the loop ends here.)';
@@ -79,7 +83,8 @@ export function schedulerHost(ctx: () => DaemonContext, usage: ReadonlyMap<strin
       const late = info.lateBy > LATE_AFTER_MS ? fmtDuration(info.lateBy) : undefined;
       const paced = schedule.trigger.kind === "loop" && schedule.trigger.gapMs === undefined;
       // a file trigger tells the agent what fired it; the file's content is NOT included (the agent reads it, like anything else)
-      const prompt = paced ? `${schedule.prompt}${SELF_PACED_FOOTER}` : schedule.trigger.kind === "watch" ? `(File trigger: ${schedule.trigger.path}${schedule.trigger.dir ? "/" : ""} changed.)\n\n${schedule.prompt}` : schedule.prompt;
+      const body = paced ? `${schedule.prompt}${SELF_PACED_FOOTER}` : schedule.trigger.kind === "watch" ? `(File trigger: ${schedule.trigger.path}${schedule.trigger.dir ? "/" : ""} changed.)\n\n${schedule.prompt}` : schedule.prompt;
+      const prompt = info.note === undefined ? body : `${body}\n\n(${info.note})`;
       await deliverToTarget(c, target, formatScheduled({ id: schedule.id, name: schedule.name, run: info.run, max: schedule.max, late }, prompt));
     },
     event: (e) => {
@@ -258,8 +263,9 @@ export async function handleScheduleAdd(ctx: DaemonContext, cmd: Cmd<"schedule_a
  * /watch: a schedule whose trigger is a file change instead of a time (board 98). It is created
  * through the same Scheduler as every other schedule, so it waits for an idle session, never
  * interrupts, counts against the caps and the daily limit, expires after 7 days unless told
- * otherwise, and is listed, paused, resumed and cancelled like the rest. User-only in v1: an agent
- * watching a churning directory is a spam risk schedules do not have.
+ * otherwise, and is listed, paused, resumed and cancelled like the rest. An agent may make one too
+ * (`by: "agent"`, toriel_watch_create) under tighter limits, since an agent watching a churning
+ * directory is a spam risk schedules do not have: see AGENT_* above and the scheduler's hourly cap.
  */
 export async function handleWatchAdd(ctx: DaemonContext, cmd: Cmd<"watch_add">, res: Responder): Promise<void> {
   const uuid = scopeOf(ctx, cmd);
@@ -274,11 +280,16 @@ export async function handleWatchAdd(ctx: DaemonContext, cmd: Cmd<"watch_add">, 
   if (events !== "write" && events !== "any") {
     throw new Error('--on is "write" (created or modified, the default) or "any" (also deleted or renamed away)');
   }
-  let cooldownMs = DEFAULT_COOLDOWN_MS;
+  const by = cmd.by === "agent" ? "agent" : "user";
+  const agent = by === "agent";
+  let cooldownMs = agent ? AGENT_MIN_COOLDOWN_MS : DEFAULT_COOLDOWN_MS;
   if (cmd.cooldown !== undefined) {
     const d = parseDurationText(cmd.cooldown);
     if (!d.ok) {
       throw new Error(`--cooldown: ${d.error}`);
+    }
+    if (agent && d.ms < AGENT_MIN_COOLDOWN_MS) {
+      throw new Error(`cooldown must be at least ${fmtDuration(AGENT_MIN_COOLDOWN_MS)} for a trigger you make (it is the quiet time after the last change; a file that keeps changing would otherwise prompt you again and again)`);
     }
     if (d.ms < MIN_COOLDOWN_MS || d.ms > MAX_COOLDOWN_MS) {
       throw new Error(`--cooldown must be between ${fmtDuration(MIN_COOLDOWN_MS)} and ${fmtDuration(MAX_COOLDOWN_MS)} (the quiet time after the last change; shorter and one save can become several prompts)`);
@@ -297,6 +308,21 @@ export async function handleWatchAdd(ctx: DaemonContext, cmd: Cmd<"watch_add">, 
       expiresIn = d.ms;
     }
   }
+  if (agent) {
+    // a trigger an agent makes must end by itself: after its first fire, or within a day
+    if (!cmd.once) {
+      if (expiresIn === undefined || expiresIn === null) {
+        throw new Error(`a file trigger you make must end by itself: set once (it ends after the first change) or expires of at most ${fmtDuration(AGENT_MAX_EXPIRY_MS)}`);
+      }
+      if (expiresIn > AGENT_MAX_EXPIRY_MS) {
+        throw new Error(`expires can be at most ${fmtDuration(AGENT_MAX_EXPIRY_MS)} for a trigger you make; ask the user if it needs longer`);
+      }
+    }
+    const mine = ctx.scheduler.list(uuid).filter((x) => x.by === "agent" && x.trigger.kind === "watch");
+    if (mine.length >= AGENT_MAX_WATCHES) {
+      throw new Error(`this session already has ${AGENT_MAX_WATCHES} file triggers made by an agent; cancel one first (toriel_schedule_list, toriel_schedule_cancel)`);
+    }
+  }
   const cwd = ctx.registry.all().find((x) => x.sessionId === uuid)?.cwd ?? (await findSession(ctx, uuid).then((f) => f.cwd).catch(() => undefined));
   const target = resolveWatchTarget(cmd.path, cwd, process.env.HOME);
   const s = ctx.scheduler.add({
@@ -306,7 +332,7 @@ export async function handleWatchAdd(ctx: DaemonContext, cmd: Cmd<"watch_add">, 
     name: cmd.name,
     max: cmd.once ? 1 : undefined,
     expiresIn,
-    by: "user",
+    by,
   });
   // the scheduler's "changed" event has already armed it; a watch that could not be set up is not left behind looking healthy
   const problem = ctx.watches?.problem(s.id);

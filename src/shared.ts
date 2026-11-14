@@ -12,7 +12,7 @@
  * older daemon or controller cannot cope with. A mismatch blocks the controller
  * (see version-check.ts); a mere code difference with the same protocol only warns.
  */
-export const PROTOCOL = 8; // 8: permission_check's optional `probe` (answer from the grants without remembering a suggestion for a dialog; the reply says `expiresAt`), for the toriel_permission_check tool; 7: spawn's optional `wake` (start a sleeping session because the user typed a command into it; answers `woke: false` with a reason instead of starting a file another pi may have open); 6: 6: rename and adopt answer with the applied `name` and `nameVerified` (the daemon makes names unique); 5: file-path prompts carry grant rows, and permission_add's `dialog` (4: the watch_add command (file-trigger schedules); 3: agent_spawn's optional cwd; 2: the `cd` command and adopt's `keepPermissions`)
+export const PROTOCOL = 9; // 9: watch_add's optional `by` ("agent": a file trigger an agent made through toriel_watch_create, held to the agent limits); 8: permission_check's optional `probe` (answer from the grants without remembering a suggestion for a dialog; the reply says `expiresAt`), for the toriel_permission_check tool; 7: spawn's optional `wake` (start a sleeping session because the user typed a command into it; answers `woke: false` with a reason instead of starting a file another pi may have open); 6: 6: rename and adopt answer with the applied `name` and `nameVerified` (the daemon makes names unique); 5: file-path prompts carry grant rows, and permission_add's `dialog` (4: the watch_add command (file-trigger schedules); 3: agent_spawn's optional cwd; 2: the `cd` command and adopt's `keepPermissions`)
 
 /** Which toriel code a process runs (build-id.ts). */
 export interface BuildInfo {
@@ -205,7 +205,7 @@ type ClientCommandBody =
    * changes. A relative `path` is resolved against the session's directory. `events` "write" (the
    * default) is a create or modify, "any" also a delete or rename away; `cooldown` is the quiet time
    * after the last event ("2s" default); `once` ends it after the first fire; `expires` as for
-   * schedule_add. The response is {schedule, echo}. User-only in v1 (`by` is always "user").
+   * schedule_add. The response is {schedule, echo}. `by: "agent"` (from toriel_watch_create) adds limits: a 30s cooldown floor and default, `once` or an expiry of at most 24h, at most 3 such triggers per session, and the scheduler pauses one that fires 6 times in an hour.
    */
   | {
       type: "watch_add";
@@ -219,6 +219,8 @@ type ClientCommandBody =
       cooldown?: string;
       once?: boolean;
       expires?: string;
+      /** "agent" for a trigger made by toriel_watch_create (default "user"): the tighter limits of daemon-schedule.ts apply. */
+      by?: "user" | "agent";
     }
   /** Schedules of one session, or of all when neither `session` nor `uuid` is given. The response is {schedules: ScheduleView[]}. */
   | { type: "schedule_list"; id?: string; session?: number; uuid?: string }

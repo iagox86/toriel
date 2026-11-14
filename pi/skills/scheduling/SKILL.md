@@ -14,3 +14,13 @@ description: Send a prompt back to this session later or on a repeat with the to
 - A one-shot (`in ...`, `at ...`) removes itself after it runs: never cancel it afterwards. Only cancel a recurring schedule you made for your own follow-up, and only when what it was watching for has happened. Never cancel a schedule the user asked for (or one you cannot tell the purpose of) just because it ran: the user wanted it to keep running until they say otherwise. Recurring schedules end after 7 days anyway, and `max` caps the number of runs.
 - A scheduled prompt arrives as a user message starting `[scheduled #N ...]` and only when you are idle. Treat it as an instruction you set up earlier, not as something the user just typed.
 - Tell the user what you scheduled (what, when, and how it ends). Do not schedule on your own initiative for things the user did not ask you to follow up on.
+
+## Waiting for a file instead of polling it
+
+`toriel_watch_create` sends a prompt into this session when a file (or a directory, one level) changes: use it to wait for something another process will write (a review, a build artifact, a report) instead of a timer that keeps checking. It is deliberately limited, because a file that keeps changing would otherwise flood you with prompts:
+
+- It fires only after the file has been quiet for 30 seconds (that is also the minimum `cooldown`), so a log that is written to all the time fires rarely or never. Do not watch a log or a directory something is busily writing into.
+- It must end by itself: `once: true` (ends after the first change, the usual choice) or `expires` of at most 24 hours.
+- You may have 3 at a time, and one that fires 6 times in an hour is paused (you are told on the last prompt; the user can `/resume` it).
+- The prompt arrives with a first line naming the file; the file's content is not included, read it yourself. Write the prompt so it makes sense without this conversation.
+- `toriel_schedule_list` shows it and `toriel_schedule_cancel` removes it, like any schedule. Cancel one you made once what it was waiting for has happened.

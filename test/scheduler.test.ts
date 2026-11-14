@@ -490,6 +490,45 @@ describe("file watches (board 98)", () => {
     assert.equal(host.delivered.length, 1);
   });
 
+  it("pauses an agent-made watch after its sixth fire in an hour, telling the session on that last fire (ticket 191)", async () => {
+    const { host, sched } = make();
+    const s = sched.add({ session: "a", prompt: "p", trigger: watch(), by: "agent" });
+    for (let i = 0; i < 5; i++) {
+      sched.triggered(s.id);
+      await host.advance(60_000);
+    }
+    assert.equal(host.delivered.length, 5);
+    assert.equal(host.delivered.some((d) => d.info.note !== undefined), false, "no note before the limit");
+    assert.equal(sched.get(s.id)?.state, "active");
+    sched.triggered(s.id);
+    await host.advance(1000);
+    assert.equal(host.delivered.length, 6, "the sixth is still delivered");
+    assert.match(host.delivered[5]?.info.note ?? "", /fired 6 times in the last hour.*paused.*\/resume/);
+    assert.equal(sched.get(s.id)?.state, "paused");
+    assert.equal(sched.get(s.id)?.nextFire, undefined);
+    assert.ok(host.events.some((e) => e.type === "held" && /paused/.test(e.reason)));
+    sched.triggered(s.id);
+    await host.advance(10_000);
+    assert.equal(host.delivered.length, 6, "a paused watch delivers nothing");
+  });
+
+  it("an agent-made watch under the hourly limit is never paused, and a person's resume starts the hour again", async () => {
+    const { host, sched } = make();
+    const s = sched.add({ session: "a", prompt: "p", trigger: watch(), by: "agent" });
+    for (let i = 0; i < 8; i++) {
+      sched.triggered(s.id);
+      await host.advance(13 * 60_000); // 13 minutes apart: never six within an hour
+    }
+    assert.equal(sched.get(s.id)?.state, "active");
+    assert.equal(host.delivered.length, 8);
+    const u = sched.add({ session: "a", prompt: "p", trigger: watch({ path: "/d/other.md" }) });
+    for (let i = 0; i < 8; i++) {
+      sched.triggered(u.id);
+      await host.advance(60_000);
+    }
+    assert.equal(sched.get(u.id)?.state, "active", "the limit is for agent-made triggers: a person's keeps firing");
+  });
+
   it("--once is max 1: it ends after the first fire", async () => {
     const { host, sched } = make();
     const s = sched.add({ session: "a", prompt: "p", trigger: watch(), max: 1 });

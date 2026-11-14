@@ -50,6 +50,8 @@ export type SchedulerEvent =
 export interface FireInfo {
   /** 1-based count including this fire. */
   run: number;
+  /** Something the daemon adds to the delivered prompt: this fire is the one that pauses an agent-made file trigger. */
+  note?: string;
   /** How long after its due time it fires; the daemon labels anything long as late. */
   lateBy: number;
 }
@@ -93,11 +95,14 @@ export interface Limits {
   /** Most scheduled runs (all sessions together) in any 24 hours; the rest wait. */
   dailyFires: number;
   defaultExpiryMs: number;
+  /** An agent-made file trigger that fires this many times within an hour is paused after the last one (a log that never stops changing must not become a prompt storm; ticket 191). */
+  agentWatchFiresPerHour: number;
 }
 
-export const DEFAULT_LIMITS: Limits = { perSession: 20, agentPerSession: 10, minIntervalMs: 60_000, minCheckIntervalMs: 10_000, dailyFires: 200, defaultExpiryMs: 7 * 86_400_000 };
+export const DEFAULT_LIMITS: Limits = { perSession: 20, agentPerSession: 10, minIntervalMs: 60_000, minCheckIntervalMs: 10_000, dailyFires: 200, defaultExpiryMs: 7 * 86_400_000, agentWatchFiresPerHour: 6 };
 
 const MAX_FAILURES = 5;
+const HOUR_MS = 3_600_000;
 const RETRY_MS = 30_000;
 /** A session that is not ready is checked again this often even without a nudge. */
 const WAIT_POLL_MS = 5_000;
@@ -119,6 +124,8 @@ export class Scheduler {
   private ticking = false;
   private again = false;
   private readonly retryAt = new Map<number, number>();
+  /** When each agent-made file trigger last fired (within the hour), for the hourly cap; memory only: a daemon restart starts the hour again. */
+  private readonly watchFires = new Map<number, number[]>();
   private fireLog: number[] = [];
   private readonly held = new Map<number, string>();
 
@@ -257,6 +264,7 @@ export class Scheduler {
 
   resume(id: number): Schedule {
     const s = this.require(id);
+    this.watchFires.delete(id); // a person resuming it starts the hour again
     const t = this.host.now();
     s.state = "active";
     s.failures = undefined;
@@ -449,13 +457,21 @@ export class Scheduler {
         return;
       }
     }
+    // an agent-made file trigger that has fired its hourly allowance is delivered one last time, with a note saying why it is then paused
+    let capNote: string | undefined;
+    if (s.by === "agent" && s.trigger.kind === "watch") {
+      const earlier = (this.watchFires.get(s.id) ?? []).filter((at) => at > t - HOUR_MS);
+      if (earlier.length + 1 >= this.limits.agentWatchFiresPerHour) {
+        capNote = `This file trigger has now fired ${earlier.length + 1} times in the last hour, the limit for triggers an agent made, so it is paused. Say so to the user if it matters; they can /resume it.`;
+      }
+    }
     // a watch's pending fire is consumed before delivery, so a file event that arrives while the prompt is being delivered is a new fire, not lost
     const watching = s.trigger.kind === "watch";
     if (watching) {
       s.nextFire = undefined;
     }
     try {
-      await this.host.deliver(s, { run, lateBy: Math.max(0, t - due) });
+      await this.host.deliver(s, { run, lateBy: Math.max(0, t - due), note: capNote });
     } catch (err) {
       if (watching && s.nextFire === undefined) {
         s.nextFire = due; // not delivered: still due, retried after RETRY_MS
@@ -469,6 +485,9 @@ export class Scheduler {
     s.fired = run;
     s.lastFire = t;
     this.fireLog.push(t);
+    if (s.by === "agent" && s.trigger.kind === "watch") {
+      this.watchFires.set(s.id, [...(this.watchFires.get(s.id) ?? []).filter((at) => at > t - HOUR_MS), t]);
+    }
     s.failures = undefined;
     s.lastError = undefined;
     this.retryAt.delete(s.id);
@@ -477,6 +496,11 @@ export class Scheduler {
       this.end(s, "completed");
     } else if (s.max !== undefined && run >= s.max) {
       this.end(s, "max");
+    } else if (watching && capNote !== undefined) {
+      s.state = "paused";
+      s.nextFire = undefined;
+      this.changed();
+      this.host.event({ type: "held", schedule: s, reason: `it fired ${this.limits.agentWatchFiresPerHour} times in an hour, the limit for agent-made file triggers; paused (/resume to continue)` });
     } else if (watching) {
       this.changed(); // keeps waiting for the next change (nextFire stays whatever an event during delivery made it)
     } else {

@@ -37,7 +37,7 @@ In the session list (not inside a session) the user also has `/new` (start a ses
 ## What you can do yourself
 
 - `toriel_message` - tell another session something (only when the user asks; see `messaging`).
-- `toriel_schedule_create`, `toriel_schedule_list`, `toriel_schedule_cancel` - follow-ups for yourself (see `scheduling`).
+- `toriel_schedule_create`, `toriel_schedule_list`, `toriel_schedule_cancel` - follow-ups for yourself (see `scheduling`); `toriel_watch_create` - a follow-up when a file changes, with limits (see `scheduling`).
 - `toriel_agent`, `toriel_agents` - hand a bounded task to a subagent (see `delegating`), where your profile allows it.
 - `toriel_usage` - the model provider's quota and spend, when asked.
 - `toriel_job` - read or stop a command you started with `run_in_background`.
