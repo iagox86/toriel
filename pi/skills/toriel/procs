@@ -1,0 +1,66 @@
+#!/bin/sh
+# procs: list processes one per line with their REAL command line, for grepping.
+#
+#   procs [-i] [PATTERN]      processes whose full command line matches the extended regex PATTERN (all when omitted)
+#   procs --leak [HOURS]      toriel/pi-related processes older than HOURS (default 12): daemons, pi children, test fakes
+#
+# Why not `ps | grep`: pi rewrites its process title, so `ps` shows just "pi" and the session file and flags
+# are gone; /proc/<pid>/cmdline keeps the real argv. Each line is: PID PPID AGE USER COMMAND (the argv joined
+# by spaces; kernel threads show their name in brackets). Age is d/h/m/s. It leaves out itself and the processes that started it.
+# Needs only sh, ps and /proc (Linux).
+set -eu
+
+mode=match
+insensitive=
+hours=12
+pattern=
+while [ $# -gt 0 ]; do
+  case $1 in
+    --leak) mode=leak; shift; if [ $# -gt 0 ] && [ "$1" -eq "$1" ] 2>/dev/null; then hours=$1; shift; fi ;;
+    -i) insensitive=1; shift ;;
+    -h|--help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -*) echo "procs: unknown option $1 (try --help)" >&2; exit 2 ;;
+    *) pattern=$1; shift ;;
+  esac
+done
+
+# the processes that started this one (the shell, the tool that ran it) are left out: their command line holds the pattern
+skip=" $$ "
+p=$$
+while [ "${p:-0}" -gt 1 ]; do
+  p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ') || break
+  [ -n "$p" ] && skip="$skip$p "
+done
+# pi children (their title is rewritten to a bare "pi"), pi's cli.js, toriel's daemon and launcher, and the test fake
+[ "$mode" = leak ] && pattern='^pi( |$)|cli\.js|fake-pi\.mjs|[/ ]daemon\.ts|/toriel( |$)'
+min_age=0
+[ "$mode" = leak ] && min_age=$((hours * 3600))
+
+human() {
+  s=$1
+  if [ "$s" -ge 86400 ]; then printf '%dd%dh' $((s / 86400)) $((s % 86400 / 3600))
+  elif [ "$s" -ge 3600 ]; then printf '%dh%dm' $((s / 3600)) $((s % 3600 / 60))
+  elif [ "$s" -ge 60 ]; then printf '%dm%ds' $((s / 60)) $((s % 60))
+  else printf '%ds' "$s"; fi
+}
+
+# one snapshot first, so the helpers this script starts later (tr, grep: their command line holds the pattern) are not in it
+snap=$(ps -eo pid=,ppid=,etimes=,user=,comm=)
+printf '%s\n' "$snap" | while read -r pid ppid age user comm; do
+  case $skip in *" $pid "*) continue ;; esac
+  [ "$comm" = ps ] && continue
+  [ "$age" -ge "$min_age" ] || continue
+  if [ -r "/proc/$pid/cmdline" ] && cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null) && [ -n "$cmd" ]; then
+    cmd=${cmd% }
+  else
+    cmd="[$comm]"
+  fi
+  if [ -n "$pattern" ]; then
+    if [ -n "$insensitive" ]; then
+      printf '%s\n' "$cmd" | grep -Eiq -- "$pattern" || continue
+    else
+      printf '%s\n' "$cmd" | grep -Eq -- "$pattern" || continue
+    fi
+  fi
+  printf '%s %s %s %s %s\n' "$pid" "$ppid" "$(human "$age")" "$user" "$cmd"
+done
