@@ -238,7 +238,7 @@ describe("daemon: lifecycle (3/3)", () => {
       "toriel-usage.ts",
     ]);
     assert.ok(flagged(argv, "-e").every((f) => path.isAbsolute(f) && fs.existsSync(f)));
-    assert.deepEqual(flagged(argv, "--skill").map((f) => path.basename(f)), ["messaging", "scheduling", "delegating"]);
+    assert.deepEqual(flagged(argv, "--skill").map((f) => path.basename(f)), ["messaging", "scheduling", "delegating", "toriel"]);
 
     // explore is a profile with extension discovery off and no skills (minimal)
     const explore = await c.request({ type: "spawn", cwd: harness.dir, agent: "explore" });

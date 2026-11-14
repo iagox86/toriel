@@ -73,6 +73,7 @@ export const RESOURCES: readonly Resource[] = [
   { kind: "skill", path: "skills/messaging", why: "agents are not told how to use toriel_message" },
   { kind: "skill", path: "skills/scheduling", why: "agents are not told how to use toriel_schedule_create" },
   { kind: "skill", path: "skills/delegating", why: "agents are not told when and how to hand work to a subagent with toriel_agent" },
+  { kind: "skill", path: "skills/toriel", why: "agents are not told which /commands the user has (they suggest the pi CLI instead)" },
   { kind: "theme", path: "themes/solarized-dark.json", why: "the controller reads the theme at startup: without it toriel does not start" },
 ];
 
