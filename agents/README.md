@@ -12,6 +12,7 @@ A profile is a markdown file: frontmatter that decides how a session launches, t
 | `plan` | an ordered implementation plan after reading the code | read, grep, find, ls |
 | `git-archaeology` | why code is the way it is: the commits and messages behind it | read, grep, find, ls, `mcp__git__git_read*` (extensions on) |
 | `test-runner` | run a test or build command, report only the failures | read, grep, find, ls, bash, toriel_job (keeps extensions, so the permission system still guards bash) |
+| `verify` | live-verify a running system (daemon, sandbox, CLI): run the given checks and report PASS/FAIL with observed output | read, grep, find, ls, bash, toriel_job (keeps extensions, so the permission system still guards bash) |
 | `research-web` | look something up on the web, report sources with URLs | web_search, fetch_content (extensions on: they come from the pi-web-access package) |
 | `edit-writing` | edit prose: cut AI-isms and passive voice, flag inconsistencies and claims to check | read, grep, find, ls |
 | `docs-writer` | write or update docs from the code (**edits files**: start it only when asked) | read, grep, find, ls, edit, write (extensions on, so the permission system guards the edits) |
