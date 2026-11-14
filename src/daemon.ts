@@ -38,7 +38,7 @@ import { DEFAULT_LIMITS, Scheduler } from "./scheduler.ts";
 import { SubagentManager } from "./daemon-subagents.ts";
 import { pruneSessionState } from "./state-prune.ts";
 import { pruneTrash } from "./trash.ts";
-import { subagentKeepMs, subagentLimitsFrom } from "./subagents.ts";
+import { keepMsFrom, subagentKeepMs, subagentLimitsFrom } from "./subagents.ts";
 import { needsAwake, SleepInhibitor } from "./sleep-inhibit.ts";
 import { collectFindings } from "./doctor.ts";
 import { DEFAULT_TRASH_RETENTION_DAYS, loadSettings } from "./settings.ts";
@@ -83,7 +83,9 @@ function createContext(shutdown: () => void): DaemonContext {
     log(`could not create the settings file: ${errText(err)}`);
   }
   const startSettings = loadSettings().settings;
-  const subagentLimits = subagentLimitsFrom(startSettings);
+  const fromSettings = subagentLimitsFrom(startSettings);
+  // the environment wins over the settings (mainly for tests, which cannot wait out minutes)
+  const subagentLimits = { ...fromSettings, idleMs: keepMsFrom(process.env.TORIEL_SUBAGENT_IDLE_MS, fromSettings.idleMs), maxMs: keepMsFrom(process.env.TORIEL_SUBAGENT_MAX_MS, fromSettings.maxMs) };
   const bridges = new BridgeTracker();
   const grants = new GrantStore(PERMISSIONS_FILE, Date.now, { perSession: loadSettings().settings.permissionGrantLimit ?? DEFAULT_GRANT_LIMITS.perSession });
   const children = new ChildManager(hub, usage, bridges, subagentLimits, grants);
@@ -119,6 +121,7 @@ function createContext(shutdown: () => void): DaemonContext {
     ctx.scheduler.poke();
   };
   children.onAssistantMessage = (s, message) => ctx.subagents.onMessage(s, message);
+  children.onActivity = (s) => ctx.subagents.onActivity(s);
   children.onStopped = (s, crash) => ctx.subagents.onStopped(s, crash);
   children.onNameObserved = (s, observed) => naming.noteObserved(s, observed);
   return ctx;
@@ -211,6 +214,12 @@ async function main(): Promise<void> {
   const subagentKeeper = setInterval(sweepSubagents, Math.max(100, Math.min(30_000, ctx.subagents.keepMs / 2)));
   subagentKeeper.unref();
   sweepSubagents();
+  // a subagent wedged inside one tool call never ends a message, so the turn and token limits cannot see it
+  const watchdogEvery = [ctx.subagents.limits.idleMs, ctx.subagents.limits.maxMs].filter((ms) => ms > 0);
+  if (watchdogEvery.length > 0) {
+    const watchdog = setInterval(() => ctx.subagents.checkWatchdog(), Math.max(100, Math.min(30_000, Math.min(...watchdogEvery) / 4)));
+    watchdog.unref();
+  }
   const awakeKeeper = setInterval(keepAwake, 5_000);
   awakeKeeper.unref();
   // the start-up self-check: every finding is logged, the controller's notice line shows the ones that matter most

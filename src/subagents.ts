@@ -12,12 +12,19 @@ export interface SubagentLimits {
   maxSpawnsPerParent: number;
   /** Default token budget of one subagent when its profile sets none. */
   budget: number;
+  /** A running subagent that has produced no event for this long is stopped (ms; 0 = never). A pending permission dialog does not count as quiet. */
+  idleMs: number;
+  /** A running background subagent is stopped after this long in all (ms; 0 = never). Foreground ones have a caller who can stop them. */
+  maxMs: number;
 }
+
+/** How long a subagent may be silent before the watchdog stops it. */
+export const DEFAULT_IDLE_MS = 15 * 60_000;
 
 /** `maxDepth` may be raised, but never past this. */
 export const HARD_MAX_DEPTH = 2;
 
-export const DEFAULT_SUBAGENT_LIMITS: SubagentLimits = { maxDepth: 1, maxConcurrent: 3, maxSpawnsPerParent: 20, budget: 150_000 };
+export const DEFAULT_SUBAGENT_LIMITS: SubagentLimits = { maxDepth: 1, maxConcurrent: 3, maxSpawnsPerParent: 20, budget: 150_000, idleMs: DEFAULT_IDLE_MS, maxMs: 0 };
 
 /** How long a finished subagent stays in the switcher before it is deleted (the trash keeps its file). */
 export const DEFAULT_KEEP_MS = 30 * 60_000;
@@ -35,6 +42,8 @@ export interface SubagentSettings {
   subagentMaxSpawns?: number;
   subagentBudgetTokens?: number;
   subagentKeepMinutes?: number;
+  subagentIdleMinutes?: number;
+  subagentMaxMinutes?: number;
 }
 
 /** The built-in limits with the settings applied; depth is held to HARD_MAX_DEPTH. */
@@ -44,6 +53,8 @@ export function subagentLimitsFrom(s: SubagentSettings): SubagentLimits {
     maxConcurrent: s.subagentMaxConcurrent ?? DEFAULT_SUBAGENT_LIMITS.maxConcurrent,
     maxSpawnsPerParent: s.subagentMaxSpawns ?? DEFAULT_SUBAGENT_LIMITS.maxSpawnsPerParent,
     budget: s.subagentBudgetTokens ?? DEFAULT_SUBAGENT_LIMITS.budget,
+    idleMs: s.subagentIdleMinutes !== undefined ? s.subagentIdleMinutes * 60_000 : DEFAULT_SUBAGENT_LIMITS.idleMs,
+    maxMs: s.subagentMaxMinutes !== undefined ? s.subagentMaxMinutes * 60_000 : DEFAULT_SUBAGENT_LIMITS.maxMs,
   };
 }
 
@@ -75,6 +86,8 @@ export interface SubagentRecord {
   note?: string;
   /** When the parent had the result: the tool call answered (foreground) or the message delivered (background). */
   deliveredAt?: number;
+  /** When pi's process last said anything (any event), or when it started: the idle watchdog's clock. */
+  lastEventAt: number;
   /** Assistant messages so far. */
   turns: number;
   /** Tokens counted against the budget so far (see messageTokens). */
@@ -91,8 +104,8 @@ export class SubagentBook {
   private readonly records: SubagentRecord[] = [];
   private nextHandle = 1;
 
-  add(init: Omit<SubagentRecord, "handle" | "state" | "startedAt" | "turns" | "tokens">, now = Date.now()): SubagentRecord {
-    const rec: SubagentRecord = { ...init, handle: this.nextHandle++, state: "running", startedAt: now, turns: 0, tokens: 0 };
+  add(init: Omit<SubagentRecord, "handle" | "state" | "startedAt" | "lastEventAt" | "turns" | "tokens">, now = Date.now()): SubagentRecord {
+    const rec: SubagentRecord = { ...init, handle: this.nextHandle++, state: "running", startedAt: now, lastEventAt: now, turns: 0, tokens: 0 };
     this.records.push(rec);
     return rec;
   }
@@ -179,6 +192,34 @@ export function limitBreach(c: TurnCheck): string | undefined {
   }
   if (c.maxTurns !== undefined && c.turns >= c.maxTurns) {
     return `stopped: it reached its limit of ${c.maxTurns} turns`;
+  }
+  return undefined;
+}
+
+export interface WatchdogCheck {
+  now: number;
+  startedAt: number;
+  lastEventAt: number;
+  background: boolean;
+  idleMs: number;
+  maxMs: number;
+}
+
+function minutes(ms: number): string {
+  return ms % 60_000 === 0 ? `${ms / 60_000} min` : `${Math.round(ms / 1000)} s`;
+}
+
+/**
+ * Whether a running subagent must be cut off for being stuck, and the note for its parent. The turn and
+ * token limits only fire when an assistant message ends, so a run wedged inside one tool call needs this
+ * clock instead. The caller keeps `lastEventAt` fresh while a permission dialog waits for an answer.
+ */
+export function watchdogBreach(c: WatchdogCheck): string | undefined {
+  if (c.maxMs > 0 && c.background && c.now - c.startedAt >= c.maxMs) {
+    return `stopped: it ran for ${minutes(c.maxMs)}, the time limit for a background subagent`;
+  }
+  if (c.idleMs > 0 && c.now - c.lastEventAt >= c.idleMs) {
+    return `stopped: it produced nothing for ${minutes(c.idleMs)} (stuck in a tool call?)`;
   }
   return undefined;
 }

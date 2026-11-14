@@ -66,6 +66,8 @@ export const SETTINGS_TEMPLATE: readonly Group[] = [
       { key: "subagentMaxDepth", value: 1, comment: ["How many subagent links may sit above a session that spawns: 1 = only your own sessions start subagents, 2 = they may start one more level. At most 2."] },
       { key: "subagentMaxSpawns", value: 20, comment: ["Subagents one session may start over its lifetime in this daemon."] },
       { key: "subagentBudgetTokens", value: 150000, comment: ["Token budget of one subagent whose agent profile sets none."] },
+      { key: "subagentIdleMinutes", value: 15, comment: ["Stop a running subagent that has produced no event at all for this many minutes (a run wedged inside one tool call).", "A permission prompt waiting for you does not count. 0 = never. TORIEL_SUBAGENT_IDLE_MS, if set, wins."] },
+      { key: "subagentMaxMinutes", value: 0, comment: ["Stop a background subagent still running after this many minutes, however busy. 0 = no cap.", "TORIEL_SUBAGENT_MAX_MS, if set, wins."] },
       { key: "subagentKeepMinutes", value: 30, comment: ["A finished subagent stays in the switcher this many minutes, then goes to the trash (/restore brings it back). 0 = at once.", "TORIEL_SUBAGENT_KEEP_MS, if set, wins."] },
     ],
   },

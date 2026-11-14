@@ -66,6 +66,8 @@ describe("the settings template", () => {
       subagentMaxSpawns: DEFAULT_SUBAGENT_LIMITS.maxSpawnsPerParent,
       subagentBudgetTokens: DEFAULT_SUBAGENT_LIMITS.budget,
       subagentKeepMinutes: DEFAULT_KEEP_MS / 60_000,
+      subagentIdleMinutes: DEFAULT_SUBAGENT_LIMITS.idleMs / 60_000,
+      subagentMaxMinutes: DEFAULT_SUBAGENT_LIMITS.maxMs / 60_000,
       warnNoPermissionSystem: true,
       permissionGrantLimit: DEFAULT_GRANT_LIMITS.perSession,
       permissionGrantDurations: [...DEFAULT_GRANT_DURATIONS],
@@ -179,7 +181,7 @@ describe("updateSettings", () => {
 describe("subagent settings", () => {
   it("apply to the limits, with the depth held to the hard maximum", () => {
     const limits = subagentLimitsFrom({ subagentMaxConcurrent: 6, subagentMaxDepth: 9, subagentMaxSpawns: 50, subagentBudgetTokens: 1000 });
-    assert.deepEqual(limits, { maxConcurrent: 6, maxDepth: HARD_MAX_DEPTH, maxSpawnsPerParent: 50, budget: 1000 });
+    assert.deepEqual(limits, { maxConcurrent: 6, maxDepth: HARD_MAX_DEPTH, maxSpawnsPerParent: 50, budget: 1000, idleMs: DEFAULT_SUBAGENT_LIMITS.idleMs, maxMs: 0 });
     assert.deepEqual(subagentLimitsFrom({}), DEFAULT_SUBAGENT_LIMITS);
   });
 
