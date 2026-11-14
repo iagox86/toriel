@@ -134,6 +134,7 @@ export function runSummarizer(opts: SummarizerOptions): Promise<string> {
     delete childEnvVars.TORIEL_SCOPE_MODE;
     delete childEnvVars.TORIEL_SANDBOX;
     delete childEnvVars.TORIEL_SANDBOX_RW;
+    delete childEnvVars.TORIEL_SANDBOX_TMP;
     delete childEnvVars.TORIEL_SHARED_DIR;
     const child = spawn(
       process.execPath,

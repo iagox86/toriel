@@ -9,11 +9,13 @@ import type { ScopeAssignment } from "./scope-root.ts";
 import { DEFAULT_SANDBOX_WRITABLE, type TorielSettings } from "./settings.ts";
 
 /** The daemon-owned variables that must never come from the daemon's own environment. */
-const OWNED_KEYS = [SCOPE_ENV, SCOPE_MODE_ENV, "TORIEL_SANDBOX", "TORIEL_SANDBOX_RW", "TORIEL_SHARED_DIR"];
+const OWNED_KEYS = [SCOPE_ENV, SCOPE_MODE_ENV, "TORIEL_SANDBOX", "TORIEL_SANDBOX_RW", "TORIEL_SHARED_DIR", "TORIEL_SANDBOX_TMP"];
 
 /** What a child gets beyond its scope: the shared directory, and (only when set) the sandbox switch with its extra writable roots. */
 export interface ChildExtras {
   sharedDir?: string;
+  /** The directory a sandboxed child sees as /tmp (persistent, shared by all sandboxed sessions). */
+  tmpDir?: string;
   /** Present = run the child's bash commands in the sandbox; the list is the extra writable roots (caches). */
   sandboxWritable?: string[];
 }
@@ -65,6 +67,9 @@ export function childEnv(s: EnvSession, sock: string, base: NodeJS.ProcessEnv = 
   if (scope !== undefined && extras.sandboxWritable !== undefined) {
     env.TORIEL_SANDBOX = "bwrap";
     env.TORIEL_SANDBOX_RW = extras.sandboxWritable.join(delimiter);
+    if (extras.tmpDir !== undefined) {
+      env.TORIEL_SANDBOX_TMP = extras.tmpDir;
+    }
   }
   return env;
 }

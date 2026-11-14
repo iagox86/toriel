@@ -299,7 +299,7 @@ describe("the sandbox wrapper (board 190)", () => {
 
 const bwrapWorks = spawnSync("bwrap", ["--ro-bind", "/", "/", "true"], { stdio: "ignore" }).status === 0;
 
-describe("the registry with the real sandbox (board 190)", { skip: bwrapWorks ? false : "bwrap is not usable here" }, () => {
+describe("the registry with the real sandbox (board 190)", { skip: process.env.TORIEL_SANDBOX !== undefined ? "this test builds sandbox fixtures under /var/tmp and cannot run inside a sandbox" : bwrapWorks ? false : "bwrap is not usable here" }, () => {
   let root: string;
   let outside: string;
   beforeEach(() => {

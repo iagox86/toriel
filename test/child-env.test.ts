@@ -70,6 +70,13 @@ describe("the sandbox and shared-directory variables (board 190)", () => {
     assert.equal(childEnv({}, "/sock", {}, { root: "/w", mode: "deny" }, { sharedDir: "/shared" }).TORIEL_SANDBOX, undefined, "no sandbox unless asked");
   });
 
+  it("hands a sandboxed child the persistent tmp directory, and never one from the daemon's own environment", () => {
+    const scoped = childEnv({}, "/sock", {}, { root: "/w", mode: "deny" }, { sandboxWritable: [], tmpDir: "/data/tmp" });
+    assert.equal(scoped.TORIEL_SANDBOX_TMP, "/data/tmp");
+    assert.equal(childEnv({}, "/sock", {}, undefined, { tmpDir: "/data/tmp" }).TORIEL_SANDBOX_TMP, undefined, "no sandbox, no tmp");
+    assert.equal(childEnv({}, "/sock", { TORIEL_SANDBOX_TMP: "/leaked" }).TORIEL_SANDBOX_TMP, undefined);
+  });
+
   it("never turns the sandbox on without a scope root (it would be invalid and refuse every command)", () => {
     assert.equal(childEnv({}, "/sock", {}, undefined, { sandboxWritable: ["/x"] }).TORIEL_SANDBOX, undefined);
   });
