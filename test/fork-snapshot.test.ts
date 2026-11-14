@@ -122,15 +122,18 @@ describe("forkSnapshot", () => {
     assert.equal(fs.existsSync(snap.path), false);
   });
 
-  it("drops an orphan toolResult whose call entry an edit removed, keeping the rest", () => {
+  it("neutralizes an orphan toolResult with an appended context_edit, keeping the rest", () => {
     const dir = tmp();
     const file = path.join(dir, "s.jsonl");
-    const whole = user("hi") + withId("A", call("a")) + edit("A", null) + result("a") + answer;
+    const whole = user("hi") + withId("A", call("a")) + edit("A", null) + result("a", "R") + answer;
     fs.writeFileSync(file, whole);
     const snap = forkSnapshot(file, dir);
     assert.notEqual(snap.path, file);
-    assert.equal(fs.readFileSync(snap.path, "utf8"), user("hi") + withId("A", call("a")) + edit("A", null) + answer);
-    assert.equal(snap.dropped, 1);
+    // pi walks parentId from the leaf, so the result line must not be dropped from the chain; the copy
+    // appends a context_edit that takes it out of the projection instead
+    const neutralize = `${JSON.stringify({ type: "context_edit", id: "toriel-edit-1", parentId: "R", targetId: "R", replacement: null })}\n`;
+    assert.equal(fs.readFileSync(snap.path, "utf8"), whole + neutralize);
+    assert.equal(snap.dropped, 0);
     snap.cleanup();
     assert.equal(fs.existsSync(snap.path), false);
   });

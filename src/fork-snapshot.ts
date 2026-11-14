@@ -152,29 +152,18 @@ function safeLineCount(parsedLines: Array<{ entry?: Entry }>): number {
  * (session-manager.js) still sends such a result, and the providers reject an orphan result exactly
  * like an unanswered call.
  */
-function isOrphanResult(line: Entry, kept: readonly Entry[]): boolean {
-  if (line.type !== "message" || line.message?.role !== "toolResult") {
-    return false;
-  }
-  const callId = line.message.toolCallId;
-  if (typeof callId !== "string") {
-    return false;
-  }
+/**
+ * The last `context_edit` per target entry among `kept`, in file order: pi's projection applies the
+ * last edit per target (buildSessionProjection collects them with a Map set).
+ */
+function editsByTarget(kept: readonly Entry[]): Map<string, Entry> {
   const latest = new Map<string, Entry>();
   for (const e of kept) {
     if (e.type === "context_edit" && typeof e.targetId === "string") {
       latest.set(e.targetId, e);
     }
   }
-  for (const e of kept) {
-    if (e.type !== "message" || e.message?.role !== "assistant" || typeof e.id !== "string") {
-      continue;
-    }
-    if (effectiveCalls(callIdsOf(e.message.content), latest.get(e.id)).includes(callId)) {
-      return false; // the call survives in the projection
-    }
-  }
-  return true;
+  return latest;
 }
 
 /**
@@ -192,7 +181,7 @@ export function settledPrefix(text: string): { text: string; dropped: number } {
   };
 }
 
-/** The file to fork from: `file` itself when it is whole, else a trimmed copy in `tmpDir`. */
+/** The file to fork from: `file` itself when it is whole, else a copy in `tmpDir`. */
 export function forkSnapshot(file: string, tmpDir = os.tmpdir()): Snapshot {
   const text = fs.readFileSync(file, "utf8");
   // the copy is made from the file's own lines, so no migration here
@@ -200,14 +189,43 @@ export function forkSnapshot(file: string, tmpDir = os.tmpdir()): Snapshot {
   const safe = safeLineCount(parsedLines);
   const kept = parsedLines.slice(0, safe);
   const entries = kept.map((l) => l.entry as Entry);
-  // a result whose call was removed would be an orphan in the copy's projection, so drop it: the copy
-  // may shrink past the settled point, and even a file that needs no trim still needs this copy
-  const clean = kept.filter((_l, i) => !isOrphanResult(entries[i], entries));
-  if (safe === parsedLines.length && clean.length === parsedLines.length) {
+  // a result whose call an edit removed would be an orphan in the copy's projection, and the providers
+  // reject an orphan result exactly like an unanswered call. pi builds the context by walking parentId
+  // from the leaf, so REMOVING such a line would cut the chain and lose the history before it; instead
+  // the copy appends a `context_edit` (replacement null) for each orphan, which takes it out of the
+  // projection. Even a file that needs no trim may need this copy.
+  const latest = editsByTarget(entries);
+  const surviving = new Set<string>();
+  for (const e of entries) {
+    if (e.type === "message" && e.message?.role === "assistant" && typeof e.id === "string") {
+      for (const id of effectiveCalls(callIdsOf(e.message.content), latest.get(e.id))) {
+        surviving.add(id);
+      }
+    }
+  }
+  const orphans: string[] = [];
+  let parentId: string | undefined;
+  for (let i = 0; i < entries.length; i++) {
+    if (typeof entries[i].id === "string") {
+      parentId = entries[i].id as string;
+    }
+    const e = entries[i];
+    if (e.type !== "message" || e.message?.role !== "toolResult" || typeof e.id !== "string" || typeof e.message.toolCallId !== "string") {
+      continue;
+    }
+    const edit = latest.get(e.id);
+    if (edit !== undefined && edit.replacement === null) {
+      continue; // already out of the projection
+    }
+    if (!surviving.has(e.message.toolCallId)) {
+      orphans.push(`${JSON.stringify({ type: "context_edit", id: `toriel-edit-${orphans.length + 1}`, parentId, targetId: e.id, replacement: null })}\n`);
+    }
+  }
+  if (safe === parsedLines.length && orphans.length === 0) {
     return { path: file, dropped: 0, cleanup() {} };
   }
   const dir = fs.mkdtempSync(path.join(tmpDir, "toriel-fork-"));
   const copy = path.join(dir, path.basename(file));
-  fs.writeFileSync(copy, `${clean.map((l) => l.raw).join("\n")}\n`, { mode: 0o600 });
-  return { path: copy, dropped: parsedLines.length - clean.length, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
+  fs.writeFileSync(copy, `${kept.map((l) => l.raw).join("\n")}\n${orphans.join("")}`, { mode: 0o600 });
+  return { path: copy, dropped: parsedLines.length - safe, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }
