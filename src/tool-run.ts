@@ -13,6 +13,10 @@ export interface ToolCall {
   args?: unknown;
   component: ToolExecutionComponent;
   failed: boolean;
+  /** pi's id for the call; notes are kept by it so a history reload can put them back on the call. */
+  id?: string;
+  /** What toriel did about this call (a grant answered its permission prompt), shown under it when the run is expanded. */
+  notes?: string[];
   /** Finished: its output no longer changes, so rendered lines can be reused. */
   done?: boolean;
   /** Rendered lines of a finished call, valid for `cachedWidth` until invalidate(). */
@@ -55,7 +59,7 @@ export class ToolRun implements Component {
           return c.cachedLines;
         }
         c.component.setExpanded(true); // pi truncates long output until expanded
-        const lines = c.component.render(width).map(fillExpandKey);
+        const lines = [...c.component.render(width).map(fillExpandKey), ...(c.notes ?? []).map((n) => truncateToWidth(dim(` toriel: ${n}`), width))];
         if (c.done) {
           c.cachedLines = lines;
           c.cachedWidth = width;

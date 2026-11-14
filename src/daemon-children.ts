@@ -20,7 +20,7 @@ import { sessionIdOfFile } from "./session-file.ts";
 import { mayDelegate, type SubagentLimits } from "./subagents.ts";
 import { profileOfSession, saveSessionAgent } from "./session-agents.ts";
 import { log } from "./log.ts";
-import { encodeLine, type UsageReport } from "./shared.ts";
+import { encodeLine, GRANT_ANSWERED_NOTICE, type UsageReport } from "./shared.ts";
 import { type ChildConfig, loadSettings, resolveChildConfig, settingsMtime } from "./settings.ts";
 import { errText } from "./util.ts";
 
@@ -519,8 +519,10 @@ export class ChildManager {
       return false;
     }
     stdin.write(encodeLine({ type: "extension_ui_response", id: request.id, value: "Yes" }));
-    log(`file-path prompt answered by ${covering.map((g) => `#${g.id}`).join(", ")} for session ${s.sessionId}: ${String(value ?? "")}`);
-    this.hub.broadcast({ type: "notice", session: s.id, text: `allowed by permission grant ${covering.map((g) => `#${g.id}`).join(", ")}: ${String(value ?? "a file path")}`, durable: true });
+    // one grant covers a compound command's several specs, so it comes back once per spec: name each grant once
+    const ids = [...new Set(covering.map((g) => `#${g.id}`))].join(", ");
+    log(`file-path prompt answered by ${ids} for session ${s.sessionId}: ${String(value ?? "")}`);
+    this.hub.broadcast({ type: "notice", session: s.id, text: `${GRANT_ANSWERED_NOTICE} ${ids}: ${String(value ?? "a file path")}`, durable: true });
     return true;
   }
 

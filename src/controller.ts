@@ -55,7 +55,7 @@ import {
   sessionKey,
   type LocalSession,
 } from "./session-list.ts";
-import type { ClientCommand, DaemonMessage, DistributiveOmit, SessionMeta } from "./shared.ts";
+import { type ClientCommand, type DaemonMessage, type DistributiveOmit, GRANT_ANSWERED_NOTICE, type SessionMeta } from "./shared.ts";
 import { drifted } from "./drift.ts";
 import { MOUSE_OFF, MOUSE_ON, mouseNotice, nextMouse, parseMouseArg } from "./mouse.ts";
 import { openUrl } from "./open-url.ts";
@@ -82,6 +82,7 @@ import {
   itemsFromFile,
   itemsFromMessages,
   newView,
+  attachCallNote,
   noteRow,
   type SessionView,
   showRawError,
@@ -811,6 +812,13 @@ class Controller {
     if (!view) {
       if (key === this.viewing) {
         this.notify(text);
+      }
+      return;
+    }
+    // a grant's answer reads under the tool call it allowed; only when there is no such call does it become a row of its own
+    if (text.startsWith(GRANT_ANSWERED_NOTICE) && attachCallNote(view, text)) {
+      if (key === this.viewing) {
+        this.renderChrome();
       }
       return;
     }

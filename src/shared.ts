@@ -12,6 +12,9 @@
  * older daemon or controller cannot cope with. A mismatch blocks the controller
  * (see version-check.ts); a mere code difference with the same protocol only warns.
  */
+/** How the durable notice for a prompt a grant answered begins; a controller attaches such a notice to the tool call it allowed (ticket 205). */
+export const GRANT_ANSWERED_NOTICE = "allowed by permission grant";
+
 export const PROTOCOL = 9; // 9: watch_add's optional `by` ("agent": a file trigger an agent made through toriel_watch_create, held to the agent limits); 8: permission_check's optional `probe` (answer from the grants without remembering a suggestion for a dialog; the reply says `expiresAt`), for the toriel_permission_check tool; 7: spawn's optional `wake` (start a sleeping session because the user typed a command into it; answers `woke: false` with a reason instead of starting a file another pi may have open); 6: 6: rename and adopt answer with the applied `name` and `nameVerified` (the daemon makes names unique); 5: file-path prompts carry grant rows, and permission_add's `dialog` (4: the watch_add command (file-trigger schedules); 3: agent_spawn's optional cwd; 2: the `cd` command and adopt's `keepPermissions`)
 
 /** Which toriel code a process runs (build-id.ts). */
