@@ -88,6 +88,7 @@ import {
 } from "./transcript.ts";
 import { mayWake, WakeOnType } from "./wake-on-type.ts";
 import { errText, fireAndReport } from "./util.ts";
+import { log } from "./log.ts";
 
 configureEditorKeys();
 const editorTheme: EditorTheme = {
@@ -162,7 +163,12 @@ class Controller {
   private commandsFor: string | null = null;
   private readonly wakeOnType = new WakeOnType({
     text: () => this.editor.getText(),
-    allowed: () => mayWake(this.viewing ?? undefined, this.viewing ? this.metaForPath(this.viewing) : undefined, this.switching.isOpen),
+    allowed: () => {
+      const meta = this.viewing ? this.metaForPath(this.viewing) : undefined;
+      const ok = mayWake(this.viewing ?? undefined, meta, this.switching.isOpen);
+      log(`wake-on-type: fire check allowed=${ok} viewing=${this.viewing ?? "none"} switcherOpen=${this.switching.isOpen} meta=${meta ? `id=${meta.id} active=${String(meta.active)} subagent=${String(meta.subagent)}` : "none"}`);
+      return ok;
+    },
     wake: () => void this.session.wakeForTyping(),
   });
   /** Editor text from before ctrl-r, restored on cancel. */

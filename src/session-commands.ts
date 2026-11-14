@@ -32,6 +32,7 @@ import { renameNotice } from "./session-id.ts";
 import { runPermissions } from "./permission-commands.ts";
 import { addSchedule, addWatch, operateSchedule, showSchedules } from "./schedule-commands.ts";
 import { errText } from "./util.ts";
+import { log } from "./log.ts";
 
 const COMPACT_TIMEOUT_MS = 10 * 60_000;
 
@@ -228,20 +229,24 @@ export class SessionCommands {
     // (presence, the 60 s fresh-mtime check, wasHandled) to unregistered files (ticket 202)
     const known = this.viewedMeta() ?? (key ? this.h.local.get(key) : undefined);
     if (!key || !mayWake(key, this.viewedMeta(), this.h.switching.isOpen)) {
+      log(`wake-on-type: wakeForTyping guard: key=${key ?? "none"} meta=${JSON.stringify(this.viewedMeta())} switcherOpen=${this.h.switching.isOpen}`);
       return;
     }
     try {
+      log(`wake-on-type: sending spawn for ${key}`);
       this.h.notify("starting session...");
       // the file's own header knows the session's cwd; the storage directory is a last resort
       const header = readHeader(key);
       const headerCwd = typeof header?.cwd === "string" ? (header.cwd as string) : undefined;
       const r = (await this.h.request({ type: "spawn", sessionFile: key, cwd: known?.cwd || headerCwd || path.dirname(key), ready: true, wake: true })) as { woke?: boolean; reason?: string };
+      log(`wake-on-type: spawn answered woke=${String(r?.woke)} reason=${r?.reason ?? "-"}`);
       if (r?.woke === false) {
         this.h.notify(`session not started: ${r.reason ?? "refused"}`);
         return;
       }
       this.h.refreshPiCommands();
-    } catch {
+    } catch (err) {
+      log(`wake-on-type: spawn failed: ${errText(err)}`);
       // the message will start it, and say what is wrong
     }
   }
