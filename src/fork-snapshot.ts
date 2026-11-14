@@ -11,6 +11,9 @@ import { parseLines, type SessionEntryLike } from "./session-file.ts";
 
 type Entry = SessionEntryLike & {
   message?: { role?: string; content?: unknown; toolCallId?: string };
+  /** A `context_edit` entry: the entry it edits, and what that entry's content becomes (null = removed from the model's context). */
+  targetId?: string;
+  replacement?: { content?: unknown } | null;
 };
 
 export interface Snapshot {
@@ -32,6 +35,19 @@ function callIds(entry: Entry): string[] {
 }
 
 /**
+ * The tool calls of `targetId`'s entry that a `context_edit` leaves in the model's context. pi's projection
+ * (session-manager.js projectContextEntry): `replacement: null` removes the entry, a replacement swaps its
+ * content (a string becomes one text block), so a call survives only as a toolCall block of the new content.
+ */
+function survivingCalls(replacement: Entry["replacement"]): Set<string> {
+  const content = replacement?.content;
+  if (!Array.isArray(content)) {
+    return new Set();
+  }
+  return new Set(content.flatMap((b: { type?: string; id?: string }) => (b?.type === "toolCall" && typeof b.id === "string" ? [b.id] : [])));
+}
+
+/**
  * The part of a session file's text that is safe to copy: whole lines, ending where no tool call is
  * waiting for its result. `dropped` counts the lines left out.
  */
@@ -40,6 +56,9 @@ export function settledPrefix(text: string): { text: string; dropped: number } {
   const parsedLines = parseLines<Entry>(text).filter((l) => l.raw.length > 0);
   const lines = parsedLines.map((l) => l.raw);
   const pending = new Set<string>();
+  // which tool calls each entry made, so a context_edit that removes the entry also retires its calls: the
+  // model never sees them, so no result is owed (without this one stuck call truncated every later line)
+  const callsOf = new Map<string, string[]>();
   let safe = 0;
   let parsed = 0;
   for (const { entry } of parsedLines) {
@@ -47,8 +66,20 @@ export function settledPrefix(text: string): { text: string; dropped: number } {
       break; // a line pi is still writing: nothing after it counts either
     }
     parsed++;
-    for (const id of callIds(entry)) {
+    const calls = callIds(entry);
+    for (const id of calls) {
       pending.add(id);
+    }
+    if (calls.length > 0 && typeof entry.id === "string") {
+      callsOf.set(entry.id, calls);
+    }
+    if (entry.type === "context_edit" && typeof entry.targetId === "string") {
+      const keep = survivingCalls(entry.replacement);
+      for (const id of callsOf.get(entry.targetId) ?? []) {
+        if (!keep.has(id)) {
+          pending.delete(id);
+        }
+      }
     }
     if (entry.message?.role === "toolResult" && entry.message.toolCallId !== undefined) {
       pending.delete(entry.message.toolCallId);

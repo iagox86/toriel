@@ -32,6 +32,35 @@ describe("settledPrefix", () => {
     assert.equal(r.dropped, 3);
   });
 
+  describe("context_edit (pi's compaction machinery, ticket 210)", () => {
+    const withId = (id: string, l: string) => l.replace('{"type":"message"', `{"type":"message","id":"${id}"`);
+    const edit = (targetId: string, replacement: unknown) => line({ type: "context_edit", id: `e-${targetId}`, targetId, replacement });
+
+    it("does not wait for the result of a call whose entry was removed, and keeps the long tail", () => {
+      const text = user("hi") + withId("A", call("a")) + edit("A", null) + user("later") + call("b") + result("b") + answer;
+      assert.deepEqual(settledPrefix(text), { text, dropped: 0 });
+    });
+
+    it("still cuts at a call that really is unanswered after such an edit", () => {
+      const done = user("hi") + withId("A", call("a")) + edit("A", null) + user("later");
+      const r = settledPrefix(done + call("b"));
+      assert.equal(r.text, done);
+      assert.equal(r.dropped, 1);
+    });
+
+    it("retires a call when the replacement no longer contains it, and keeps one it still does", () => {
+      const text = user("hi") + withId("A", call("a", "b")) + edit("A", { content: [{ type: "toolCall", id: "b", name: "bash", arguments: {} }] }) + user("later");
+      assert.equal(settledPrefix(text).text, user("hi"), "b is still unanswered");
+      const gone = user("hi") + withId("A", call("a")) + edit("A", { content: "summary" }) + user("later");
+      assert.deepEqual(settledPrefix(gone), { text: gone, dropped: 0 });
+    });
+
+    it("ignores an edit of an entry that made no calls", () => {
+      const text = user("hi") + call("a") + withId("U", user("x")) + edit("U", null) + result("a");
+      assert.deepEqual(settledPrefix(text), { text, dropped: 0 });
+    });
+  });
+
   it("drops a half-written last line", () => {
     const done = user("hi") + answer;
     const r = settledPrefix(`${done}{"type":"mess`);
