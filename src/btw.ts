@@ -90,6 +90,7 @@ function run(args: string[], opts: { cwd?: string; timeoutMs?: number }): Promis
     delete childEnvVars.TORIEL_SCOPE_MODE;
     delete childEnvVars.TORIEL_SANDBOX;
     delete childEnvVars.TORIEL_SANDBOX_RW;
+    delete childEnvVars.TORIEL_SANDBOX_TMP;
     delete childEnvVars.TORIEL_SHARED_DIR;
     const child = spawn(process.execPath, args, {
       cwd: opts.cwd && fs.existsSync(opts.cwd) ? opts.cwd : os.tmpdir(),
