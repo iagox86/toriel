@@ -9,7 +9,10 @@ import { GrantStore } from "../src/permissions.ts";
 const line = (o: unknown) => `${JSON.stringify(o)}\n`;
 const user = (text: string) => line({ type: "message", message: { role: "user", content: [{ type: "text", text }] } });
 const call = (...ids: string[]) => line({ type: "message", message: { role: "assistant", content: ids.map((id) => ({ type: "toolCall", id, name: "bash", arguments: {} })) } });
-const result = (id: string) => line({ type: "message", message: { role: "toolResult", toolCallId: id, content: [] } });
+const result = (id: string, entryId?: string) => entryId === undefined ? line({ type: "message", message: { role: "toolResult", toolCallId: id, content: [] } }) : withResultId(entryId, line({ type: "message", message: { role: "toolResult", toolCallId: id, content: [] } }));
+const withId = (id: string, l: string) => l.replace('{"type":"message"', `{"type":"message","id":"${id}"`);
+const edit = (targetId: string, replacement: unknown) => line({ type: "context_edit", id: `e-${targetId}`, targetId, replacement });
+const withResultId = (id: string, l: string) => l.replace('{"type":"message"', `{"type":"message","id":"${id}"`);
 const answer = line({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "done" }] } });
 
 describe("settledPrefix", () => {
@@ -33,8 +36,7 @@ describe("settledPrefix", () => {
   });
 
   describe("context_edit (pi's compaction machinery, ticket 210)", () => {
-    const withId = (id: string, l: string) => l.replace('{"type":"message"', `{"type":"message","id":"${id}"`);
-    const edit = (targetId: string, replacement: unknown) => line({ type: "context_edit", id: `e-${targetId}`, targetId, replacement });
+
 
     it("does not wait for the result of a call whose entry was removed, and keeps the long tail", () => {
       const text = user("hi") + withId("A", call("a")) + edit("A", null) + user("later") + call("b") + result("b") + answer;
@@ -57,6 +59,32 @@ describe("settledPrefix", () => {
 
     it("ignores an edit of an entry that made no calls", () => {
       const text = user("hi") + call("a") + withId("U", user("x")) + edit("U", null) + result("a");
+      assert.deepEqual(settledPrefix(text), { text, dropped: 0 });
+    });
+
+    it("re-arms a call that a later edit restores after an earlier edit removed it", () => {
+      const done = user("hi") + withId("A", call("a")) + edit("A", null);
+      const r = settledPrefix(done + edit("A", { content: [{ type: "toolCall", id: "a", name: "bash", arguments: {} }] }) + user("later"));
+      assert.equal(r.text, done, "the restored call has no result, so the copy must end before it is back in context");
+      assert.equal(r.dropped, 2);
+    });
+
+    it("cuts when an edit removes the result entry but keeps the call entry", () => {
+      const done = user("hi") + withId("A", call("a")) + result("a", "R");
+      const r = settledPrefix(done + edit("R", null) + user("later"));
+      assert.equal(r.text, done, "without its result the call is unanswered again");
+      assert.equal(r.dropped, 2);
+    });
+
+    it("cuts when a replacement introduces a call the entry never made", () => {
+      const done = user("hi") + withId("A", call("a")) + result("a");
+      const r = settledPrefix(done + edit("A", { content: [{ type: "toolCall", id: "x", name: "bash", arguments: {} }] }) + user("later"));
+      assert.equal(r.text, done, "the new call x is unanswered");
+      assert.equal(r.dropped, 2);
+    });
+
+    it("retires the calls of a replacement with no content, like null does", () => {
+      const text = user("hi") + withId("A", call("a")) + edit("A", {}) + user("later") + call("b") + result("b") + answer;
       assert.deepEqual(settledPrefix(text), { text, dropped: 0 });
     });
   });
@@ -88,7 +116,21 @@ describe("forkSnapshot", () => {
     const snap = forkSnapshot(file, dir);
     assert.notEqual(snap.path, file);
     assert.equal(fs.readFileSync(snap.path, "utf8"), user("hi"));
+    assert.equal(snap.dropped, 1);
     assert.equal(fs.readFileSync(file, "utf8"), user("hi") + call("a"), "the session file itself is not touched");
+    snap.cleanup();
+    assert.equal(fs.existsSync(snap.path), false);
+  });
+
+  it("drops an orphan toolResult whose call entry an edit removed, keeping the rest", () => {
+    const dir = tmp();
+    const file = path.join(dir, "s.jsonl");
+    const whole = user("hi") + withId("A", call("a")) + edit("A", null) + result("a") + answer;
+    fs.writeFileSync(file, whole);
+    const snap = forkSnapshot(file, dir);
+    assert.notEqual(snap.path, file);
+    assert.equal(fs.readFileSync(snap.path, "utf8"), user("hi") + withId("A", call("a")) + edit("A", null) + answer);
+    assert.equal(snap.dropped, 1);
     snap.cleanup();
     assert.equal(fs.existsSync(snap.path), false);
   });
