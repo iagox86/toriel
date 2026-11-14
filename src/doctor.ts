@@ -377,7 +377,7 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
       out.push({ id: "tmux-keys", level: "feature", message: "tmux has extended-keys off, so Shift+Enter sends the message instead of adding a newline (Alt+Enter works either way); add `set -g extended-keys on` to ~/.tmux.conf and reload it (`tmux source-file ~/.tmux.conf`)", manual: "~/.tmux.conf is not toriel's file, and the setting changes how tmux encodes keys for every program in it" });
     }
     // tmux strips OSC 8 links for a terminal whose terminal-features lack `hyperlinks`; nothing says why a click then does nothing (ticket 211). Its own list for the client is the answer, whatever pattern or detection put a feature there
-    if (tmux.clientFeatures !== undefined && tmux.clientTerm !== undefined && !tmux.clientFeatures.split(",").includes("hyperlinks")) {
+    if (tmux.clientFeatures !== undefined && tmux.clientFeatures !== "" && tmux.clientTerm !== undefined && !tmux.clientFeatures.split(",").includes("hyperlinks")) {
       out.push({ id: "tmux-hyperlinks", level: "feature", message: `tmux does not pass clickable links through to ${tmux.clientTerm}, so URLs in toriel (and everything else in tmux) show as plain text and clicking does nothing; add \`set -as terminal-features ",${tmux.clientTerm}:hyperlinks"\` to ~/.tmux.conf and restart the tmux server (features are worked out when the client attaches, so reloading the file is not enough)`, manual: "~/.tmux.conf is not toriel's file and not JSON that doctor could edit safely, and the setting changes how tmux treats that terminal for every program in it" });
     }
     // kitty does not negotiate with tmux, so it sends a plain Enter for Shift+Enter unless its own config says otherwise

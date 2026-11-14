@@ -225,6 +225,7 @@ describe("doctor checks", () => {
     assert.deepEqual(finding("xterm-kitty", "bpaste,clipboard,hyperlinks,RGB"), [], "it is on, from whatever pattern or detection");
     assert.equal(finding("xterm-256color", "RGB").length, 1, "any terminal, not only kitty");
     assert.deepEqual(finding("xterm-kitty", undefined), [], "tmux too old to say: no guess");
+    assert.deepEqual(finding("xterm-kitty", ""), [], "tmux before 3.2 renders the format as an empty string: terminal-features does not exist there, so the fix cannot be offered");
     assert.deepEqual(finding(undefined, "RGB"), [], "tmux could not say which terminal");
     assert.deepEqual(finding("xterm-kitty", "RGB", {}), [], "not under tmux");
     assert.deepEqual(finding("xterm-kitty", "RGB", inTmux, false), [], "not a real terminal");
