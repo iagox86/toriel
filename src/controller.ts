@@ -249,8 +249,16 @@ class Controller {
       this.wakeOnType.cancel();
       this.submit(text);
     };
-    // a sleeping session gets started once the text is a /command or !command and typing pauses (ticket 68)
-    this.editor.onChange = (text) => this.wakeOnType.onText(text);
+    // one hook owns the box's changes: the ctrl-f filter while it is live, else wake-on-type.
+    // Setting onChange here only - the switcher filter must not swap it, or a switcher visit
+    // would leave the hook undefined and silence wake-on-type until restart.
+    this.editor.onChange = (text) => {
+      if (this.switching.filter.live) {
+        this.switching.filter.liveText(text);
+        return;
+      }
+      this.wakeOnType.onText(text);
+    };
     this.editor.onKey = (data) => this.keys(data);
     const layouts = buildLayouts(this);
     this.chatLayout = layouts.chat;

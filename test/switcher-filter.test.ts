@@ -36,31 +36,31 @@ describe("SwitcherFilter", () => {
     assert.equal(filter.current?.text, "keep");
   });
 
-  it("clears the filter and live mode, and gives the box's change hook back", () => {
+  it("clears the filter and live mode without touching the editor's change hook (the controller owns it: ticket 68 wake-on-type died when reset() set it undefined)", () => {
     const { filter, editor } = fixture();
     filter.startLive();
-    assert.ok(filter.live && editor.onChange);
+    assert.ok(filter.live);
     filter.clear();
     assert.equal(filter.current, null);
     assert.equal(filter.live, false);
-    assert.equal(editor.onChange, undefined);
+    assert.equal(editor.onChange, undefined, "the filter never assigns the hook, so it stays whatever the controller set");
   });
 
   it("filters as text is typed in live mode, and ignores a half-typed flag", () => {
-    const { filter, editor } = fixture();
+    const { filter } = fixture();
     filter.startLive();
-    editor.onChange?.("alpha");
+    filter.liveText("alpha");
     assert.equal(filter.current?.text, "alpha");
-    editor.onChange?.("beta --regex");
+    filter.liveText("beta --regex");
     assert.equal(filter.current?.regex, true);
-    editor.onChange?.('"unterminated');
+    filter.liveText('"unterminated');
     assert.equal(filter.current?.text, "beta", "a quote that is not closed yet keeps what is shown");
   });
 
   it("keeps the filter but ends live mode on enter, and drops it on escape", () => {
-    const { filter, editor, log } = fixture();
+    const { filter, log } = fixture();
     filter.startLive();
-    editor.onChange?.("alpha");
+    filter.liveText("alpha");
     assert.equal(filter.liveKeys("\r"), true);
     assert.equal(filter.live, false);
     assert.equal(filter.current?.text, "alpha");

@@ -25,7 +25,6 @@ export class SwitcherFilter {
   reset(): void {
     this.current = null;
     this.live = false;
-    this.h.editor.onChange = undefined;
   }
 
   /** Set the filter from /filter-style text; returns an error message for a bad pattern. */
@@ -50,12 +49,12 @@ export class SwitcherFilter {
   startLive(): void {
     this.live = true;
     this.h.editor.setText("");
-    this.h.editor.onChange = (text) => this.applyLiveText(text);
     this.h.switcher.hint = "filter as you type - up/down move - enter keeps it - esc clears it (-r for a regex)";
     this.h.tui.requestRender();
   }
 
-  private applyLiveText(text: string): void {
+  /** The box text while ctrl-f filtering; the controller routes every editor change here first. */
+  liveText(text: string): void {
     const parsed = parseCommandLine(SWITCHER_COMMANDS, `/filter ${text}`);
     if (parsed.kind !== "run") {
       return; // a half-typed flag or quote: keep what is shown
@@ -77,14 +76,12 @@ export class SwitcherFilter {
     if (matchesKey(data, Key.enter)) {
       // keep the filter, give the box back
       this.live = false;
-      this.h.editor.onChange = undefined;
       this.h.editor.setText("");
       this.h.switcher.hint = "filter kept - esc or /filter clears it";
       this.h.tui.requestRender();
       return true;
     }
     if (matchesKey(data, Key.escape)) {
-      this.h.editor.onChange = undefined;
       this.h.editor.setText("");
       this.clear();
       this.h.switcher.hint = "";
