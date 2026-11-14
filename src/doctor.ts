@@ -64,6 +64,7 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: "sleep-lock", level: "feature", title: "the machine is kept awake for scheduled runs (systemd-inhibit)" },
   { id: "clipboard", level: "feature", title: "clipboard tools for paste and copy (wl-clipboard on Wayland, xclip on X11)" },
   { id: "tmux-keys", level: "feature", title: "tmux passes Shift+Enter through (extended-keys)" },
+  { id: "tmux-hyperlinks", level: "feature", title: "tmux passes clickable links (OSC 8 hyperlinks) through to the terminal (terminal-features)" },
   { id: "kitty-shift-enter", level: "feature", title: "kitty sends Shift+Enter distinctly under tmux (kitty.conf mapping)" },
   { id: "truecolor", level: "feature", title: "the terminal shows toriel's theme as intended (truecolor)" },
   { id: "grants-path-rule", level: "hardening", title: "an agent cannot edit the permission grants file unasked (a path rule)", needsPermissionPackage: true },
@@ -108,6 +109,8 @@ export interface TmuxKeys {
   extendedKeys?: string;
   /** The TERM of the terminal tmux is attached to (not the pane's own TERM, which tmux sets). */
   clientTerm?: string;
+  /** The terminal features tmux has switched on for that client (`#{client_termfeatures}`, "RGB,hyperlinks,..."); undefined when tmux is too old to say. */
+  clientFeatures?: string;
 }
 
 function tmuxValue(args: string[]): string | undefined {
@@ -116,7 +119,7 @@ function tmuxValue(args: string[]): string | undefined {
 }
 
 export function probeTmux(): TmuxKeys {
-  return { extendedKeys: tmuxValue(["show-options", "-gv", "extended-keys"]), clientTerm: tmuxValue(["display-message", "-p", "#{client_termname}"]) };
+  return { extendedKeys: tmuxValue(["show-options", "-gv", "extended-keys"]), clientTerm: tmuxValue(["display-message", "-p", "#{client_termname}"]), clientFeatures: tmuxValue(["display-message", "-p", "#{client_termfeatures}"]) };
 }
 
 /** kitty.conf with its `include`d files (plain paths only, up to four files deep), or "" when there is none. kitty also reads /etc/xdg; that is deliberately skipped (a mapping only there would give a false finding). */
@@ -372,6 +375,10 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
     const tmux = (opts.probeTmux ?? probeTmux)();
     if (tmux.extendedKeys === "off") {
       out.push({ id: "tmux-keys", level: "feature", message: "tmux has extended-keys off, so Shift+Enter sends the message instead of adding a newline (Alt+Enter works either way); add `set -g extended-keys on` to ~/.tmux.conf and reload it (`tmux source-file ~/.tmux.conf`)", manual: "~/.tmux.conf is not toriel's file, and the setting changes how tmux encodes keys for every program in it" });
+    }
+    // tmux strips OSC 8 links for a terminal whose terminal-features lack `hyperlinks`; nothing says why a click then does nothing (ticket 211). Its own list for the client is the answer, whatever pattern or detection put a feature there
+    if (tmux.clientFeatures !== undefined && tmux.clientTerm !== undefined && !tmux.clientFeatures.split(",").includes("hyperlinks")) {
+      out.push({ id: "tmux-hyperlinks", level: "feature", message: `tmux does not pass clickable links through to ${tmux.clientTerm}, so URLs in toriel (and everything else in tmux) show as plain text and clicking does nothing; add \`set -as terminal-features ",${tmux.clientTerm}:hyperlinks"\` to ~/.tmux.conf and restart the tmux server (features are worked out when the client attaches, so reloading the file is not enough)`, manual: "~/.tmux.conf is not toriel's file and not JSON that doctor could edit safely, and the setting changes how tmux treats that terminal for every program in it" });
     }
     // kitty does not negotiate with tmux, so it sends a plain Enter for Shift+Enter unless its own config says otherwise
     if (/kitty/i.test(tmux.clientTerm ?? "") && !KITTY_SHIFT_ENTER.test(opts.kittyConfig ?? readKittyConfig(env))) {
