@@ -11,6 +11,7 @@ import { piAgentDir } from "./pi-dir.ts";
 import { probeEntry, parseStatusDetailed, readConfigs, statusReport } from "./mcp-doctor.ts";
 import { addMcpServer, MCP_ACTIONS, mcpConfigFile, mcpEntry, mcpListLines, mcpServerConnected, removeMcpServer } from "./mcp.ts";
 import { mcpExplorePrompt } from "./mcp-explore-prompt.ts";
+import { mayWake } from "./wake-on-type.ts";
 import { forkName, placeFork } from "./fork-placement.ts";
 import { loadGroups, saveGroups, withComment, withParked } from "./groups.ts";
 import type { Host } from "./host.ts";
@@ -211,6 +212,31 @@ export class SessionCommands {
       meta = await this.startViewed();
     }
     return meta;
+  }
+
+  /**
+   * The user is typing a /command or !command into the viewed session: start it if it sleeps, so pi's command
+   * list and completions that ask the child exist by the time they are wanted (ticket 68). Quiet when the
+   * session may not be woken (see `mayWake`; the daemon also refuses a file another pi may have open) and
+   * on failure: sending the message starts it the ordinary way and reports what went wrong.
+   */
+  async wakeForTyping(): Promise<void> {
+    const key = this.h.viewing;
+    const known = this.viewedMeta() ?? (key ? this.h.local.get(key) : undefined);
+    if (!key || !known || !mayWake(key, this.viewedMeta(), this.h.switching.isOpen)) {
+      return;
+    }
+    try {
+      this.h.notify("starting session...");
+      const r = (await this.h.request({ type: "spawn", sessionFile: key, cwd: known.cwd || path.dirname(key), ready: true, wake: true })) as { woke?: boolean; reason?: string };
+      if (r?.woke === false) {
+        this.h.notify(`session not started: ${r.reason ?? "refused"}`);
+        return;
+      }
+      this.h.refreshPiCommands();
+    } catch {
+      // the message will start it, and say what is wrong
+    }
   }
 
   /** Resume the viewed session's file in a fresh child, without prompting it. */

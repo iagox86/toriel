@@ -91,17 +91,20 @@ export async function handlePrompt(
     s.attachedTo = socket;
     // a name for a session that has none: decided here (unique), checked in the background once it is up
     const wanted = cmd.name && !s.sessionName ? ctx.naming.claim(s, cmd.name, { source: "spawn" }) : undefined;
-    try {
-      await ctx.children.start(s, { sessionFile: cmd.sessionFile, name: wanted ?? cmd.name });
-    } catch (err) {
-      ctx.naming.release(s);
-      throw err;
-    }
-    if (wanted !== undefined) {
-      ctx.naming.applyInBackground(s);
-    }
-    ctx.hub.broadcastSessions();
-    await sendHistory(ctx, socket, s);
+    const target = s;
+    await startOnce(target, async () => {
+      try {
+        await ctx.children.start(target, { sessionFile: cmd.sessionFile, name: wanted ?? cmd.name });
+      } catch (err) {
+        ctx.naming.release(target);
+        throw err;
+      }
+      if (wanted !== undefined) {
+        ctx.naming.applyInBackground(target);
+      }
+      ctx.hub.broadcastSessions();
+      await sendHistory(ctx, socket, target);
+    });
   }
   // "steer" covers both cases: executes immediately when idle, and is
   // queued as a steering message when a run is already in flight.
@@ -119,6 +122,22 @@ export async function handleSpawn(
   const existing = cmd.sessionFile
     ? ctx.registry.byFile(cmd.sessionFile)
     : undefined;
+  // typing a command into a sleeping session starts it (ticket 68), but never one another pi may have open
+  if (cmd.wake && cmd.sessionFile && !existing?.child) {
+    const why = wakeRefusal(ctx, cmd.sessionFile, existing !== undefined);
+    if (why) {
+      res(true, undefined, { woke: false, reason: why });
+      return;
+    }
+  }
+  if (existing?.starting && !existing.child) {
+    // a start is already in flight (a prompt, an earlier wake): join it rather than refuse
+    if (cmd.ready) {
+      await existing.starting;
+    }
+    res(true, undefined, { sessionId: existing.id, uuid: existing.sessionId, woke: true });
+    return;
+  }
   const s = existing ?? ctx.registry.create(cmd.cwd, cmd.sessionFile);
   if (s.child && s.attachedTo && s.attachedTo !== socket) {
     throw new Error("session is attached to another controller");
@@ -143,9 +162,12 @@ export async function handleSpawn(
       ctx.hub.broadcastSessions();
       await sendHistory(ctx, socket, s);
     });
-    s.starting = starting.finally(() => {
-      s.starting = undefined;
+    const started: Promise<void> = starting.finally(() => {
+      if (s.starting === started) {
+        s.starting = undefined;
+      }
     });
+    s.starting = started;
     s.starting.catch((err: unknown) => {
       log(`session ${s.id} spawn failed: ${errText(err)}`);
       s.attachedTo = undefined;
@@ -155,7 +177,7 @@ export async function handleSpawn(
     if (cmd.ready) {
       await starting;
     }
-    res(true, undefined, { sessionId: s.id, uuid: s.sessionId });
+    res(true, undefined, { sessionId: s.id, uuid: s.sessionId, woke: true });
     return;
   }
   if (cmd.ready) {
@@ -419,4 +441,39 @@ export function handleRestore(cmd: Cmd<"restore">, res: Responder): void {
   const restored = restoreTrashedSession(cmd.trashedTo, TRASH_DIR);
   log(`restored deleted session ${restored}`);
   res(true, undefined, { path: restored });
+}/**
+ * Run `start` as the one start of `s` in flight. Anyone who arrives meanwhile (a prompt, a wake from typing,
+ * /new) awaits `s.starting` instead of starting a second process (the old "spawn in progress; retry").
+ */
+export function startOnce(s: DaemonSession, start: () => Promise<void>): Promise<void> {
+  const started: Promise<void> = start().finally(() => {
+    if (s.starting === started) {
+      s.starting = undefined;
+    }
+  });
+  s.starting = started;
+  return started;
 }
+
+/**
+ * Why a session file must not be started because someone typed into it (ticket 68), or undefined when it may be:
+ * open in another pi, or fresh enough that one is probably running it (the confirm-fork rule of a prompt).
+ */
+export function wakeRefusal(ctx: DaemonContext, file: string, known: boolean): string | undefined {
+  if (ctx.presence.has(file)) {
+    return "it is open in another pi process";
+  }
+  if (known || wasHandled(file)) {
+    return undefined;
+  }
+  try {
+    if (Date.now() - fs.statSync(file).mtimeMs < 60_000) {
+      return "its file changed in the last minute, so another pi may be running it";
+    }
+  } catch {
+    return "its file cannot be read";
+  }
+  return undefined;
+}
+
+

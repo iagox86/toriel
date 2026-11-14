@@ -12,7 +12,7 @@
  * older daemon or controller cannot cope with. A mismatch blocks the controller
  * (see version-check.ts); a mere code difference with the same protocol only warns.
  */
-export const PROTOCOL = 6; // 6: rename and adopt answer with the applied `name` and `nameVerified` (the daemon makes names unique); 5: file-path prompts carry grant rows, and permission_add's `dialog` (4: the watch_add command (file-trigger schedules); 3: agent_spawn's optional cwd; 2: the `cd` command and adopt's `keepPermissions`)
+export const PROTOCOL = 7; // 7: spawn's optional `wake` (start a sleeping session because the user typed a command into it; answers `woke: false` with a reason instead of starting a file another pi may have open); 6: 6: rename and adopt answer with the applied `name` and `nameVerified` (the daemon makes names unique); 5: file-path prompts carry grant rows, and permission_add's `dialog` (4: the watch_add command (file-trigger schedules); 3: agent_spawn's optional cwd; 2: the `cd` command and adopt's `keepPermissions`)
 
 /** Which toriel code a process runs (build-id.ts). */
 export interface BuildInfo {
@@ -240,7 +240,7 @@ type ClientCommandBody =
    * live session the daemon answers from the last list any child reported. */
   | { type: "commands"; id?: string; session?: number }
   /** `ready`: answer only once the child is up (for callers about to command it). */
-  | { type: "spawn"; id?: string; cwd: string; sessionFile?: string; name?: string; agent?: string; ready?: boolean }
+  | { type: "spawn"; id?: string; cwd: string; sessionFile?: string; name?: string; agent?: string; ready?: boolean; wake?: boolean }
   | { type: "deactivate"; id?: string; session: number }
   /** Deactivate if live, then move the session file to the trash dir. */
   | { type: "delete"; id?: string; session?: number; path?: string }

@@ -55,6 +55,8 @@ export interface Host {
   /** Re-read a session's transcript from its file after the file changed under it (rewind, restore). */
   reloadView(key: string): void;
   syncHistory(force?: boolean): void;
+  /** Ask pi for the viewed session's slash commands again (after a sleeping session was started). */
+  refreshPiCommands(): void;
   /** Show a sent prompt immediately in the session's transcript (and start the spinner). */
   echoPrompt(key: string, text: string, images?: ImageBlock[]): void;
   /** `wanted`, suffixed (" #2") if another session already has that name; `selfKey` is the session being renamed. */
