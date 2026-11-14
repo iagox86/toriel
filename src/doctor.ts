@@ -118,7 +118,7 @@ export function probeTmux(): TmuxKeys {
   return { extendedKeys: tmuxValue(["show-options", "-gv", "extended-keys"]), clientTerm: tmuxValue(["display-message", "-p", "#{client_termname}"]) };
 }
 
-/** kitty.conf with its `include`d files (plain paths only, a few levels), or "" when there is none. */
+/** kitty.conf with its `include`d files (plain paths only, up to four files deep), or "" when there is none. kitty also reads /etc/xdg; that is deliberately skipped (a mapping only there would give a false finding). */
 export function readKittyConfig(env: NodeJS.ProcessEnv, depth = 0, file?: string): string {
   const dir = env.KITTY_CONFIG_DIRECTORY ?? join(env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "kitty");
   const path = file ?? join(dir, "kitty.conf");
@@ -136,7 +136,7 @@ export function readKittyConfig(env: NodeJS.ProcessEnv, depth = 0, file?: string
 }
 
 /** Whether kitty is told what to send for Shift+Enter: kitty alone sends a plain Enter inside tmux. */
-export const KITTY_SHIFT_ENTER = /^[ \t]*map[ \t]+shift\+enter[ \t]+\S/im;
+export const KITTY_SHIFT_ENTER = /^[ \t]*map(?:[ \t]+--\S+)*[ \t]+shift\+enter[ \t]+\S/im;
 
 /**
  * Run bubblewrap once. `which bwrap` is not enough: it also needs unprivileged user namespaces,

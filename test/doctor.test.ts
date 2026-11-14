@@ -214,6 +214,7 @@ describe("doctor checks", () => {
     assert.match(finding("xterm-kitty", "")[0]?.message ?? "", /map shift\+enter send_text all \\x1b\[13;2u/);
     assert.deepEqual(finding("xterm-kitty", "map shift+enter send_text all \\x1b[13;2u\n"), []);
     assert.deepEqual(finding("xterm-kitty", "  MAP  shift+enter  send_text all x"), [], "spacing and case");
+    assert.deepEqual(finding("xterm-kitty", "map --release shift+enter send_text all x"), [], "a map with options");
     assert.equal(finding("xterm-kitty", "# map shift+enter send_text all x").length, 1, "a comment does not count");
     assert.deepEqual(finding("xterm-256color", ""), [], "another terminal");
     assert.deepEqual(finding(undefined, ""), [], "tmux could not say which terminal");
