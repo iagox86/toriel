@@ -61,6 +61,8 @@ export const HISTORY_FILE = process.env.TORIEL_HISTORY ?? path.join(DATA_DIR, "t
 export const SCHEDULES_FILE = process.env.TORIEL_SCHEDULES ?? path.join(DATA_DIR, "toriel", "schedules.json");
 /** The one directory sandboxed commands may always write: a stable place to hand files to other agents or to the user (board 190). */
 export const SHARED_DIR = process.env.TORIEL_SHARED ?? path.join(DATA_DIR, "toriel", "shared");
+/** What every sandboxed command sees as /tmp: one persistent directory shared by all sandboxed sessions, so scratch files survive between commands and a restarted agent finds its work (ticket 204). The real /tmp is never bound (live sockets). */
+export const SANDBOX_TMP_DIR = process.env.TORIEL_SANDBOX_TMP_DIR ?? path.join(DATA_DIR, "toriel", "tmp");
 export const PERMISSIONS_FILE =process.env.TORIEL_PERMISSIONS ?? path.join(DATA_DIR, "toriel", "permissions.json");
 export const LINEAGE_FILE = process.env.TORIEL_LINEAGE ?? path.join(DATA_DIR, "toriel", "lineage.json");
 export const SESSION_AGENTS_FILE = process.env.TORIEL_SESSION_AGENTS ?? path.join(DATA_DIR, "toriel", "session-agents.json");

@@ -12,6 +12,9 @@ import { bwrapArgs, derivePolicy, gitPolicy, makeWrap, readSandbox, SANDBOX_ENV,
 
 // The sandbox hides /tmp, so test trees live in /var/tmp (a scope root under /tmp is refused, tested below).
 const BASE = existsSync("/var/tmp") ? "/var/tmp" : tmpdir();
+// These tests build their fixtures under /var/tmp, which is read-only inside a toriel sandbox (ticket 203): they cannot run there, and the EROFS failures look like broken code.
+const inSandbox = process.env.TORIEL_SANDBOX !== undefined;
+const IN_SANDBOX = "this test builds sandbox fixtures under /var/tmp and cannot run inside a sandbox";
 const made: string[] = [];
 function mk(): string {
   const dir = realpathSync(mkdtempSync(join(BASE, "toriel-sandbox-test-")));
@@ -43,9 +46,9 @@ function repoWithWorktree() {
   return { base, repo, wt, common: join(repo, ".git"), gitdir: join(repo, ".git", "worktrees", "feat") };
 }
 
-const cfgFor = (root: string, extra: { shared?: string; staticRw?: string[]; sock?: string } = {}) => ({ kind: "bwrap" as const, root, shared: extra.shared, staticRw: extra.staticRw ?? [], sock: extra.sock });
+const cfgFor = (root: string, extra: { shared?: string; staticRw?: string[]; sock?: string; tmp?: string } = {}) => ({ kind: "bwrap" as const, root, shared: extra.shared, staticRw: extra.staticRw ?? [], sock: extra.sock, tmp: extra.tmp });
 
-describe("readSandbox", () => {
+describe("readSandbox", { skip: inSandbox ? IN_SANDBOX : false }, () => {
   it("is off when TORIEL_SANDBOX is absent", () => {
     assert.deepEqual(readSandbox({}), { kind: "off" });
     assert.deepEqual(readSandbox({ TORIEL_SCOPE_ROOT: "/x" }), { kind: "off" });
@@ -76,12 +79,14 @@ describe("readSandbox", () => {
   it("reads the root, the shared directory and the static roots", () => {
     const root = mk();
     const r = readSandbox({ [SANDBOX_ENV]: "bwrap", TORIEL_SCOPE_ROOT: root, [SHARED_DIR_ENV]: "/s", [SANDBOX_RW_ENV]: ["/a", "rel", "/b"].join(delimiter) });
-    assert.deepEqual(r, { kind: "bwrap", root, shared: "/s", staticRw: ["/a", "/b"], sock: undefined });
+    assert.deepEqual(r, { kind: "bwrap", root, shared: "/s", staticRw: ["/a", "/b"], sock: undefined, tmp: undefined });
+    assert.equal((readSandbox({ [SANDBOX_ENV]: "bwrap", TORIEL_SCOPE_ROOT: root, TORIEL_SANDBOX_TMP: "/t" }) as { tmp?: string }).tmp, "/t");
+    assert.equal((readSandbox({ [SANDBOX_ENV]: "bwrap", TORIEL_SCOPE_ROOT: root, TORIEL_SANDBOX_TMP: "rel" }) as { tmp?: string }).tmp, undefined, "a relative path is ignored");
     assert.equal((readSandbox({ [SANDBOX_ENV]: "bwrap", TORIEL_SCOPE_ROOT: root, TORIEL_SOCK: "/run/user/1/toriel.sock" }) as { sock?: string }).sock, "/run/user/1/toriel.sock");
   });
 });
 
-describe("gitPolicy", () => {
+describe("gitPolicy", { skip: inSandbox ? IN_SANDBOX : false }, () => {
   it("carves hooks and config out of an ordinary checkout", () => {
     const root = mk();
     mkdirSync(join(root, ".git"));
@@ -108,7 +113,7 @@ describe("gitPolicy", () => {
   });
 });
 
-describe("derivePolicy", () => {
+describe("derivePolicy", { skip: inSandbox ? IN_SANDBOX : false }, () => {
   it("adds the resolved node_modules target when the symlink leaves the root", () => {
     const { wt, repo } = repoWithWorktree();
     assert.ok(derivePolicy(cfgFor(wt)).writable.includes(join(repo, "node_modules")));
@@ -124,8 +129,13 @@ describe("derivePolicy", () => {
   });
 });
 
-describe("bwrapArgs and makeWrap", () => {
-  it("binds writable areas before the read-only carve-outs, with a private /tmp", () => {
+describe("bwrapArgs and makeWrap", { skip: inSandbox ? IN_SANDBOX : false }, () => {
+  it("binds the persistent tmp over /tmp when there is one", () => {
+    const args = bwrapArgs({ writable: [], readOnly: [], masked: [], hidden: [], tmp: "/d/tmp" }, "/w");
+    assert.deepEqual(args.slice(0, 11), ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--bind", "/d/tmp", "/tmp", "--die-with-parent"]);
+  });
+
+  it("binds writable areas before the read-only carve-outs, with an empty /tmp when there is no persistent one", () => {
     const args = bwrapArgs({ writable: ["/w", "/x"], readOnly: ["/w/.git"], masked: ["/run/user"], hidden: ["/s/toriel.sock"] }, "/w");
     assert.deepEqual(args, ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "--die-with-parent", "--tmpfs", "/run/user", "--bind", "/w", "/w", "--bind", "/x", "/x", "--ro-bind-try", "/w/.git", "/w/.git", "--ro-bind", "/dev/null", "/s/toriel.sock", "--chdir", "/w"]);
   });
@@ -163,7 +173,7 @@ describe("bwrapArgs and makeWrap", () => {
   });
 });
 
-describe("sandboxNote", () => {
+describe("sandboxNote", { skip: inSandbox ? IN_SANDBOX : false }, () => {
   it("is empty unless the sandbox is on, and names the root and the shared directory", () => {
     assert.equal(sandboxNote({ kind: "off" }), "");
     assert.equal(sandboxNote({ kind: "invalid", why: "x" }), "");
@@ -178,7 +188,7 @@ const bwrapUsable = (() => {
   return r.status === 0;
 })();
 
-describe("real bwrap", { skip: bwrapUsable ? false : "bwrap is not usable here" }, () => {
+describe("real bwrap", { skip: inSandbox ? IN_SANDBOX : bwrapUsable ? false : "bwrap is not usable here" }, () => {
   const run = (cfg: ReturnType<typeof cfgFor>, command: string, cwd: string, extra: string[] = []) => {
     const w = makeWrap(cfg, () => extra);
     assert.ok(w);
@@ -240,7 +250,27 @@ describe("real bwrap", { skip: bwrapUsable ? false : "bwrap is not usable here" 
     assert.ok(run(cfgFor(root), `echo a > a && git -c user.name=t -c user.email=t@t add a && git -c user.name=t -c user.email=t@t commit -qm c`, root).ok);
   });
 
-  it("gives the shared directory and a private /tmp", () => {
+  it("keeps /tmp between commands (and across sessions sharing the directory) without touching the real /tmp", () => {
+    const root = mk();
+    const tmp = mk();
+    const cfg = cfgFor(root, { tmp });
+    assert.ok(run(cfg, "echo kept > /tmp/toriel-204-probe && mkdir -p /tmp/sub && echo x > /tmp/sub/f", root).ok);
+    assert.equal(readFileSync(join(tmp, "toriel-204-probe"), "utf8"), "kept\n");
+    const again = run(cfg, "cat /tmp/toriel-204-probe /tmp/sub/f", root);
+    assert.ok(again.ok, "a later command sees the earlier command's files");
+    assert.ok(!existsSync("/tmp/toriel-204-probe"), "the real /tmp is untouched");
+    const other = mk();
+    assert.ok(run(cfgFor(other, { tmp }), "cat /tmp/toriel-204-probe", other).ok, "another sandboxed session sees them too");
+  });
+
+  it("falls back to an empty /tmp when the persistent directory is missing", () => {
+    const root = mk();
+    const cfg = cfgFor(root, { tmp: "/no/such/tmp-dir" });
+    assert.equal(derivePolicy(cfg).tmp, undefined);
+    assert.ok(run(cfg, "echo a > /tmp/x && test -f /tmp/x", root).ok);
+  });
+
+  it("gives the shared directory and a /tmp that is not the real one", () => {
     const root = mk();
     const shared = mk();
     assert.ok(run(cfgFor(root, { shared }), `echo hi > ${shared}/note && echo t > /tmp/toriel-sandbox-private-probe`, root).ok);

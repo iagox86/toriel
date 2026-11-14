@@ -18,7 +18,7 @@ import "./migrate-on-start.ts";
 import * as fs from "node:fs";
 import { buildInfo } from "./build-id.ts";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { LOG, PERMISSIONS_FILE, PID_FILE, PROFILE, SCHEDULES_FILE, SHARED_DIR, SOCK, TRASH_DIR } from "./config.ts";
+import { LOG, PERMISSIONS_FILE, PID_FILE, PROFILE, SCHEDULES_FILE, SANDBOX_TMP_DIR, SHARED_DIR, SOCK, TRASH_DIR } from "./config.ts";
 import { BridgeTracker } from "./daemon-bridge.ts";
 import { ChildManager } from "./daemon-children.ts";
 import type { DaemonContext } from "./daemon-context.ts";
@@ -72,6 +72,13 @@ function createContext(shutdown: () => void): DaemonContext {
     fs.chmodSync(SHARED_DIR, 0o700);
   } catch (err) {
     log(`could not create the shared directory ${SHARED_DIR}: ${errText(err)}`);
+  }
+  // the directory sandboxed commands see as /tmp (ticket 204); same handling as the shared directory: without it the sandbox falls back to an empty per-command /tmp
+  try {
+    fs.mkdirSync(SANDBOX_TMP_DIR, { recursive: true, mode: 0o700 });
+    fs.chmodSync(SANDBOX_TMP_DIR, 0o700);
+  } catch (err) {
+    log(`could not create the sandbox tmp directory ${SANDBOX_TMP_DIR}: ${errText(err)}`);
   }
   // a new install has no settings file, and without one nothing shows which defaults can be changed
   try {

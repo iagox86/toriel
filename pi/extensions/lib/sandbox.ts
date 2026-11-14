@@ -16,12 +16,14 @@ import { readScope } from "./scope-root.ts";
 export const SANDBOX_ENV = "TORIEL_SANDBOX";
 /** A directory every sandboxed command may write: the stable place to hand files to other agents or to you. */
 export const SHARED_DIR_ENV = "TORIEL_SHARED_DIR";
+/** The persistent directory bound over /tmp, shared by all sandboxed sessions (ticket 204); the daemon owns and creates it. */
+export const SANDBOX_TMP_ENV = "TORIEL_SANDBOX_TMP";
 /** Extra always-writable roots (caches), joined with the path delimiter; the daemon fills it from the toriel settings. */
 export const SANDBOX_RW_ENV = "TORIEL_SANDBOX_RW";
 
 export type SandboxConfig =
   | { kind: "off" }
-  | { kind: "bwrap"; root: string; shared?: string; staticRw: string[]; sock?: string }
+  | { kind: "bwrap"; root: string; shared?: string; staticRw: string[]; sock?: string; tmp?: string }
   | { kind: "invalid"; why: string };
 
 type FsApi = {
@@ -58,17 +60,19 @@ export function readSandbox(env: Record<string, string | undefined>, fsApi: Pick
     return { kind: "invalid", why: `the sandbox needs a usable TORIEL_SCOPE_ROOT (${scope.kind === "invalid" ? scope.why : "it is not set"})` };
   }
   if (scope.root === "/tmp" || scope.root.startsWith("/tmp/")) {
-    return { kind: "invalid", why: `the scope root ${scope.root} is under /tmp, which every sandboxed command sees as an empty private directory; work from a directory elsewhere` };
+    return { kind: "invalid", why: `the scope root ${scope.root} is under /tmp, which every sandboxed command sees as the sandbox's own /tmp (not the real one); work from a directory elsewhere` };
   }
   const shared = env[SHARED_DIR_ENV];
   const rw = env[SANDBOX_RW_ENV];
   const sock = env.TORIEL_SOCK;
+  const tmp = env[SANDBOX_TMP_ENV];
   return {
     kind: "bwrap",
     root: scope.root,
     shared: shared !== undefined && path.isAbsolute(shared) ? shared : undefined,
     staticRw: rw ? rw.split(path.delimiter).filter((p) => path.isAbsolute(p)) : [],
     sock: sock !== undefined && path.isAbsolute(sock) ? sock : undefined,
+    tmp: tmp !== undefined && path.isAbsolute(tmp) ? tmp : undefined,
   };
 }
 
@@ -82,6 +86,8 @@ export interface SandboxPolicy {
   masked: string[];
   /** Socket files replaced by /dev/null, so connecting fails (the daemon's own socket, wherever it is). */
   hidden: string[];
+  /** The directory bound over /tmp so scratch files persist; absent (or missing on disk) = an empty tmpfs per command. */
+  tmp?: string;
 }
 
 /**
@@ -198,19 +204,21 @@ export function derivePolicy(cfg: Extract<SandboxConfig, { kind: "bwrap" }>, ext
   const masked = MASKED_DIRS.filter((d) => isDir(fsApi, d));
   // the daemon's own socket, wherever it is; a socket inside a masked directory is already gone
   const hidden = cfg.sock !== undefined && fsApi.existsSync(cfg.sock) && !masked.some((d) => cfg.sock === d || cfg.sock?.startsWith(`${d}/`)) ? [cfg.sock] : [];
-  return { writable: [...new Set(writable)], readOnly: [...new Set(readOnly)], masked, hidden };
+  const tmp = cfg.tmp !== undefined ? realOrUndefined(fsApi, cfg.tmp) : undefined;
+  return { writable: [...new Set(writable)], readOnly: [...new Set(readOnly)], masked, hidden, tmp: tmp !== undefined && isDir(fsApi, tmp) ? tmp : undefined };
 }
 
 /**
  * The bwrap arguments (before the command) for a policy: read-only view of the whole filesystem, a
- * private /dev, /proc and /tmp (the real /tmp holds live sockets such as tmux and X11, which would
- * be a way out - board 190), empty tmpfs over the socket directories (`MASKED_DIRS`), the writable
+ * private /dev and /proc, and a /tmp that is NOT the real one (it holds live sockets such as tmux and X11,
+ * which would be a way out - board 190): the persistent daemon-owned `policy.tmp` when there is one, so files
+ * survive between commands (ticket 204), else an empty tmpfs, empty tmpfs over the socket directories (`MASKED_DIRS`), the writable
  * areas, the read-only carve-outs on top, and /dev/null over the daemon's socket. No
  * --new-session or --unshare-pid: toriel kills a command through its process group and neither was
  * probed. `--die-with-parent` ends the command if the daemon-owned child goes away.
  */
 export function bwrapArgs(policy: SandboxPolicy, cwd: string): string[] {
-  const args = ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "--die-with-parent"];
+  const args = ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", ...(policy.tmp !== undefined ? ["--bind", policy.tmp, "/tmp"] : ["--tmpfs", "/tmp"]), "--die-with-parent"];
   for (const p of policy.masked) {
     args.push("--tmpfs", p);
   }
@@ -256,5 +264,5 @@ export function sandboxNote(cfg: SandboxConfig): string {
     return "";
   }
   const shared = cfg.shared ? ` Files meant for other agents or the user go in ${cfg.shared} (also $${SHARED_DIR_ENV}).` : "";
-  return `\n\nCommands run in a sandbox: the filesystem is read-only except ${cfg.root} (the working tree), the places it links to, and a few cache directories; /tmp is private to each command and gone afterwards.${shared} A write elsewhere fails with "Read-only file system" - do not try to work around it, ask the user.`;
+  return `\n\nCommands run in a sandbox: the filesystem is read-only except ${cfg.root} (the working tree), the places it links to, and a few cache directories; /tmp is a scratch directory of its own, not the host's: it keeps its files between commands and is shared with the other sandboxed sessions, so name your files distinctively and put work you may need to resume there.${shared} A write elsewhere fails with "Read-only file system" - do not try to work around it, ask the user.`;
 }
