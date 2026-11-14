@@ -9,7 +9,10 @@ import { GrantStore } from "../src/permissions.ts";
 const line = (o: unknown) => `${JSON.stringify(o)}\n`;
 const user = (text: string) => line({ type: "message", message: { role: "user", content: [{ type: "text", text }] } });
 const call = (...ids: string[]) => line({ type: "message", message: { role: "assistant", content: ids.map((id) => ({ type: "toolCall", id, name: "bash", arguments: {} })) } });
-const result = (id: string) => line({ type: "message", message: { role: "toolResult", toolCallId: id, content: [] } });
+const result = (id: string, entryId?: string) => entryId === undefined ? line({ type: "message", message: { role: "toolResult", toolCallId: id, content: [] } }) : withResultId(entryId, line({ type: "message", message: { role: "toolResult", toolCallId: id, content: [] } }));
+const withId = (id: string, l: string) => l.replace('{"type":"message"', `{"type":"message","id":"${id}"`);
+const edit = (targetId: string, replacement: unknown) => line({ type: "context_edit", id: `e-${targetId}`, targetId, replacement });
+const withResultId = (id: string, l: string) => l.replace('{"type":"message"', `{"type":"message","id":"${id}"`);
 const answer = line({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "done" }] } });
 
 describe("settledPrefix", () => {
@@ -30,6 +33,70 @@ describe("settledPrefix", () => {
     const r = settledPrefix(done + call("a", "b") + result("a") + user("queued"));
     assert.equal(r.text, done);
     assert.equal(r.dropped, 3);
+  });
+
+  describe("context_edit (pi's compaction machinery, ticket 210)", () => {
+    it("does not wait for the result of a call whose entry was removed, and keeps the long tail", () => {
+      const text = user("hi") + withId("A", call("a")) + edit("A", null) + user("later") + call("b") + result("b") + answer;
+      assert.deepEqual(settledPrefix(text), { text, dropped: 0 });
+    });
+
+    it("still cuts at a call that really is unanswered after such an edit", () => {
+      const done = user("hi") + withId("A", call("a")) + edit("A", null) + user("later");
+      const r = settledPrefix(done + call("b"));
+      assert.equal(r.text, done);
+      assert.equal(r.dropped, 1);
+    });
+
+    it("retires a call when the replacement no longer contains it, and keeps one it still does", () => {
+      const text = user("hi") + withId("A", call("a", "b")) + edit("A", { content: [{ type: "toolCall", id: "b", name: "bash", arguments: {} }] }) + user("later");
+      assert.equal(settledPrefix(text).text, user("hi"), "b is still unanswered");
+      const gone = user("hi") + withId("A", call("a")) + edit("A", { content: "summary" }) + user("later");
+      assert.deepEqual(settledPrefix(gone), { text: gone, dropped: 0 });
+    });
+
+    it("ignores an edit of an entry that made no calls", () => {
+      const text = user("hi") + call("a") + withId("U", user("x")) + edit("U", null) + result("a");
+      assert.deepEqual(settledPrefix(text), { text, dropped: 0 });
+    });
+
+    it("removes the answer once however many null edits target the result entry", () => {
+      const done = user("hi") + withId("A", call("a")) + result("a", "R");
+      const r = settledPrefix(done + edit("R", null) + edit("R", null) + user("later") + call("b") + result("b") + answer);
+      assert.equal(r.text, done, "the projection of the edited result has no answer, so the call is pending");
+      assert.equal(r.dropped, 6);
+    });
+
+    it("restores the answer when a non-null edit follows a null one on the result entry", () => {
+      const text = user("hi") + withId("A", call("a")) + result("a", "R") + edit("R", null) + edit("R", { content: "kept" }) + user("later") + call("b") + result("b") + answer;
+      assert.deepEqual(settledPrefix(text), { text, dropped: 0 });
+    });
+
+    it("re-arms a call that a later edit restores after an earlier edit removed it", () => {
+      const done = user("hi") + withId("A", call("a")) + edit("A", null);
+      const r = settledPrefix(done + edit("A", { content: [{ type: "toolCall", id: "a", name: "bash", arguments: {} }] }) + user("later"));
+      assert.equal(r.text, done, "the restored call has no result, so the copy must end before it is back in context");
+      assert.equal(r.dropped, 2);
+    });
+
+    it("cuts when an edit removes the result entry but keeps the call entry", () => {
+      const done = user("hi") + withId("A", call("a")) + result("a", "R");
+      const r = settledPrefix(done + edit("R", null) + user("later"));
+      assert.equal(r.text, done, "without its result the call is unanswered again");
+      assert.equal(r.dropped, 2);
+    });
+
+    it("cuts when a replacement introduces a call the entry never made", () => {
+      const done = user("hi") + withId("A", call("a")) + result("a");
+      const r = settledPrefix(done + edit("A", { content: [{ type: "toolCall", id: "x", name: "bash", arguments: {} }] }) + user("later"));
+      assert.equal(r.text, done, "the new call x is unanswered");
+      assert.equal(r.dropped, 2);
+    });
+
+    it("retires the calls of a replacement with no content, like null does", () => {
+      const text = user("hi") + withId("A", call("a")) + edit("A", {}) + user("later") + call("b") + result("b") + answer;
+      assert.deepEqual(settledPrefix(text), { text, dropped: 0 });
+    });
   });
 
   it("drops a half-written last line", () => {
@@ -59,9 +126,50 @@ describe("forkSnapshot", () => {
     const snap = forkSnapshot(file, dir);
     assert.notEqual(snap.path, file);
     assert.equal(fs.readFileSync(snap.path, "utf8"), user("hi"));
+    assert.equal(snap.dropped, 1);
     assert.equal(fs.readFileSync(file, "utf8"), user("hi") + call("a"), "the session file itself is not touched");
     snap.cleanup();
     assert.equal(fs.existsSync(snap.path), false);
+  });
+
+  it("neutralizes an orphan toolResult with an appended context_edit, keeping the rest", () => {
+    const dir = tmp();
+    const file = path.join(dir, "s.jsonl");
+    const whole = user("hi") + withId("A", call("a")) + edit("A", null) + result("a", "R") + answer;
+    fs.writeFileSync(file, whole);
+    const snap = forkSnapshot(file, dir);
+    assert.notEqual(snap.path, file);
+    // pi walks parentId from the leaf, so the result line must not be dropped from the chain; the copy
+    // appends a context_edit that takes it out of the projection instead
+    const neutralize = `${JSON.stringify({ type: "context_edit", id: "toriel-edit-1", parentId: "R", targetId: "R", replacement: null })}\n`;
+    assert.equal(fs.readFileSync(snap.path, "utf8"), whole + neutralize);
+    assert.equal(snap.dropped, 0);
+    snap.cleanup();
+    assert.equal(fs.existsSync(snap.path), false);
+  });
+
+  it("parents appended orphan edits to the copy's last entry, chained among themselves", () => {
+    const dir = tmp();
+    const file = path.join(dir, "s.jsonl");
+    const whole = withId("A", call("a")) + withId("B", call("b")) + result("a", "R1") + result("b", "R2") + edit("A", null) + edit("B", null) + withId("C", user("later"));
+    fs.writeFileSync(file, whole);
+    const snap = forkSnapshot(file, dir);
+    const first = `${JSON.stringify({ type: "context_edit", id: "toriel-edit-1", parentId: "C", targetId: "R1", replacement: null })}\n`;
+    const second = `${JSON.stringify({ type: "context_edit", id: "toriel-edit-2", parentId: "toriel-edit-1", targetId: "R2", replacement: null })}\n`;
+    assert.equal(fs.readFileSync(snap.path, "utf8"), whole + first + second, "both edits chain from C, the copy's last entry with an id");
+    assert.equal(snap.dropped, 0);
+    snap.cleanup();
+  });
+
+  it("appends the edit for an orphan that already has a non-null edit of its own", () => {
+    const dir = tmp();
+    const file = path.join(dir, "s.jsonl");
+    const whole = withId("A", call("a")) + result("a", "R") + edit("R", { content: "kept" }) + edit("A", null) + withId("C", user("later"));
+    fs.writeFileSync(file, whole);
+    const snap = forkSnapshot(file, dir);
+    const appended = `${JSON.stringify({ type: "context_edit", id: "toriel-edit-1", parentId: "C", targetId: "R", replacement: null })}\n`;
+    assert.equal(fs.readFileSync(snap.path, "utf8"), whole + appended, "the appended null is the last edit, so it wins");
+    snap.cleanup();
   });
 });
 
