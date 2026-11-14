@@ -70,6 +70,7 @@ export function settledPrefix(text: string): { text: string; dropped: number } {
     for (const id of calls) {
       pending.add(id);
     }
+    // an entry without an id cannot be the target of an edit; every entry pi writes has one
     if (calls.length > 0 && typeof entry.id === "string") {
       callsOf.set(entry.id, calls);
     }
