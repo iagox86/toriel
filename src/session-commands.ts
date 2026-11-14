@@ -11,6 +11,7 @@ import { piAgentDir } from "./pi-dir.ts";
 import { probeEntry, parseStatusDetailed, readConfigs, statusReport } from "./mcp-doctor.ts";
 import { addMcpServer, MCP_ACTIONS, mcpConfigFile, mcpEntry, mcpListLines, mcpServerConnected, removeMcpServer } from "./mcp.ts";
 import { mcpExplorePrompt } from "./mcp-explore-prompt.ts";
+import { readHeader } from "./session-file.ts";
 import { mayWake } from "./wake-on-type.ts";
 import { forkName, placeFork } from "./fork-placement.ts";
 import { loadGroups, saveGroups, withComment, withParked } from "./groups.ts";
@@ -222,13 +223,19 @@ export class SessionCommands {
    */
   async wakeForTyping(): Promise<void> {
     const key = this.h.viewing;
+    // no `known` requirement: after a daemon restart a session file the daemon has not
+    // registered yet has no meta here either, and the daemon applies its own refusal checks
+    // (presence, the 60 s fresh-mtime check, wasHandled) to unregistered files (ticket 202)
     const known = this.viewedMeta() ?? (key ? this.h.local.get(key) : undefined);
-    if (!key || !known || !mayWake(key, this.viewedMeta(), this.h.switching.isOpen)) {
+    if (!key || !mayWake(key, this.viewedMeta(), this.h.switching.isOpen)) {
       return;
     }
     try {
       this.h.notify("starting session...");
-      const r = (await this.h.request({ type: "spawn", sessionFile: key, cwd: known.cwd || path.dirname(key), ready: true, wake: true })) as { woke?: boolean; reason?: string };
+      // the file's own header knows the session's cwd; the storage directory is a last resort
+      const header = readHeader(key);
+      const headerCwd = typeof header?.cwd === "string" ? (header.cwd as string) : undefined;
+      const r = (await this.h.request({ type: "spawn", sessionFile: key, cwd: known?.cwd || headerCwd || path.dirname(key), ready: true, wake: true })) as { woke?: boolean; reason?: string };
       if (r?.woke === false) {
         this.h.notify(`session not started: ${r.reason ?? "refused"}`);
         return;

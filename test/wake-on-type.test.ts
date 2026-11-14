@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { SESSION_COMMANDS } from "../src/commands.ts";
+import type { Host } from "../src/host.ts";
+import { SessionCommands } from "../src/session-commands.ts";
 import { mayWake, NO_CHILD_COMMANDS, WakeOnType, wantsWake } from "../src/wake-on-type.ts";
 import { type Harness, startDaemon } from "./helpers.ts";
 
@@ -130,6 +133,67 @@ let harness: Harness | undefined;
 afterEach(async () => {
   await harness?.stop();
   harness = undefined;
+});
+
+const WAKE_KEY = "/home/u/.pi/agent/sessions/dir/s.jsonl";
+
+/** A Host stub for SessionCommands.wakeForTyping; `meta` is what the controller knows about the viewed session. */
+function wakeHost(meta: unknown, request: (cmd: Record<string, unknown>) => Promise<unknown>) {
+  const requests: Array<Record<string, unknown>> = [];
+  const notices: string[] = [];
+  const host = {
+    viewing: WAKE_KEY,
+    local: new Map(),
+    switching: { isOpen: false },
+    metaForPath: () => (meta === undefined ? undefined : (meta as object)),
+    notify: (m: string) => void notices.push(m),
+    request: async (cmd: Record<string, unknown>) => {
+      requests.push(cmd);
+      return request(cmd);
+    },
+    refreshPiCommands: () => {},
+  } as unknown as Host;
+  return { host, requests, notices };
+}
+
+describe("wakeForTyping", () => {
+  it("sends the wake for a session the controller knows", async () => {
+    const { host, requests, notices } = wakeHost({ id: 7, active: false, cwd: "/work/proj" }, async () => ({ woke: true }));
+    await new SessionCommands(host).wakeForTyping();
+    assert.deepEqual(requests, [{ type: "spawn", sessionFile: WAKE_KEY, cwd: "/work/proj", ready: true, wake: true }]);
+    assert.equal(notices.length, 1);
+  });
+
+  it("sends the wake for a session file the controller has no meta for, using the cwd from the file's header (ticket 202)", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-wake-"));
+    const file = path.join(dir, "s.jsonl");
+    const hostOf = () => {
+      const wake = wakeHost(undefined, async () => ({ woke: true }));
+      (wake.host as { viewing: string }).viewing = file;
+      return wake;
+    };
+    fs.writeFileSync(file, `${JSON.stringify({ type: "session", id: "s1", cwd: "/work/proj-from-header" })}\n`);
+    const known = hostOf();
+    await new SessionCommands(known.host).wakeForTyping();
+    assert.equal(known.requests[0]?.cwd, "/work/proj-from-header");
+    // an unreadable header falls back to the file's directory
+    fs.writeFileSync(file, "not json\n");
+    const unknown = hostOf();
+    await new SessionCommands(unknown.host).wakeForTyping();
+    assert.equal(unknown.requests[0]?.cwd, dir);
+  });
+
+  it("notifies the reason on a refused wake, and swallows a thrown error silently", async () => {
+    const refused = wakeHost(undefined, async () => ({ woke: false, reason: "another pi may be running it" }));
+    await new SessionCommands(refused.host).wakeForTyping();
+    assert.deepEqual(refused.notices, ["starting session...", "session not started: another pi may be running it"]);
+
+    const broken = wakeHost(undefined, async () => {
+      throw new Error("socket gone");
+    });
+    await new SessionCommands(broken.host).wakeForTyping();
+    assert.deepEqual(broken.notices, ["starting session..."]);
+  });
 });
 
 /** A session file that looks like one pi wrote `ageMs` ago. */
