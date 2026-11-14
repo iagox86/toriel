@@ -59,6 +59,7 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: "web-package", level: "feature", title: "pi-web-access is installed (the research-web and advisory-diff agents need its web tools)" },
   { id: "mcp-gdb-direct", level: "feature", title: 'the gdb MCP server is configured with "exposure": "direct" (the debug and crash-analysis agents need it)' },
   { id: "mcp-ghidra-direct", level: "feature", title: 'the ghidra MCP server is configured with "exposure": "direct" (the re-explain, re-find, re-trace and binary-diff agents need it)' },
+  { id: "agent-lanes", level: "feature", title: "every model tier in agentLanes (cheap, medium, expensive) names a provider pi knows (models.json or a login)" },
   { id: "sandbox-bwrap", level: "feature", title: 'bubblewrap works (needed only when the "sandbox" setting is "bwrap": scoped sessions run each bash command sandboxed)' },
   { id: "sleep-lock", level: "feature", title: "the machine is kept awake for scheduled runs (systemd-inhibit)" },
   { id: "clipboard", level: "feature", title: "clipboard tools for paste and copy (wl-clipboard on Wayland, xclip on X11)" },
@@ -225,6 +226,30 @@ function settingsFileFindings(explicit: string | undefined, env: NodeJS.ProcessE
   }];
 }
 
+/** The provider names pi can use: the `providers` of models.json and the logins in auth.json (names only; the credentials are never read into anything). Undefined when neither file can be read, so a missing pi config is not reported twice. */
+function piProviders(agentDir: string): Set<string> | undefined {
+  const names = new Set<string>();
+  let read = false;
+  for (const [file, pick] of [
+    ["models.json", (j: { providers?: unknown }) => j.providers],
+    ["auth.json", (j: object) => j],
+  ] as const) {
+    try {
+      const json = JSON.parse(readFileSync(join(agentDir, file), "utf8")) as object;
+      const section = pick(json as never);
+      if (typeof section === "object" && section !== null) {
+        read = true;
+        for (const k of Object.keys(section)) {
+          names.add(k);
+        }
+      }
+    } catch {
+      // absent or unreadable: that source adds nothing
+    }
+  }
+  return read ? names : undefined;
+}
+
 /** Everything wrong that doctor can see, graded; the resource audit's findings plus the ones that need settings and the environment. */
 export function collectFindings(opts: DoctorOptions = {}): Finding[] {
   const env = opts.env ?? process.env;
@@ -302,6 +327,22 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
       message: `the ${nameList(webAgents.map((a) => a.name))} ${webAgents.length > 1 ? "agents need" : "agent needs"} ${WEB_PACKAGE} in the packages of ${join(opts.agentDir ?? piAgentDir(env), "settings.json")} (pi install npm:${WEB_PACKAGE}) and a search provider set up for it; without it the agent has no web tools`,
       manual: "installing a pi package and choosing a search provider are yours to do; doctor does not run installs",
     });
+  }
+  // a model tier (agentLanes, ticket 208) that names a provider pi has no config or login for would make every agent on that lane fail at its first request
+  const lanes = Object.entries(loaded.settings.agentLanes ?? {});
+  if (lanes.length > 0) {
+    const known = piProviders(opts.agentDir ?? piAgentDir(env));
+    for (const [tier, model] of lanes) {
+      const provider = model.slice(0, model.indexOf("/"));
+      if (known !== undefined && !known.has(provider)) {
+        out.push({
+          id: "agent-lanes",
+          level: "feature",
+          message: `agentLanes.${tier} is ${model}, but pi has no provider "${provider}" (not in the providers of ${join(opts.agentDir ?? piAgentDir(env), "models.json")}, no login in auth.json): agents on the ${tier} lane would fail to start (add the provider, or change agentLanes in the toriel settings; a provider configured by an environment variable is not seen here)`,
+          manual: "which model is your cheap or expensive one, and how pi reaches its provider, is yours to say; doctor does not guess",
+        });
+      }
+    }
   }
   // the per-command sandbox (board 190) refuses to run a command rather than run it unsandboxed, so a setting that asks for bwrap without a working bwrap would stop every scoped session's bash
   if (loaded.settings.sandbox === "bwrap") {

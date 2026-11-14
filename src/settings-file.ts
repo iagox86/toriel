@@ -32,6 +32,7 @@ export const SETTINGS_TEMPLATE: readonly Group[] = [
       { key: "model", example: "claude-sonnet-5-5", comment: ["Model new sessions use, and agent profiles inherit unless their frontmatter pins one. Unset = pi's own default."] },
       { key: "thinking", example: "medium", comment: ["Thinking level for new sessions (off, minimal, low, medium, high, xhigh; what a model offers varies)."] },
       { key: "summaryModel", value: "litellm/local-model", comment: ["The cheap model /summarize, /why and the switcher's automatic summaries use (provider/id).", "Its default is a local litellm route: change it to a model you have."] },
+      { key: "agentLanes", example: "{ cheap: litellm/local-model, medium: anthropic/claude-sonnet-5-5 }", comment: ["Which model each tier of agent profile uses. A profile says `model: cheap`, `medium` or `expensive`;", "a tier left out here means the session's default model. Models are provider/id. The shipped cheap-lane agents", "(explore, summarize, triage, test-runner, implement) ask for `cheap`, so set it to a model you have."] },
       { key: "piCli", example: DEFAULT_PI_CLI, comment: ["Path of pi's cli.js, when it is not where toriel expects it."] },
     ],
   },

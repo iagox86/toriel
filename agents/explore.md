@@ -3,7 +3,7 @@ name: explore
 description: Fast read-only look around a codebase - where is X, how does Y work. Returns findings with file:line references.
 tools: read, grep, find, ls
 thinking: low
-model: litellm/local-model
+model: cheap
 budget: 400000
 extensions: false
 ---

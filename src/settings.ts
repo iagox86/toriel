@@ -7,6 +7,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { parseDocument } from "yaml";
+import { type AgentLanes, isModelTier, MODEL_TIERS } from "./agents.ts";
 import { DEFAULT_PI_CLI } from "./config.ts";
 import { errText } from "./util.ts";
 import { parseDurationText } from "./when.ts";
@@ -20,6 +21,8 @@ export interface TorielSettings {
   provider?: string;
   model?: string;
   thinking?: string;
+  /** The model each tier of agent profile (`model: cheap`) stands for, provider/id; a tier left out means the default model. */
+  agentLanes?: AgentLanes;
   /** Path of pi's cli.js. */
   piCli?: string;
   /** Model /summarize uses (provider/id); default litellm/local-model. */
@@ -116,7 +119,7 @@ const BOOLEAN_KEYS = ["warnNoPermissionSystem", "preventSleep", "showExternalSes
 const ZERO_OK: readonly string[] = ["summaryIntervalMinutes", "scheduleUsagePause", "trashRetentionDays", "subagentKeepMinutes", "subagentIdleMinutes", "subagentMaxMinutes"];
 const STRING_KEYS = ["provider", "model", "thinking", "piCli", "summaryModel"] as const;
 /** Every key the file may hold; the commented template (settings-file.ts) must cover all of them. */
-export const SETTING_KEYS: readonly string[] = ["steeringMode", "permissionGrantDurations", "sandbox", "sandboxWritable", "scopeGuardAcceptedAllows", ...BOOLEAN_KEYS, ...STRING_KEYS, ...NUMBER_KEYS];
+export const SETTING_KEYS: readonly string[] = ["steeringMode", "permissionGrantDurations", "sandbox", "sandboxWritable", "scopeGuardAcceptedAllows", "agentLanes", ...BOOLEAN_KEYS, ...STRING_KEYS, ...NUMBER_KEYS];
 /** The surfaces a scopeGuardAcceptedAllows entry may name ("*" is the config fallback). */
 const SCOPE_GUARD_SURFACES = ["external_directory_write", "external_directory", "*"] as const;
 
@@ -133,6 +136,21 @@ function validAcceptedAllows(value: unknown): value is Array<{ surface: string; 
       return typeof surface === "string" && (SCOPE_GUARD_SURFACES as readonly string[]).includes(surface) && typeof pattern === "string" && pattern.length > 0;
     })
   );
+}
+
+/** A mapping of known tier names to provider/id strings; undefined when it is anything else. */
+function validAgentLanes(value: unknown): AgentLanes | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const out: AgentLanes = {};
+  for (const [tier, model] of Object.entries(value)) {
+    if (!isModelTier(tier) || typeof model !== "string" || !/^[^/\s]+\/\S+$/.test(model)) {
+      return undefined;
+    }
+    out[tier] = model;
+  }
+  return out;
 }
 
 const loadCache = new Map<string, { stamp: string; loaded: LoadedSettings }>();
@@ -202,6 +220,13 @@ function parseSettingsFile(file: string): LoadedSettings {
         settings.sandboxWritable = value as string[];
       } else {
         problems.push(`sandboxWritable must be a list of at most 20 absolute or ~/ paths such as ["~/.npm", "~/.cache"]`);
+      }
+    } else if (key === "agentLanes") {
+      const lanes = validAgentLanes(value);
+      if (lanes !== undefined) {
+        settings.agentLanes = lanes;
+      } else {
+        problems.push(`agentLanes must map ${MODEL_TIERS.join(", ")} to a provider/id, such as { cheap: litellm/local-model }`);
       }
     } else if (key === "scopeGuardAcceptedAllows") {
       if (validAcceptedAllows(value)) {

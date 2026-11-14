@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { type AgentProfile, parseAgent } from "../src/agents.ts";
+import { type AgentProfile, isModelTier, MODEL_TIERS, parseAgent } from "../src/agents.ts";
 
 const DIR = path.join(import.meta.dirname, "..", "agents");
 const files = fs.readdirSync(DIR).filter((f) => f.endsWith(".md") && f !== "README.md").sort();
@@ -47,11 +47,10 @@ describe("shipped agent profiles", () => {
           assert.ok(BUILT_IN_TOOLS.has(t) || t.startsWith("toriel_") || t.startsWith("mcp__"), `unknown tool ${t}`);
         }
         assert.equal(agent.canSpawn, false);
-        // A profile may pin a model (implement defaults to the free/local qwen
-        // lane); the model must be a provider/id string when present.
+        // A shipped profile names a lane (model: cheap), never a machine-specific provider/id (ticket 208):
+        // the settings' agentLanes say what the lane is on each machine
         if (agent.model !== undefined) {
-          assert.equal(typeof agent.model, "string");
-          assert.match(agent.model as string, /^[^/]+\/\S+$/, "model must be provider/id");
+          assert.ok(isModelTier(agent.model), `model ${agent.model} is hardcoded; use a tier (${MODEL_TIERS.join(", ")})`);
         }
       });
 

@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import { agentCompletions, agentListing } from "../src/agents-completion.ts";
-import { findAgent, loadAgents, mcpWarnings, mergeMcpServers, parseAgent, profileArgs, readMcpServers } from "../src/agents.ts";
+import { findAgent, loadAgents, mcpWarnings, mergeMcpServers, parseAgent, profileArgs, readMcpServers, resolveModel, withResolvedModel } from "../src/agents.ts";
 
 const FILE = [
   "---",
@@ -45,7 +45,7 @@ describe("parseAgent", () => {
     assert.throws(() => parse("---\nname: a\n---\n"), /description is required/);
     assert.throws(() => parse("---\nname: a\ndescription: d\nfoo: 1\n---\n"), /unknown key: foo/);
     assert.throws(() => parse("---\nname: a\ndescription: d\nthinking: lots\n---\n"), /thinking must be/);
-    assert.throws(() => parse("---\nname: a\ndescription: d\nmodel: gemma\n---\n"), /provider\/id/);
+    assert.throws(() => parse("---\nname: a\ndescription: d\nmodel: gemma\n---\n"), /provider\/id or one of cheap, medium, expensive/);
     assert.throws(() => parse("---\nname: a\ndescription: d\nmaxTurns: -1\n---\n"), /positive whole number/);
     assert.throws(() => parse("---\nname: a\ndescription: d\ncanSpawn: maybe\n---\n"), /true or false/);
   });
@@ -209,5 +209,45 @@ describe("MCP tools in a profile", () => {
   it("refuses MCP tools with extensions: false, because that turns pi's MCP support off", () => {
     assert.throws(() => parse("---\nname: a\ndescription: d\ntools: read, mcp__ghidra__*\nextensions: false\n---\n"), /extensions is false, which turns pi's MCP support off: set extensions: true/);
     assert.doesNotThrow(() => parse("---\nname: a\ndescription: d\ntools: read\nextensions: false\n---\n"));
+  });
+});
+
+describe("model tiers (ticket 208)", () => {
+  const parse = (model: string) => parseAgent(`---\nname: a\ndescription: d\nmodel: ${model}\n---\n`, "user", "/a.md");
+
+  it("accepts a tier name or a provider/id as the model", () => {
+    assert.equal(parse("cheap").model, "cheap");
+    assert.equal(parse("expensive").model, "expensive");
+    assert.equal(parse("litellm/x").model, "litellm/x");
+  });
+
+  it("resolves a literal id as written, a known tier through the lanes, and anything else to the default with a notice", () => {
+    const lanes = { cheap: "litellm/local-model" };
+    assert.deepEqual(resolveModel("a/b", lanes), { model: "a/b" });
+    assert.deepEqual(resolveModel(undefined, lanes), { model: undefined });
+    assert.deepEqual(resolveModel("cheap", lanes), { model: "litellm/local-model" });
+    const unset = resolveModel("medium", lanes);
+    assert.equal(unset.model, undefined);
+    assert.match(unset.notice ?? "", /"medium" is not set in agentLanes/);
+    assert.match(resolveModel("cheap", undefined).notice ?? "", /agentLanes/, "no lanes at all");
+  });
+
+  it("withResolvedModel reports the fallback by agent name and leaves a literal profile alone", () => {
+    const notices: string[] = [];
+    const p = parse("cheap");
+    assert.equal(withResolvedModel(p, { cheap: "x/y" }, (n) => notices.push(n)).model, "x/y");
+    assert.equal(withResolvedModel(p, {}, (n) => notices.push(n)).model, undefined);
+    assert.equal(notices.length, 1);
+    assert.match(notices[0] as string, /^agent a: /);
+    const literal = parse("x/y");
+    assert.equal(withResolvedModel(literal, {}), literal);
+  });
+
+  it("launches a resolved tier as --model for a new session and not for a resumed one", () => {
+    const p = withResolvedModel(parse("cheap"), { cheap: "litellm/local-model" });
+    const fresh = profileArgs(p, { isNew: true });
+    assert.equal(fresh[fresh.indexOf("--model") + 1], "litellm/local-model");
+    assert.ok(!profileArgs(p, { isNew: false }).includes("--model"));
+    assert.ok(!profileArgs(withResolvedModel(parse("cheap"), {}), { isNew: true }).includes("--model"), "an unset lane passes no model, so the default applies");
   });
 });

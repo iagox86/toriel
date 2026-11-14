@@ -6,7 +6,7 @@
 // subagents.ts; this file starts, watches and stops the sessions.
 import * as fs from "node:fs";
 import type * as net from "node:net";
-import { findAgent, type AgentProfile } from "./agents.ts";
+import { findAgent, type AgentProfile, withResolvedModel } from "./agents.ts";
 import { SEED_GRANTS } from "./seed-grants.ts";
 import { validateSubagentCwd } from "./subagent-cwd.ts";
 import type { Cmd, DaemonContext, Responder } from "./daemon-context.ts";
@@ -16,6 +16,7 @@ import type { DaemonSession } from "./daemon-session.ts";
 import { modelProblem } from "./model-match.ts";
 import { detachFromParent, loadLineage, parentMap, recordSubagent, subagentDepth } from "./lineage.ts";
 import { log } from "./log.ts";
+import { loadSettings } from "./settings.ts";
 import { formatReceived } from "./received.ts";
 import { verbLine } from "./subagent-exit.ts";
 import {
@@ -264,7 +265,7 @@ export class SubagentManager {
   async start(parent: DaemonSession, cmd: Cmd<"agent_spawn">): Promise<SubagentRecord> {
     const ctx = this.ctx();
     const parentUuid = parent.sessionId as string;
-    const base = findAgent(cmd.agent, parent.cwd);
+    const base = withResolvedModel(findAgent(cmd.agent, parent.cwd), loadSettings().settings.agentLanes, log);
     if (cmd.model !== undefined && !cmd.model.includes("/")) {
       throw new Error("model must be provider/id");
     }
