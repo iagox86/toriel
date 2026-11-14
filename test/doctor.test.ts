@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { ANSI_STYLE, applyFixes, CATALOG, collectFindings, type DoctorOptions, exitCode, lineDiff, plannedFixes, previewFixes, renderDoctor, runDoctor } from "../src/doctor.ts";
+import { ANSI_STYLE, applyFixes, CATALOG, collectFindings, type DoctorOptions, exitCode, KITTY_SHIFT_ENTER, lineDiff, plannedFixes, previewFixes, readKittyConfig, renderDoctor, runDoctor } from "../src/doctor.ts";
 import { loadSettings } from "../src/settings.ts";
 import { renderSettings } from "../src/settings-file.ts";
 import { GRANTS_RULE, setup as setupIn, tempHome } from "./doctor-fixture.ts";
@@ -108,7 +109,8 @@ describe("doctor checks", () => {
       setup({ config: {} }).opts,
       { ...setup({}).opts, env: { WAYLAND_DISPLAY: "wayland-0" }, pathDirs: ["/nonexistent-path"], startup: [] },
       { ...setup({}).opts, tty: true, env: { TERM: "xterm-256color" }, startup: [] },
-      { ...setup({}).opts, tty: true, env: { TMUX: "/tmp/tmux-1000/default,1,0" }, probeTmuxExtendedKeys: () => "off", startup: [] },
+      { ...setup({}).opts, tty: true, env: { TMUX: "/tmp/tmux-1000/default,1,0" }, probeTmux: () => ({ extendedKeys: "off" }), startup: [] },
+      { ...setup({}).opts, tty: true, env: { TMUX: "/tmp/tmux-1000/default,1,0" }, probeTmux: () => ({ extendedKeys: "on", clientTerm: "xterm-kitty" }), kittyConfig: "", startup: [] },
       setup({ gitMcp: "none" }).opts,
       setup({ gdbMcp: "none", ghidraMcp: "codemode" }).opts,
       setup({ config: { authorizerChain: ["toriel-grants"], permission: { "*": "allow", path: { "*": "allow", [GRANTS_RULE]: "ask" } } } }).opts,
@@ -191,8 +193,8 @@ describe("doctor checks", () => {
   });
 
   it("tmux-keys: only inside tmux in a real terminal, and only when extended-keys is off (ticket 142)", () => {
-    const finding = (env: NodeJS.ProcessEnv, value: string | undefined, tty = true) =>
-      collectFindings({ ...setup({}).opts, tty, env, startup: [], probeTmuxExtendedKeys: () => value }).filter((f) => f.id === "tmux-keys");
+    const finding = (env: NodeJS.ProcessEnv, extendedKeys: string | undefined, tty = true) =>
+      collectFindings({ ...setup({}).opts, tty, env, startup: [], probeTmux: () => ({ extendedKeys }) }).filter((f) => f.id === "tmux-keys");
     const inTmux = { TMUX: "/tmp/tmux-1000/default,1,0" };
     assert.equal(finding(inTmux, "off").length, 1);
     assert.match(finding(inTmux, "off")[0]?.message ?? "", /extended-keys on/);
@@ -201,6 +203,34 @@ describe("doctor checks", () => {
     assert.deepEqual(finding(inTmux, undefined), [], "tmux could not be asked: no guess");
     assert.deepEqual(finding({}, "off"), [], "not under tmux");
     assert.deepEqual(finding(inTmux, "off", false), [], "not a real terminal");
+  });
+
+  it("kitty-shift-enter: under tmux in kitty, unless kitty.conf maps shift+enter (ticket 142)", () => {
+    const inTmux = { TMUX: "/tmp/tmux-1000/default,1,0" };
+    const finding = (clientTerm: string | undefined, kittyConfig: string, env: NodeJS.ProcessEnv = inTmux, tty = true) =>
+      collectFindings({ ...setup({}).opts, tty, env, startup: [], probeTmux: () => ({ extendedKeys: "on", clientTerm }), kittyConfig }).filter((f) => f.id === "kitty-shift-enter");
+    assert.equal(finding("xterm-kitty", "").length, 1, "no kitty.conf at all");
+    assert.equal(finding("xterm-kitty", "font_size 12\nmap shift+enter\nmap ctrl+a\n").length, 1, "a map line with no action does not count");
+    assert.match(finding("xterm-kitty", "")[0]?.message ?? "", /map shift\+enter send_text all \\x1b\[13;2u/);
+    assert.deepEqual(finding("xterm-kitty", "map shift+enter send_text all \\x1b[13;2u\n"), []);
+    assert.deepEqual(finding("xterm-kitty", "  MAP  shift+enter  send_text all x"), [], "spacing and case");
+    assert.deepEqual(finding("xterm-kitty", "map --release shift+enter send_text all x"), [], "a map with options");
+    assert.equal(finding("xterm-kitty", "# map shift+enter send_text all x").length, 1, "a comment does not count");
+    assert.deepEqual(finding("xterm-256color", ""), [], "another terminal");
+    assert.deepEqual(finding(undefined, ""), [], "tmux could not say which terminal");
+    assert.deepEqual(finding("xterm-kitty", "", {}), [], "not under tmux");
+    assert.deepEqual(finding("xterm-kitty", "", inTmux, false), [], "not a real terminal");
+  });
+
+  it("reads kitty's config with its includes, and treats a missing one as empty", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-kitty-"));
+    const env = { KITTY_CONFIG_DIRECTORY: dir };
+    assert.equal(readKittyConfig(env), "");
+    fs.writeFileSync(path.join(dir, "kitty.conf"), "include keys.conf\nfont_size 12\n");
+    fs.writeFileSync(path.join(dir, "keys.conf"), "map shift+enter send_text all \\x1b[13;2u\n");
+    assert.match(readKittyConfig(env), KITTY_SHIFT_ENTER);
+    fs.writeFileSync(path.join(dir, "keys.conf"), "include kitty.conf\n");
+    assert.doesNotMatch(readKittyConfig(env), KITTY_SHIFT_ENTER, "an include loop ends");
   });
 
   it("skips the checks that need the permission package when it is not there, and says so", () => {
@@ -300,7 +330,7 @@ describe("doctor report", () => {
     assert.match(text, /Required: all 5 ok/);
     assert.match(text, /Recommended: all 3 ok/);
     assert.doesNotMatch(text, / ok {7}/);
-    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(10 ok\)/);
+    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(11 ok\)/);
   });
 });
 
@@ -329,7 +359,7 @@ describe("doctor report colours", () => {
   it("colours the compact report too, with the passing checks' count dim", () => {
     const coloured = renderDoctor(checks(), { compact: true, style: ANSI_STYLE });
     assert.match(coloured, /Required\x1b\[22m: \x1b\[32mall 5 ok\x1b\[39m/);
-    assert.match(coloured, /\x1b\[2m {2}\(10 ok\)\x1b\[22m/);
+    assert.match(coloured, /\x1b\[2m {2}\(11 ok\)\x1b\[22m/);
   });
 });
 
