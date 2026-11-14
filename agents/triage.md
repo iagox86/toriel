@@ -3,7 +3,7 @@ name: triage
 description: Sort failures or log errors into distinct causes, each with evidence and a next step. For a plain digest use summarize.
 tools: read, grep, find, ls
 thinking: low
-model: litellm/local-model
+model: cheap
 budget: 400000
 extensions: false
 ---

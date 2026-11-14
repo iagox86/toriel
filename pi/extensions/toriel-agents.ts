@@ -71,7 +71,10 @@ export function ask(sock: string, cmd: Record<string, unknown>, timeoutMs = TIME
 export const MESSAGE_DESCRIPTION =
   "Send a message to another toriel session, by its session id (preferred, a UUID) or its name. The text arrives in that session as a user message labelled with your name and id, and an idle session is started to read it. It returns once delivered, not when the other session answers; if you expect a reply it arrives later as a message to you. Use this ONLY when the user asks you to tell or ask another session something - never on your own initiative.";
 
-export const SCHEDULE_CREATE_DESCRIPTION =
+export const WATCH_CREATE_DESCRIPTION =
+  "Send a prompt into THIS session when a file or directory changes, instead of polling it on a timer. Use it to wait for something another process will write (a review, a build artifact, a report). It is limited because a file that keeps changing must not flood you with prompts: it fires only after 30 seconds without a change, it must end by itself (once, or expires within 24 hours), you may have 3 at a time, and one that fires 6 times in an hour is paused and you are told. It never interrupts a turn. List and cancel it with toriel_schedule_list and toriel_schedule_cancel. The prompt is delivered with a line naming the file; the file's content is not included, read it yourself.";
+
+const SCHEDULE_CREATE_DESCRIPTION =
   'Schedule a prompt to be sent back to THIS session later, for "check again in an hour", "wait until X, then continue", or recurring work. `when` is one string: "in 30m" (any delay, even "in 10s"), "at 14:30" / "tomorrow 9am", "every 2h", "every weekday 9am", or a 5-field cron like "*/15 * * * *" (repeats can be no shorter than 1 minute; one-shot delays have no minimum). The prompt arrives as a user message labelled "[scheduled #N ...]" when this session is idle (it never interrupts a turn); a stopped session is started. Recurring schedules end after 7 days unless `expires` says otherwise. Returns the schedule id and the real next run time - read it back to check it is what you meant. Make the prompt self-contained: say what to check and what to do about the result. Prefer long delays over short ones and never poll in a tight loop. A one-shot removes itself after it runs; a repeating schedule keeps running until it expires, hits `max`, or is cancelled - cancel one only when you made it for your own follow-up and what it watched for has happened, never one the user asked for. Tell the user what you scheduled.';
 
 export const SCHEDULE_CANCEL_DESCRIPTION = "Cancel one of this session's repeating schedules by id (3 or #3) or name. One-shots remove themselves after they run, so do not cancel them. Only cancel a schedule you made for your own follow-up once it has served its purpose; never cancel one the user asked for unless they ask you to.";
@@ -152,6 +155,40 @@ export default function (pi: Pi) {
         return text(`Scheduled ${r.echo}${notes}`, r);
       } catch (err) {
         return text(`Not scheduled: ${reason(err)}`, { error: true });
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "toriel_watch_create",
+    label: "Watch a file",
+    description: WATCH_CREATE_DESCRIPTION,
+    promptSnippet: "toriel_watch_create: send this session a prompt when a file or directory changes (limited: 30s quiet time, ends after one change or within 24h)",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "File or directory to watch (a directory counts changes directly inside it, not below). Relative to this session's directory; ~ works. The file need not exist yet." },
+        prompt: { type: "string", description: "What to send this session when it changes. Self-contained: you will not remember this conversation's reasoning." },
+        once: { type: "boolean", description: "End after the first change. Either this or expires is required." },
+        expires: { type: "string", description: 'End after this long, at most "24h" (e.g. "2h"). Required unless once is true.' },
+        cooldown: { type: "string", description: 'Quiet time after the last change before it fires (default and minimum "30s"; a file that keeps changing never fires until it goes quiet, up to once a minute)' },
+        on: { type: "string", enum: ["write", "any"], description: '"write" (default): created or modified. "any": also deleted or renamed away.' },
+        name: { type: "string", description: "Optional short name to cancel it by" },
+      },
+      required: ["path", "prompt"],
+      additionalProperties: false,
+    },
+    async execute(_id, params, _signal, _onUpdate, ctx) {
+      const p = params as { path: string; prompt: string; once?: boolean; expires?: string; cooldown?: string; on?: string; name?: string };
+      const uuid = own(ctx);
+      if (!uuid) {
+        return text("No file trigger made: this session has no id yet.", { error: true });
+      }
+      try {
+        const r = await ask(sock, { type: "watch_add", uuid, path: p.path, prompt: p.prompt, once: p.once, expires: p.expires, cooldown: p.cooldown, events: p.on, name: p.name, by: "agent" });
+        return text(`Watching: ${r.echo}`, r);
+      } catch (err) {
+        return text(`No file trigger made: ${reason(err)}`, { error: true });
       }
     },
   });

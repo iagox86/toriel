@@ -33,10 +33,12 @@ interface AskDetails {
 }
 
 interface Service {
+  checkPermission?(surface: string, value?: string): { state?: string; reason?: string; matchedPattern?: string; origin?: unknown };
   registerAuthorizer?(name: string, authorize: (details: AskDetails) => Promise<Verdict>): () => void;
 }
 
 interface Pi {
+  registerTool?(tool: Record<string, unknown>): void;
   events: { on(channel: string, handler: (data: unknown) => void): void };
   on(event: string, handler: () => void): void;
 }
@@ -120,6 +122,60 @@ export async function authorize(sock: string, uuid: string | undefined, details:
   }
 }
 
+const WARN = "This is a snapshot: grants expire and rules change. It does not say whether anyone is there to answer a prompt, or would approve one.";
+
+/** HH:MM in local time. */
+function clock(ms: number): string {
+  const d = new Date(ms);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+/**
+ * toriel_permission_check (ticket 94): would this one action run without a prompt? The package's own policy
+ * answer, and when that is `ask`, whether a toriel grant of this session covers it. Never throws; every failure
+ * says it could not tell, which an agent must read as "assume a prompt".
+ */
+export async function checkAction(service: Service | undefined, sock: string, uuid: string | undefined, surface: string, value: string | undefined, send: Asker = ask): Promise<string> {
+  if (surface.trim() === "") {
+    return "Give a surface, such as bash, read, edit, write, mcp, skill or external_directory_write, and the value to check (the command, tool name or path).";
+  }
+  if (!service?.checkPermission) {
+    return `Cannot check: the permission system is not available in this session, so assume any action may prompt. ${WARN}`;
+  }
+  let result: ReturnType<NonNullable<Service["checkPermission"]>>;
+  try {
+    result = service.checkPermission(surface, value);
+  } catch (err) {
+    return `Cannot check ${surface}${value === undefined ? "" : ` ${JSON.stringify(value)}`}: ${err instanceof Error ? err.message : String(err)}. Assume it may prompt.`;
+  }
+  const what = `${surface}${value === undefined ? "" : ` ${JSON.stringify(value)}`}`;
+  const rule = result.matchedPattern !== undefined ? ` (rule ${JSON.stringify(result.matchedPattern)})` : "";
+  if (result.state === "allow") {
+    return `allow: ${what} runs without a prompt${rule}. ${WARN}`;
+  }
+  if (result.state === "deny") {
+    return `deny: ${what} is refused${rule}${result.reason ? `: ${result.reason}` : ""}. Pick another route; asking the user may change the policy. ${WARN}`;
+  }
+  if (result.state !== "ask") {
+    return `Cannot tell: the permission system answered ${JSON.stringify(result.state)} for ${what}. Assume it may prompt.`;
+  }
+  // a real ask for a compound command is one grant per part; a grant that covers the whole string says nothing about the parts, so it is never reported as "granted"
+  const compound = surface === "bash" && value !== undefined && /[;&|`\n]|\$\(|[<>]\(/.test(value);
+  if (uuid && !compound) {
+    try {
+      const reply = await send(sock, { type: "permission_check", uuid, grants: [{ surface, pattern: value ?? "*" }], value, probe: true }, CHECK_TIMEOUT_MS);
+      if (reply.allow === true) {
+        const until = typeof reply.expiresAt === "number" ? `until ${clock(reply.expiresAt)}` : "until the user revokes it";
+        return `granted: ${what} would ask, but a permission grant for this session covers it ${until}, so it runs without a prompt. ${WARN}`;
+      }
+    } catch {
+      // the daemon did not answer: report the policy's own answer, which is still true
+    }
+  }
+  const parts = compound ? " This is a compound command (&&, ||, ;, |, a pipe, backticks or $( )): it may still prompt for its individual parts even if grants exist, so check the parts separately." : "";
+  return `ask: ${what} opens a permission prompt${rule}.${parts} ${WARN} In an unattended or scheduled run nobody may answer, so prefer an allowed route, or finish by saying exactly what you need approved.`;
+}
+
 export default function (pi: Pi) {
   const sock = process.env.TORIEL_SOCK;
   if (!process.env.TORIEL_CHILD || !sock) {
@@ -128,6 +184,29 @@ export default function (pi: Pi) {
   // The scope is read once here (the daemon sets TORIEL_SCOPE_ROOT only for the children it wants fenced) and closed over; it is never re-read per ask.
   const scope = readScope(process.env);
   let dispose: (() => void) | undefined;
+  let service: Service | undefined;
+  // opt-in: it is not in TORIEL_TOOLS, so only a profile that names toriel_permission_check in its tools gets it (weaker models over-call tools)
+  pi.registerTool?.({
+    name: "toriel_permission_check",
+    label: "Permission check",
+    defaultActive: false, // opt-in: a profile that wants it names it in tools
+    description:
+      "Ask whether ONE specific action would run without a permission prompt: allow, deny, ask, or granted (a user's grant covers it, with its expiry). Use it before batch or unattended work to pick a route that will not block, or to end with exactly what needs approval - not before every command: a refused action already tells you which rule stopped it. 'ask' does not say anyone is present or will approve.",
+    promptSnippet: "toriel_permission_check: would this action prompt, be allowed or be denied",
+    parameters: {
+      type: "object",
+      properties: {
+        surface: { type: "string", description: "The permission surface: bash, read, edit, write, mcp, skill, external_directory_write, ..." },
+        value: { type: "string", description: "What to check: the command, tool name, skill name or path. Omit for the surface as a whole." },
+      },
+      required: ["surface"],
+      additionalProperties: false,
+    },
+    async execute(_id: string, params: { surface?: string; value?: string }) {
+      const text = await checkAction(service, sock, process.env.TORIEL_SESSION_ID, params.surface ?? "", params.value);
+      return { content: [{ type: "text", text }], details: {} };
+    },
+  });
   // `permissions:ready` fires more than once per session and registering the same name twice throws
   pi.events.on("permissions:ready", (data) => {
     const sessionId = (data as { sessionId?: string | null } | undefined)?.sessionId;
@@ -136,6 +215,7 @@ export default function (pi: Pi) {
     }
     try {
       const services = (globalThis as Record<symbol, unknown>)[SERVICES] as Map<string, Service> | undefined;
+      service = services?.get(sessionId);
       dispose = services?.get(sessionId)?.registerAuthorizer?.(LINK_NAME, (details) => authorize(sock, process.env.TORIEL_SESSION_ID ?? sessionId, details, ask, scope));
     } catch {
       // the package is older than the authorizer seam, or the link already exists: asks keep their dialogs

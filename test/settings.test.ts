@@ -31,6 +31,17 @@ describe("loadSettings", () => {
     assert.match(loadSettings(tmp('{"summaryMinNewMessages":0}')).problems[0] as string, /at least 1/);
   });
 
+  it("reads agentLanes (tier -> provider/id) and rejects unknown tiers and bare model names", () => {
+    const ok = loadSettings(tmp('{"agentLanes":{"cheap":"litellm/local-model","expensive":"anthropic/claude-opus-5-5"}}'));
+    assert.deepEqual(ok.settings.agentLanes, { cheap: "litellm/local-model", expensive: "anthropic/claude-opus-5-5" });
+    assert.deepEqual(ok.problems, []);
+    for (const bad of ['{"cheap":"local-model"}', '{"fast":"a/b"}', '["a/b"]', '"a/b"', '{"cheap":3}']) {
+      const r = loadSettings(tmp(`{"agentLanes":${bad}}`));
+      assert.equal(r.settings.agentLanes, undefined, bad);
+      assert.match(r.problems[0] as string, /agentLanes must map cheap, medium, expensive/, bad);
+    }
+  });
+
   it("reads warnNoPermissionSystem as a boolean and rejects other types", () => {
     assert.equal(loadSettings(tmp('{"warnNoPermissionSystem":false}')).settings.warnNoPermissionSystem, false);
     assert.match(loadSettings(tmp('{"warnNoPermissionSystem":"no"}')).problems[0] as string, /true or false/);

@@ -6,7 +6,7 @@
 //   name: explore
 //   description: Read-only look around the codebase.
 //   tools: read, grep, find, ls, mcp__ghidra__*
-//   model: litellm/local-model
+//   model: cheap            (a tier from the settings' agentLanes) or provider/id
 //   thinking: low
 //   ---
 //   System prompt text...
@@ -18,12 +18,46 @@ import * as path from "node:path";
 import { piAgentDir } from "./pi-dir.ts";
 import { errText, readJsonOr } from "./util.ts";
 
+/** The model tiers a profile may name instead of a provider/id; the settings' `agentLanes` say which model each one is (ticket 208). */
+export const MODEL_TIERS = ["cheap", "medium", "expensive"] as const;
+export type ModelTier = (typeof MODEL_TIERS)[number];
+export type AgentLanes = Partial<Record<ModelTier, string>>;
+
+export function isModelTier(v: string): v is ModelTier {
+  return (MODEL_TIERS as readonly string[]).includes(v);
+}
+
+/**
+ * The provider/id a profile's `model` stands for. A value with a `/` is a literal id; a tier is looked up in
+ * the settings; a tier the settings do not set gives no model at all (the session's default) and a notice,
+ * never a refused launch: a shipped profile must still run on a machine that has no cheap model.
+ */
+export function resolveModel(model: string | undefined, lanes: AgentLanes | undefined): { model?: string; notice?: string } {
+  if (model === undefined || model.includes("/")) {
+    return { model };
+  }
+  const lane = isModelTier(model) ? lanes?.[model] : undefined;
+  if (lane !== undefined) {
+    return { model: lane };
+  }
+  return { notice: `the model tier "${model}" is not set in agentLanes in the toriel settings, so the default model is used` };
+}
+
+/** `profile` with its model tier resolved; `onNotice` hears the fallback, if any. */
+export function withResolvedModel(profile: AgentProfile, lanes: AgentLanes | undefined, onNotice?: (notice: string) => void): AgentProfile {
+  const r = resolveModel(profile.model, lanes);
+  if (r.notice !== undefined) {
+    onNotice?.(`agent ${profile.name}: ${r.notice}`);
+  }
+  return r.model === profile.model ? profile : { ...profile, model: r.model };
+}
+
 export interface AgentProfile {
   name: string;
   description: string;
   /** Tool allowlist handed to pi's --tools (patterns allowed, e.g. mcp__ghidra__*). Unset = pi's defaults. */
   tools?: string[];
-  /** provider/id; unset = whatever the settings say. */
+  /** provider/id, or a tier (cheap, medium, expensive) resolved through the settings' agentLanes at launch; unset = whatever the settings say. */
   model?: string;
   /** Opt out of the daemon's directory scoping for worktree spawns; unset = scoped when the spawn qualifies. */
   scope?: "none";
@@ -146,8 +180,8 @@ export function parseAgent(text: string, source: string, file: string): AgentPro
   if (fm.thinking !== undefined && !THINKING.has(fm.thinking)) {
     throw new Error(`thinking must be one of ${[...THINKING].join(", ")}`);
   }
-  if (fm.model !== undefined && !fm.model.includes("/")) {
-    throw new Error("model must be provider/id");
+  if (fm.model !== undefined && !fm.model.includes("/") && !isModelTier(fm.model)) {
+    throw new Error(`model must be provider/id or one of ${MODEL_TIERS.join(", ")}`);
   }
   if (fm.scope !== undefined && fm.scope !== "none") {
     throw new Error('scope must be "none"');

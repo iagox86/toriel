@@ -109,6 +109,24 @@ describe("daemon: permission grants", () => {
     assert.equal(link.messages.some((m) => m.type === "sessions" || m.type === "history"), false, "a check is a one-shot call, not a controller attach");
   });
 
+  it("answers a probe from the grants with the expiry, and leaves the dialog's suggestion alone (ticket 94)", async () => {
+    const h = await start();
+    const { c, session, uuid } = await savedSession(h);
+    await c.request({ type: "permission_add", uuid, surface: "bash", pattern: "ls*", for: "1h" });
+    await c.request({ type: "permission_add", uuid, surface: "bash", pattern: "pwd" });
+    const link = await h.connect();
+    const timed = await link.request({ type: "permission_check", uuid, grants: [{ surface: "bash", pattern: "ls -l" }], probe: true });
+    assert.deepEqual([timed.allow, typeof timed.expiresAt], [true, "number"]);
+    assert.ok(timed.expiresAt > Date.now() && timed.expiresAt <= Date.now() + 3_600_000);
+    const open = await link.request({ type: "permission_check", uuid, grants: [{ surface: "bash", pattern: "pwd" }], probe: true });
+    assert.deepEqual([open.allow, open.expiresAt], [true, null], "a grant until revoked has no expiry");
+    assert.equal((await link.request({ type: "permission_check", uuid, grants: [{ surface: "bash", pattern: "rm x" }], probe: true })).allow, false);
+    // a probe must not stand in for a real ask's suggestion: the next dialog gets none
+    await c.request({ type: "prompt", session, message: "/ask-select" });
+    const dialog = await c.waitFor((m) => m.type === "ui_request" && m.request?.id === "ask-select-1");
+    assert.equal(dialog.request.toriel, undefined);
+  });
+
   it("does not let an expired grant allow anything", async () => {
     const h = await start();
     const c = await controller(h);

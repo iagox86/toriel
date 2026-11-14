@@ -85,8 +85,30 @@ describe("toriel_schedule_* tools", () => {
   const run = (name: string, params: Record<string, unknown>) => tool(name).execute("t1", params, undefined, undefined, {});
 
   it("registers create, list and cancel next to the message tool", () => {
-    assert.deepEqual(registered().map((t) => t.name), ["toriel_message", "toriel_schedule_create", "toriel_schedule_list", "toriel_schedule_cancel"]);
+    assert.deepEqual(registered().map((t) => t.name), ["toriel_message", "toriel_schedule_create", "toriel_watch_create", "toriel_schedule_list", "toriel_schedule_cancel"]);
     assert.match(tool("toriel_schedule_create").description, /Prefer long delays/);
+  });
+
+  it("makes a file trigger in its own session, marked as the agent's, passing its options through", async () => {
+    const d = await fakeDaemon(() => ({ ok: true, data: { echo: "#4: on change: /w/r.md, waiting" } }));
+    try {
+      const out = await run("toriel_watch_create", { path: "r.md", prompt: "read it", once: true, cooldown: "45s", on: "any", name: "rev" });
+      assert.match(out.content[0]?.text ?? "", /^Watching: #4: on change/);
+      assert.deepEqual({ ...d.seen[0], id: undefined }, { type: "watch_add", uuid: process.env.TORIEL_SESSION_ID, path: "r.md", prompt: "read it", once: true, cooldown: "45s", events: "any", name: "rev", by: "agent", id: undefined });
+      assert.match(tool("toriel_watch_create").description, /30 seconds.*3 at a time.*6 times in an hour/);
+    } finally {
+      d.close();
+    }
+  });
+
+  it("reports a refused file trigger in words instead of throwing", async () => {
+    const d = await fakeDaemon(() => ({ ok: false, error: "a file trigger you make must end by itself" }));
+    try {
+      const out = await run("toriel_watch_create", { path: "r.md", prompt: "p" });
+      assert.match(out.content[0]?.text ?? "", /^No file trigger made: a file trigger you make must end by itself/);
+    } finally {
+      d.close();
+    }
   });
 
   it("creates a schedule in its own session from one when string, marked as the agent's, and reads back the echo", async () => {

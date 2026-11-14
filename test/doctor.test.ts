@@ -99,6 +99,13 @@ describe("doctor checks", () => {
     assert.match(renderDoctor(checks), /Everything checks out\./);
   });
 
+  /** A lane naming a provider that models.json does not have. */
+  const lanesScenario = (): DoctorOptions => {
+    const s = setup({ settings: '{"agentLanes":{"cheap":"nowhere/x"}}' });
+    fs.writeFileSync(path.join(s.opts.agentDir as string, "models.json"), JSON.stringify({ providers: { litellm: {} } }));
+    return s.opts;
+  };
+
   it("only ever reports findings the catalog knows, and the catalog has no dead entries", () => {
     const scenarios: DoctorOptions[] = [
       { ...setup({ noPiDir: true, noResources: true, stale: false, noCli: true, noInhibit: true, settings: '{"bogus":1}' }).opts, startup: ["node is too old"] },
@@ -116,6 +123,7 @@ describe("doctor checks", () => {
       setup({ config: { authorizerChain: ["toriel-grants"], permission: { "*": "allow", path: { "*": "allow", [GRANTS_RULE]: "ask" } } } }).opts,
       { ...setup({ settings: '{"sandbox":"bwrap"}' }).opts, probeBwrap: () => "bwrap is not installed (the bubblewrap package)" },
       setup({ scopePatch: "absent" }).opts,
+      lanesScenario(),
       setup({ scopePatch: "absent", config: { authorizerChain: ["toriel-grants"], permission: { "*": "allow", external_directory_write: { "/tmp/*": "allow" }, path: { "*": "ask", [GRANTS_RULE]: "ask" } } }, settings: JSON.stringify({ scopeGuardAcceptedAllows: [{ surface: "external_directory_write", pattern: "/tmp/*" }, { surface: "*", pattern: "*" }] }) }).opts,
     ];
     const seen = new Set<string>();
@@ -289,6 +297,20 @@ describe("doctor checks", () => {
     assert.deepEqual(collectFindings({ ...setup({ settings: '{"sandbox":"off"}' }).opts, probeBwrap: broken }), []);
   });
 
+  it("flags a model tier whose provider pi does not know, and stays quiet without lanes or with known providers", () => {
+    const s = setup({ settings: '{"agentLanes":{"cheap":"litellm/local-model","medium":"nope/x"}}' });
+    fs.writeFileSync(path.join(s.opts.agentDir as string, "models.json"), JSON.stringify({ providers: { litellm: {} } }));
+    const found = collectFindings(s.opts).filter((f) => f.id === "agent-lanes");
+    assert.equal(found.length, 1);
+    assert.equal(found[0]?.level, "feature");
+    assert.match(found[0]?.message ?? "", /agentLanes\.medium is nope\/x, but pi has no provider "nope"/);
+    assert.ok(found[0]?.manual);
+    // a login in auth.json counts as a provider
+    fs.writeFileSync(path.join(s.opts.agentDir as string, "auth.json"), JSON.stringify({ nope: { type: "oauth" } }));
+    assert.deepEqual(collectFindings(s.opts).filter((f) => f.id === "agent-lanes"), []);
+    assert.deepEqual(collectFindings(setup({}).opts).filter((f) => f.id === "agent-lanes"), [], "no lanes, nothing to check");
+  });
+
   it("asks for the sleep lock only on linux, and only when preventSleep is not off", () => {
     assert.deepEqual(collectFindings(setup({ noInhibit: true }).opts).map((x) => [x.id, x.level]), [["sleep-lock", "feature"]]);
     assert.deepEqual(collectFindings({ ...setup({ noInhibit: true }).opts, platform: "darwin" }), []);
@@ -330,7 +352,7 @@ describe("doctor report", () => {
     assert.match(text, /Required: all 5 ok/);
     assert.match(text, /Recommended: all 3 ok/);
     assert.doesNotMatch(text, / ok {7}/);
-    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(11 ok\)/);
+    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(12 ok\)/);
   });
 });
 
@@ -359,7 +381,7 @@ describe("doctor report colours", () => {
   it("colours the compact report too, with the passing checks' count dim", () => {
     const coloured = renderDoctor(checks(), { compact: true, style: ANSI_STYLE });
     assert.match(coloured, /Required\x1b\[22m: \x1b\[32mall 5 ok\x1b\[39m/);
-    assert.match(coloured, /\x1b\[2m {2}\(11 ok\)\x1b\[22m/);
+    assert.match(coloured, /\x1b\[2m {2}\(12 ok\)\x1b\[22m/);
   });
 });
 

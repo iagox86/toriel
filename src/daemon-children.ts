@@ -10,7 +10,7 @@ import { type BridgeTracker, INJECT_COMMAND, injectedId, mergedQueueTexts, parse
 import type { ClientHub } from "./daemon-hub.ts";
 import type { DaemonSession } from "./daemon-session.ts";
 import { randomUUID } from "node:crypto";
-import { type AgentProfile, loadAgents, profileArgs } from "./agents.ts";
+import { type AgentProfile, loadAgents, profileArgs, withResolvedModel } from "./agents.ts";
 import { recordHandled } from "./handled-files.ts";
 import { exitNote, stderrTail } from "./subagent-exit.ts";
 import { historyLength } from "./daemon-history.ts";
@@ -197,8 +197,10 @@ export class ChildManager {
     }
     const agent = opts.agent ?? profileOfSession(fileId) ?? s.agent;
     s.agent = agent;
-    if (agent) {
-      args.push(...profileArgs(agent, { isNew }));
+    // a model tier (model: cheap) becomes a provider/id here, from the settings as they are now; only a new session takes the model, a resumed one keeps what its file says
+    const launched = agent && isNew ? withResolvedModel(agent, loadSettings().settings.agentLanes, log) : agent;
+    if (launched) {
+      args.push(...profileArgs(launched, { isNew }));
     }
     args.push(...resourceArgs({ skills: !agent?.minimal }));
     // A resume restores the tool list recorded in the transcript, so tools of extensions
@@ -211,10 +213,10 @@ export class ChildManager {
     if (isNew && cfg.thinking && !agent?.thinking) {
       args.push("--thinking", cfg.thinking);
     }
-    if (isNew && cfg.model && !agent?.model) {
+    if (isNew && cfg.model && !launched?.model) {
       args.push("--model", cfg.model);
     }
-    if (isNew && cfg.provider && !agent?.model) {
+    if (isNew && cfg.provider && !launched?.model) {
       args.push("--provider", cfg.provider);
     }
     return { args, cfg };

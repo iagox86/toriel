@@ -1186,9 +1186,9 @@ Parked from that work:
   leaving the call blocked; toriel parks the request, shows it independent of the turn, and on
   approval adds a timed grant and tells the session to retry. Reuses the grant store. Risks: the
   model must retry on its own (weak models will not, or will loop), and a pending-approval
-  object needs UI that exists apart from a blocked child. Pairs with #79 (auto-deny) for
+  object needs UI that exists apart from a blocked child. Pairs with #88 (auto-deny) for
   unattended runs.
-- `toriel_permission_check` (#85): an agent asks whether one action would run without a prompt.
+- (built, ticket 94: `toriel_permission_check`, an agent asks whether one action would run without a prompt; docs/permissions.md "The agent tool".)
 - Wide hand-written grant patterns (`git *`, glob-matched against the ask's value); per-project
   scope as an explicit opt-in; `--permit` on schedules for unattended runs.
 - Sandboxing the agent (the container ticket) is the only thing that makes a grants file safe

@@ -37,10 +37,15 @@ In the session list (not inside a session) the user also has `/new` (start a ses
 ## What you can do yourself
 
 - `toriel_message` - tell another session something (only when the user asks; see `messaging`).
-- `toriel_schedule_create`, `toriel_schedule_list`, `toriel_schedule_cancel` - follow-ups for yourself (see `scheduling`).
+- `toriel_schedule_create`, `toriel_schedule_list`, `toriel_schedule_cancel` - follow-ups for yourself (see `scheduling`); `toriel_watch_create` - a follow-up when a file changes, with limits (see `scheduling`).
 - `toriel_agent`, `toriel_agents` - hand a bounded task to a subagent (see `delegating`), where your profile allows it.
 - `toriel_usage` - the model provider's quota and spend, when asked.
 - `toriel_job` - read or stop a command you started with `run_in_background`.
+
+## Finding processes
+
+- A process you start yourself: start it with `bash` and `run_in_background`, and keep the job id. `toriel_job list` shows it, `output` reads it, `stop` ends it. Do not go hunting for it with `ps` afterwards.
+- A process you did not start (a daemon, a leftover from a test, "is X still running"): do not use `ps | grep`. pi rewrites its process title to a bare `pi`, so the session file and flags are gone from `ps`, and a pattern like `" node "` misses `/usr/bin/node`. Run the `procs` script in this skill's directory (`sh <skill dir>/procs 'pattern'`, `-i` for case-insensitive): it matches the real command line from `/proc/<pid>/cmdline` and prints one `PID PPID AGE USER COMMAND` line each. `procs --leak [hours]` lists pi- and toriel-related processes older than that (default 12 hours): daemons, pi children, test fakes. It cannot tell a leak from a live session, so check each pid before you stop it, and never stop another live session's pi.
 
 ## How to ask
 
