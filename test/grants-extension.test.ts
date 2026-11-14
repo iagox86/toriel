@@ -395,7 +395,7 @@ describe("checkAction (toriel_permission_check, ticket 94)", () => {
       asked.push(cmd);
       return { allow: true, expiresAt: null };
     };
-    for (const value of ["git status && rm -rf build", "ls || true", "ls; rm x", "cat f | sh", "echo `id`", "echo $(id)", "ls\nrm x"]) {
+    for (const value of ["git status && rm -rf build", "ls || true", "ls; rm x", "cat f | sh", "echo `id`", "echo $(id)", "ls\nrm x", "ls & rm x", "diff <(sort a) b", "tee >(log) f"]) {
       const out = await ext.checkAction(service("ask"), sock, "u", "bash", value, granting);
       assert.match(out, /^ask:/, value);
       assert.match(out, /compound command.*individual parts/, value);

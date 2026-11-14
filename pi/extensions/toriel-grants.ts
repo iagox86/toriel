@@ -160,7 +160,7 @@ export async function checkAction(service: Service | undefined, sock: string, uu
     return `Cannot tell: the permission system answered ${JSON.stringify(result.state)} for ${what}. Assume it may prompt.`;
   }
   // a real ask for a compound command is one grant per part; a grant that covers the whole string says nothing about the parts, so it is never reported as "granted"
-  const compound = surface === "bash" && value !== undefined && /&&|\|\||[;|`\n]|\$\(/.test(value);
+  const compound = surface === "bash" && value !== undefined && /[;&|`\n]|\$\(|[<>]\(/.test(value);
   if (uuid && !compound) {
     try {
       const reply = await send(sock, { type: "permission_check", uuid, grants: [{ surface, pattern: value ?? "*" }], value, probe: true }, CHECK_TIMEOUT_MS);
