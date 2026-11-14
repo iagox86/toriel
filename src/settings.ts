@@ -62,6 +62,10 @@ export interface TorielSettings {
   subagentBudgetTokens?: number;
   /** A finished subagent stays in the switcher this many minutes before it is deleted to the trash (default 30; 0 = at once; read when the daemon starts; TORIEL_SUBAGENT_KEEP_MS wins). */
   subagentKeepMinutes?: number;
+  /** A running subagent silent this many minutes (no event at all) is stopped as stuck (default 15, 0 = never; read when the daemon starts; TORIEL_SUBAGENT_IDLE_MS wins). */
+  subagentIdleMinutes?: number;
+  /** A background subagent still running after this many minutes is stopped (default 0 = no cap; read when the daemon starts; TORIEL_SUBAGENT_MAX_MS wins). */
+  subagentMaxMinutes?: number;
 }
 
 /** How long the trash keeps a deleted session unless the settings say otherwise. */
@@ -106,10 +110,10 @@ export function settingsMtime(file: string = settingsFile()): number | null {
   }
 }
 
-const NUMBER_KEYS = ["summaryIntervalMinutes", "summaryMinNewMessages", "scheduleUsagePause", "scheduleDailyLimit", "permissionGrantLimit", "trashRetentionDays", "subagentMaxConcurrent", "subagentMaxDepth", "subagentMaxSpawns", "subagentBudgetTokens", "subagentKeepMinutes"] as const;
+const NUMBER_KEYS = ["summaryIntervalMinutes", "summaryMinNewMessages", "scheduleUsagePause", "scheduleDailyLimit", "permissionGrantLimit", "trashRetentionDays", "subagentMaxConcurrent", "subagentMaxDepth", "subagentMaxSpawns", "subagentBudgetTokens", "subagentKeepMinutes", "subagentIdleMinutes", "subagentMaxMinutes"] as const;
 const BOOLEAN_KEYS = ["warnNoPermissionSystem", "preventSleep", "showExternalSessions", "autoName"] as const;
 /** Number settings where 0 is a meaningful "off". */
-const ZERO_OK: readonly string[] = ["summaryIntervalMinutes", "scheduleUsagePause", "trashRetentionDays", "subagentKeepMinutes"];
+const ZERO_OK: readonly string[] = ["summaryIntervalMinutes", "scheduleUsagePause", "trashRetentionDays", "subagentKeepMinutes", "subagentIdleMinutes", "subagentMaxMinutes"];
 const STRING_KEYS = ["provider", "model", "thinking", "piCli", "summaryModel"] as const;
 /** Every key the file may hold; the commented template (settings-file.ts) must cover all of them. */
 export const SETTING_KEYS: readonly string[] = ["steeringMode", "permissionGrantDurations", "sandbox", "sandboxWritable", "scopeGuardAcceptedAllows", ...BOOLEAN_KEYS, ...STRING_KEYS, ...NUMBER_KEYS];

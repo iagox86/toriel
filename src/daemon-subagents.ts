@@ -24,6 +24,7 @@ import {
   expiredSubagents,
   abnormalEnd,
   limitBreach,
+  watchdogBreach,
   subagentResultText,
   messageTokens,
   parseHandle,
@@ -125,6 +126,32 @@ export class SubagentManager {
     const settle = this.settling.get(s.id);
     this.settling.delete(s.id);
     settle?.();
+  }
+
+  /** Any event arrived from `s`'s process: the idle watchdog's clock. */
+  onActivity(s: DaemonSession): void {
+    const rec = this.book.bySession(s.id);
+    if (rec?.state === "running") {
+      rec.lastEventAt = Date.now();
+    }
+  }
+
+  /**
+   * Stop the running subagents that have gone quiet for too long, or (background only) run too long. A subagent
+   * waiting on a permission dialog is not stuck: its clock restarts when the dialog is answered.
+   */
+  checkWatchdog(now = Date.now()): void {
+    const ctx = this.ctx();
+    for (const rec of this.book.running()) {
+      if (ctx.registry.get(rec.session)?.pendingDialog) {
+        rec.lastEventAt = now;
+        continue;
+      }
+      const why = watchdogBreach({ now, startedAt: rec.startedAt, lastEventAt: rec.lastEventAt, background: rec.background, idleMs: this.limits.idleMs, maxMs: this.limits.maxMs });
+      if (why) {
+        void this.stop(rec, why, "stopped");
+      }
+    }
   }
 
   /** An assistant message finished in `s`: cut the subagent off when it went over its budget or turns. */

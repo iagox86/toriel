@@ -50,6 +50,11 @@ export class SessionActions {
     this.commands = new SessionCommands(host);
   }
 
+  /** Start the viewed session because a /command or !command is being typed into it (ticket 68). */
+  wakeForTyping(): Promise<void> {
+    return this.commands.wakeForTyping();
+  }
+
   resetArmed(): void {
     this.armedFork = null;
   }

@@ -86,6 +86,7 @@ import {
   type SessionView,
   showRawError,
 } from "./transcript.ts";
+import { mayWake, WakeOnType } from "./wake-on-type.ts";
 import { errText, fireAndReport } from "./util.ts";
 
 configureEditorKeys();
@@ -159,6 +160,11 @@ class Controller {
   /** pi's slash commands for the viewed session (from the daemon). */
   piCommands: Array<{ name: string; description?: string }> = [];
   private commandsFor: string | null = null;
+  private readonly wakeOnType = new WakeOnType({
+    text: () => this.editor.getText(),
+    allowed: () => mayWake(this.viewing ?? undefined, this.viewing ? this.metaForPath(this.viewing) : undefined, this.switching.isOpen),
+    wake: () => void this.session.wakeForTyping(),
+  });
   /** Editor text from before ctrl-r, restored on cancel. */
   private searchDraft = "";
   /** The daemon's initial session list has arrived (false while connecting or reconnecting). */
@@ -233,7 +239,12 @@ class Controller {
       })),
     );
     this.editor.debugLog = KEY_LOG;
-    this.editor.onSubmit = (text) => this.submit(text);
+    this.editor.onSubmit = (text) => {
+      this.wakeOnType.cancel();
+      this.submit(text);
+    };
+    // a sleeping session gets started once the text is a /command or !command and typing pauses (ticket 68)
+    this.editor.onChange = (text) => this.wakeOnType.onText(text);
     this.editor.onKey = (data) => this.keys(data);
     const layouts = buildLayouts(this);
     this.chatLayout = layouts.chat;
@@ -915,7 +926,13 @@ class Controller {
       });
   }
 
+  refreshPiCommands(): void {
+    this.commandsFor = null;
+    this.syncCommands();
+  }
+
   rebuildChat(): void {
+    this.wakeOnType.cancel();
     this.syncHistory();
     this.syncCommands();
     this.chatRoot.clear();

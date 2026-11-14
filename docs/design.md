@@ -1499,3 +1499,29 @@ Parked: what to do about a rename pi reports that the daemon did not issue (an e
 today the wanted name is re-asserted up to five times, then left), `uniqueName` turning a user's own `Task #5`
 into `Task #2`, reading the names of unregistered session files into the taken set (then the controller's
 preview can go), and the auto-namer (62), which is now just `claim(..., {source: "auto", ifUnset: true})`.
+
+## Opening a long session: measured, not slow (ticket 116, 2026-11-13)
+
+Ticket 116 (written 2026-11-02) proposed truncating or lazily building the initial transcript because
+opening a months-long session from the switcher was slow. Measured on the largest real session on disk
+(21.3 MB, 5,563 lines, 5,517 messages, 19 compactions, 3,970 items, 17,255 rendered rows at width 120), on
+the code after the session-file reader work (board 183):
+
+| step | time |
+|---|---|
+| read, split and parse the file (`readActiveEntries`) | ~70 ms |
+| `messagesFromFile` (active branch, compaction markers) | ~80 ms |
+| `itemsFromMessages` (one component per message) | ~180 ms |
+| first render of every item | ~180 ms |
+| the same render again (per-item caches) | 11 ms |
+| the chat container rendered as one document, steady state | ~1 ms |
+| a live session's `history` message: stringify 18 MB / parse | 40 ms / 26 ms |
+
+So a switcher open is about 0.45 s of controller CPU for a file this size, about 0.55 s plus pi's own
+`get_messages` for a live session, and a repaint (keypress, streamed token, scroll) never rebuilds anything.
+No stage is superlinear. The slowness the ticket saw predates the single reader (#44-#46), which stopped
+parsing every entry several times. Truncation or a "load earlier" affordance would cost the drift counter
+and the dimming/fold contracts the ticket lists, for a saving of under half a second at ten times the size
+of a typical session, so none was built. Revisit if a file past ~100 MB turns up, with the same breakdown
+(`probes`-style script: time `messagesFromFile`, `itemsFromMessages`, one `render(120)` per item) before
+choosing between truncation, lazy building and virtualization.

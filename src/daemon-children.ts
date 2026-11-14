@@ -59,6 +59,8 @@ export class ChildManager {
   private readonly launching = new Set<RpcClient>();
   /** Called with each finished assistant message (the subagent manager counts turns and tokens with it). */
   onAssistantMessage?: (s: DaemonSession, message: { role?: string; stopReason?: string; errorMessage?: string; usage?: { input?: number; output?: number; cacheWrite?: number } } | undefined) => void;
+  /** Called for every event a session's process emits (the subagent watchdog's clock). */
+  onActivity?: (s: DaemonSession) => void;
   /** The limits that decide which sessions get the toriel_agent tools: the same object the subagent manager enforces. */
   private readonly subagentLimits: SubagentLimits;
   /** Called when a session's process is stopped or found dead (subagents end with their session; foreground ones with their parent). */
@@ -530,6 +532,7 @@ export class ChildManager {
 
   private onEvent(s: DaemonSession, event: Record<string, unknown>): void {
     const type = event.type as string;
+    this.onActivity?.(s);
     if (type === "extension_ui_request") {
       if (this.takeUsageReport(event) || this.takeBridgeReport(s, event)) {
         return; // for the daemon, not for controllers
