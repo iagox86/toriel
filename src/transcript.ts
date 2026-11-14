@@ -120,6 +120,8 @@ export interface SessionView extends ActivityState {
   echoes: Array<{ text: string; item: UserItem }>;
   /** Rows toriel added about what it did (see noteRow); they are not in pi's history, so a reload puts them back at the end. */
   notes?: OtherItem[];
+  /** What toriel did about a tool call (see attachCallNote), by toolCallId: kept here so a history reload can put each back on its call. */
+  callNotes?: Map<string, string[]>;
   /** The "working" spinner was started by a sent prompt, not by anything pi reported (yet). */
   echoActivity?: boolean;
   /**
@@ -134,6 +136,41 @@ export interface SessionView extends ActivityState {
 
 export function newView(): SessionView {
   return { items: [], tools: new Map(), queue: [], echoes: [] };
+}
+
+/**
+ * Attach a note to the tool call whose permission prompt it answers, so it reads under that call instead of floating as a row
+ * of its own (ticket 205). The prompt is raised while pi prepares a call, after that call's start was reported and before any
+ * later call's, so it belongs to the newest call that has not finished and has no note yet. False when there is none (the
+ * view was rebuilt from history, or the call is gone): the caller shows the note as a row then.
+ */
+export function attachCallNote(view: SessionView, text: string): boolean {
+  const latest = [...view.tools.values()].at(-1);
+  if (!latest?.id || latest.done || latest.notes?.length) {
+    return false;
+  }
+  latest.notes = [text];
+  latest.cachedLines = undefined;
+  view.callNotes = new Map(view.callNotes ?? []).set(latest.id, latest.notes);
+  return true;
+}
+
+/** Put the notes in `callNotes` back on the calls of rebuilt `items` that have those ids. */
+export function reapplyCallNotes(items: Item[], callNotes: Map<string, string[]> | undefined): void {
+  if (!callNotes?.size) {
+    return;
+  }
+  for (const item of items) {
+    if (item.kind === "tools") {
+      for (const call of item.component.calls) {
+        const notes = call.id ? callNotes.get(call.id) : undefined;
+        if (notes) {
+          call.notes = [...notes];
+          call.cachedLines = undefined;
+        }
+      }
+    }
+  }
 }
 
 /** Show a just-sent prompt at once; pi's own user message later adopts it instead of adding a second. */
@@ -382,7 +419,7 @@ export function applyEvent(view: SessionView, ev: Record<string, unknown>, env: 
         env.cwd,
       );
       component.markExecutionStarted();
-      const call: ToolCall = { name: ev.toolName as string, args: ev.args, component, failed: false };
+      const call: ToolCall = { name: ev.toolName as string, args: ev.args, component, failed: false, id: ev.toolCallId as string };
       appendCall(view, env, call);
       view.tools.set(ev.toolCallId as string, call);
       break;
@@ -501,7 +538,7 @@ export function itemsFromMessages(messages: unknown[], tui: TuiAltScreen, cwd: s
         const failed = (m.isError ?? false) || softFailure(m.content);
         const result = { content: (m.content ?? []) as never, details: m.details, isError: failed };
         component.updateResult((binaryReadDisplay(m.toolName, call?.args, result, cwd) ?? result) as never, false);
-        const toolCall: ToolCall = { name: m.toolName, args: call?.args, component, failed, done: true };
+        const toolCall: ToolCall = { name: m.toolName, args: call?.args, component, failed, done: true, id: m.toolCallId };
         const last = lastToolRun(items);
         // a run is dimmed as a whole, so a call joins it only when it is on the same side of the compaction
         if (last && Boolean(last.dimmed) === Boolean(m.outOfContext)) {

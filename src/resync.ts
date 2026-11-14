@@ -4,7 +4,7 @@
 // are stale and must not survive. A replay during a live connection only has to
 // keep what raced ahead of it.
 import type { Item, SessionView } from "./transcript.ts";
-import { newView } from "./transcript.ts";
+import { newView, reapplyCallNotes } from "./transcript.ts";
 
 export function viewFromHistory(old: SessionView | undefined, items: Item[], afterReconnect: boolean, messages?: number): SessionView {
   const fresh: SessionView = { ...newView(), items, messages };
@@ -20,6 +20,11 @@ export function viewFromHistory(old: SessionView | undefined, items: Item[], aft
   for (const echo of old.echoes) {
     fresh.echoes.push(echo);
     fresh.items.push(echo.item);
+  }
+  // what toriel did about a tool call lives with that call: the reload rebuilds the call from history, the note goes back on it
+  if (old.callNotes?.size) {
+    fresh.callNotes = new Map(old.callNotes);
+    reapplyCallNotes(fresh.items, fresh.callNotes);
   }
   // rows toriel added are not in pi's history either; their place in the order is lost, but what they say is not
   if (old.notes?.length) {

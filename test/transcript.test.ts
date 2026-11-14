@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { describe, it } from "node:test";
 import { resetCapabilitiesCache, setCapabilities } from "@earendil-works/pi-tui";
 import { formatLocalCommand } from "../src/local-command.ts";
-import { applyDelta, applyEvent, type AssistantItem, dropEcho, echoUser, type Item, itemsFromFile, itemsFromMessages, errorRow, softFailure, lengthNotice, showRawError, messagesFromFile, newView, isInjectType } from "../src/transcript.ts";
+import { applyDelta, applyEvent, attachCallNote, reapplyCallNotes, type AssistantItem, dropEcho, echoUser, type Item, itemsFromFile, itemsFromMessages, errorRow, softFailure, lengthNotice, showRawError, messagesFromFile, newView, isInjectType } from "../src/transcript.ts";
 
 function assistant(content: unknown[] = []): AssistantItem {
   return { kind: "assistant", component: undefined as never, partial: { content }, text: new Map(), thinking: new Map() };
@@ -212,6 +212,53 @@ describe("applyEvent", () => {
       return run.render(60).join("\n");
     };
     assert.notEqual(rendered(true), rendered(false));
+  });
+
+  it("shows a grant's answer under the tool call it allowed, and puts it back when history is rebuilt (ticket 205)", () => {
+    const items: Item[] = [];
+    const view = newView();
+    const tui = { requestRender() {} } as never;
+    const e = {
+      tui,
+      cwd: "/w",
+      addItem: (i: Item) => {
+        items.push(i);
+        view.items.push(i);
+      },
+    };
+    const plain =(item: Item | undefined) => ((item as Item).component as unknown as { render(w: number): string[] }).render(80).join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+    const expand = (item: Item | undefined) => ((item as Item).component as unknown as { expanded: boolean }).expanded = true;
+    applyEvent(view, { type: "tool_execution_start", toolCallId: "a", toolName: "bash", args: { command: "one" } }, e);
+    assert.equal(attachCallNote(view, "allowed by permission grant #80: /p/one"), true);
+    assert.equal(attachCallNote(view, "allowed by permission grant #80: /p/one"), false, "a call takes one note: a second has no call to go to");
+    applyEvent(view, { type: "tool_execution_start", toolCallId: "b", toolName: "bash", args: { command: "two" } }, e);
+    assert.equal(attachCallNote(view, "allowed by permission grant #81: /p/two"), true, "the next call's prompt goes to the next call");
+    applyEvent(view, { type: "tool_execution_end", toolCallId: "a", isError: false, result: { content: [{ type: "text", text: "ok" }] } }, e);
+    applyEvent(view, { type: "tool_execution_end", toolCallId: "b", isError: false, result: { content: [{ type: "text", text: "ok" }] } }, e);
+    expand(items[0]);
+    assert.match(plain(items[0]), /toriel: allowed by permission grant #80: \/p\/one[\s\S]*toriel: allowed by permission grant #81: \/p\/two/);
+    assert.equal(attachCallNote(view, "allowed by permission grant #82: /p/x"), false, "a finished call has no prompt left");
+    // a reload rebuilds the calls from history: the notes go back on them, in place, not at the end of the view
+    const rebuilt = itemsFromMessages(
+      [
+        { role: "assistant", content: [{ type: "toolCall", id: "a", name: "bash", arguments: { command: "one" } }] },
+        { role: "toolResult", toolCallId: "a", toolName: "bash", content: [{ type: "text", text: "ok" }] },
+        { role: "toolResult", toolCallId: "b", toolName: "bash", content: [{ type: "text", text: "ok" }] },
+      ],
+      tui,
+      "/w",
+    );
+    reapplyCallNotes(rebuilt, view.callNotes);
+    const run = rebuilt.find((i) => i.kind === "tools");
+    expand(run);
+    const text = plain(run);
+    assert.match(text, /#80: \/p\/one/);
+    assert.match(text, /#81: \/p\/two/);
+    assert.equal(rebuilt.filter((i) => i.kind === "other").length, 0, "no free-floating rows");
+  });
+
+  it("has nowhere to attach a grant's answer when no call is running (a rebuilt view): the caller shows it as a row", () => {
+    assert.equal(attachCallNote(newView(), "allowed by permission grant #3: /p"), false);
   });
 
   it("shows a message from another session as 'from NAME' rather than as something the user typed", () => {

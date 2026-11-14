@@ -273,6 +273,7 @@ describe("daemon: permission grants", () => {
       await raise();
       const notice = await c.waitFor((m) => m.type === "notice" && /allowed by permission grant #\d+/.test(m.text));
       assert.match(notice.text, /sudo -V/);
+      assert.match(notice.text, /^allowed by permission grant #\d+: /, "one grant is named once (ticket 205)");
       assert.equal(notice.durable, true, "a security-relevant fact is a transcript row, not a flash");
       assert.equal(prompts(), 1, "the covered prompt never reached the controller");
     });

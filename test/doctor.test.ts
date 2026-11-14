@@ -117,7 +117,7 @@ describe("doctor checks", () => {
       { ...setup({}).opts, env: { WAYLAND_DISPLAY: "wayland-0" }, pathDirs: ["/nonexistent-path"], startup: [] },
       { ...setup({}).opts, tty: true, env: { TERM: "xterm-256color" }, startup: [] },
       { ...setup({}).opts, tty: true, env: { TMUX: "/tmp/tmux-1000/default,1,0" }, probeTmux: () => ({ extendedKeys: "off" }), startup: [] },
-      { ...setup({}).opts, tty: true, env: { TMUX: "/tmp/tmux-1000/default,1,0" }, probeTmux: () => ({ extendedKeys: "on", clientTerm: "xterm-kitty" }), kittyConfig: "", startup: [] },
+      { ...setup({}).opts, tty: true, env: { TMUX: "/tmp/tmux-1000/default,1,0" }, probeTmux: () => ({ extendedKeys: "on", clientTerm: "xterm-kitty", clientFeatures: "RGB" }), kittyConfig: "", startup: [] },
       setup({ gitMcp: "none" }).opts,
       setup({ gdbMcp: "none", ghidraMcp: "codemode" }).opts,
       setup({ config: { authorizerChain: ["toriel-grants"], permission: { "*": "allow", path: { "*": "allow", [GRANTS_RULE]: "ask" } } } }).opts,
@@ -211,6 +211,24 @@ describe("doctor checks", () => {
     assert.deepEqual(finding(inTmux, undefined), [], "tmux could not be asked: no guess");
     assert.deepEqual(finding({}, "off"), [], "not under tmux");
     assert.deepEqual(finding(inTmux, "off", false), [], "not a real terminal");
+  });
+
+  it("tmux-hyperlinks: under tmux, when tmux says the client lacks hyperlinks (ticket 211)", () => {
+    const inTmux = { TMUX: "/tmp/tmux-1000/default,1,0" };
+    const finding = (clientTerm: string | undefined, clientFeatures: string | undefined, env: NodeJS.ProcessEnv = inTmux, tty = true) =>
+      collectFindings({ ...setup({}).opts, tty, env, startup: [], probeTmux: () => ({ extendedKeys: "on", clientTerm, clientFeatures }), kittyConfig: "map shift+enter send_text all x" }).filter((f) => f.id === "tmux-hyperlinks");
+    const missing = finding("xterm-kitty", "bpaste,clipboard,RGB,title");
+    assert.equal(missing.length, 1);
+    assert.match(missing[0]?.message ?? "", /set -as terminal-features ",xterm-kitty:hyperlinks"/);
+    assert.match(missing[0]?.message ?? "", /restart the tmux server/);
+    assert.ok(missing[0]?.manual, "tmux.conf is not a file doctor edits");
+    assert.deepEqual(finding("xterm-kitty", "bpaste,clipboard,hyperlinks,RGB"), [], "it is on, from whatever pattern or detection");
+    assert.equal(finding("xterm-256color", "RGB").length, 1, "any terminal, not only kitty");
+    assert.deepEqual(finding("xterm-kitty", undefined), [], "tmux too old to say: no guess");
+    assert.deepEqual(finding("xterm-kitty", ""), [], "tmux before 3.2 renders the format as an empty string: terminal-features does not exist there, so the fix cannot be offered");
+    assert.deepEqual(finding(undefined, "RGB"), [], "tmux could not say which terminal");
+    assert.deepEqual(finding("xterm-kitty", "RGB", {}), [], "not under tmux");
+    assert.deepEqual(finding("xterm-kitty", "RGB", inTmux, false), [], "not a real terminal");
   });
 
   it("kitty-shift-enter: under tmux in kitty, unless kitty.conf maps shift+enter (ticket 142)", () => {
@@ -352,7 +370,7 @@ describe("doctor report", () => {
     assert.match(text, /Required: all 5 ok/);
     assert.match(text, /Recommended: all 3 ok/);
     assert.doesNotMatch(text, / ok {7}/);
-    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(12 ok\)/);
+    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(13 ok\)/);
   });
 });
 
@@ -381,7 +399,7 @@ describe("doctor report colours", () => {
   it("colours the compact report too, with the passing checks' count dim", () => {
     const coloured = renderDoctor(checks(), { compact: true, style: ANSI_STYLE });
     assert.match(coloured, /Required\x1b\[22m: \x1b\[32mall 5 ok\x1b\[39m/);
-    assert.match(coloured, /\x1b\[2m {2}\(12 ok\)\x1b\[22m/);
+    assert.match(coloured, /\x1b\[2m {2}\(13 ok\)\x1b\[22m/);
   });
 });
 

@@ -176,7 +176,8 @@ export function gitPolicy(root: string, fsApi: FsApi = defaultFs): Pick<SandboxP
  * symlink that leaves it (the worktree layout points it at the main checkout, and writes through a
  * symlink land on the target), the git paths above, the shared directory, the static roots (caches)
  * and any `extra` paths approved for this session. Paths that do not exist are left out (bwrap
- * cannot bind them). Never throws.
+ * cannot bind them), and so are paths that are /tmp, under it, or contain it: the sandbox's /tmp is
+ * its own, and binding such a path would put the host's back (ticket 206). Never throws.
  */
 export function derivePolicy(cfg: Extract<SandboxConfig, { kind: "bwrap" }>, extra: readonly string[] = [], fsApi: FsApi = defaultFs): SandboxPolicy {
   const writable: string[] = [cfg.root];
@@ -205,7 +206,11 @@ export function derivePolicy(cfg: Extract<SandboxConfig, { kind: "bwrap" }>, ext
   // the daemon's own socket, wherever it is; a socket inside a masked directory is already gone
   const hidden = cfg.sock !== undefined && fsApi.existsSync(cfg.sock) && !masked.some((d) => cfg.sock === d || cfg.sock?.startsWith(`${d}/`)) ? [cfg.sock] : [];
   const tmp = cfg.tmp !== undefined ? realOrUndefined(fsApi, cfg.tmp) : undefined;
-  return { writable: [...new Set(writable)], readOnly: [...new Set(readOnly)], masked, hidden, tmp: tmp !== undefined && isDir(fsApi, tmp) ? tmp : undefined };
+  // a writable root that is /tmp, lies under it, or contains it (such as /) is bound after the sandbox's own /tmp and would layer the REAL one back over it, sockets and all (board 190)
+  const realTmp = realOrUndefined(fsApi, "/tmp");
+  const tmps = realTmp !== undefined && realTmp !== "/tmp" ? ["/tmp", realTmp] : ["/tmp"];
+  const exposesTmp = (p: string) => tmps.some((t) => p === t || p.startsWith(`${t}/`) || t.startsWith(p === "/" ? p : `${p}/`));
+  return { writable: [...new Set(writable)].filter((p) => !exposesTmp(p)), readOnly: [...new Set(readOnly)], masked, hidden, tmp: tmp !== undefined && isDir(fsApi, tmp) ? tmp : undefined };
 }
 
 /**

@@ -4,6 +4,7 @@ import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { clearTransient, viewFromHistory } from "../src/resync.ts";
 import { newView, noteRow } from "../src/transcript.ts";
 import type { Item } from "../src/transcript.ts";
+import { type ToolCall, ToolRun } from "../src/tool-run.ts";
 
 const item = (n: string) => ({ kind: "user", component: {} as never, n }) as unknown as Item;
 
@@ -45,6 +46,22 @@ describe("viewFromHistory", () => {
     assert.ok(v.items.includes(note));
     assert.deepEqual(v.notes, [note]);
     assert.equal(viewFromHistory(old, [item("new")], true).items.includes(note), false, "a reconnect starts clean");
+  });
+});
+
+describe("viewFromHistory and call notes", () => {
+  it("keeps what toriel did about a tool call and puts it back on the rebuilt call (ticket 205)", () => {
+    const old = stale();
+    old.callNotes = new Map([["c1", ["allowed by permission grant #3: /p/a.md"]]]);
+    const call = { name: "bash", component: {} as never, failed: false, done: true, id: "c1" } as ToolCall;
+    const other = { name: "bash", component: {} as never, failed: false, done: true, id: "c2" } as ToolCall;
+    const run = new ToolRun();
+    run.calls.push(call, other);
+    const v = viewFromHistory(old, [{ kind: "tools", component: run } as Item], false);
+    assert.deepEqual(call.notes, ["allowed by permission grant #3: /p/a.md"]);
+    assert.equal(other.notes, undefined);
+    assert.equal(v.callNotes?.get("c1")?.length, 1);
+    assert.equal(v.notes, undefined, "no row of its own is made for it");
   });
 });
 

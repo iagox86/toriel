@@ -15,6 +15,8 @@ const BASE = existsSync("/var/tmp") ? "/var/tmp" : tmpdir();
 // These tests build their fixtures under /var/tmp, which is read-only inside a toriel sandbox (ticket 203): they cannot run there, and the EROFS failures look like broken code.
 const inSandbox = process.env.TORIEL_SANDBOX !== undefined;
 const IN_SANDBOX = "this test builds sandbox fixtures under /var/tmp and cannot run inside a sandbox";
+// Only the tests that build fixtures skip: the rest are pure and run in a sandbox too (ticket 207). The fixtures cannot move to the sandbox's own /tmp, which readSandbox and derivePolicy refuse as a root.
+const FIXTURE = { skip: inSandbox ? IN_SANDBOX : false };
 const made: string[] = [];
 function mk(): string {
   const dir = realpathSync(mkdtempSync(join(BASE, "toriel-sandbox-test-")));
@@ -48,7 +50,7 @@ function repoWithWorktree() {
 
 const cfgFor = (root: string, extra: { shared?: string; staticRw?: string[]; sock?: string; tmp?: string } = {}) => ({ kind: "bwrap" as const, root, shared: extra.shared, staticRw: extra.staticRw ?? [], sock: extra.sock, tmp: extra.tmp });
 
-describe("readSandbox", { skip: inSandbox ? IN_SANDBOX : false }, () => {
+describe("readSandbox", () => {
   it("is off when TORIEL_SANDBOX is absent", () => {
     assert.deepEqual(readSandbox({}), { kind: "off" });
     assert.deepEqual(readSandbox({ TORIEL_SCOPE_ROOT: "/x" }), { kind: "off" });
@@ -76,7 +78,7 @@ describe("readSandbox", { skip: inSandbox ? IN_SANDBOX : false }, () => {
     assert.match((r as { why: string }).why, /under \/tmp/);
   });
 
-  it("reads the root, the shared directory and the static roots", () => {
+  it("reads the root, the shared directory and the static roots", FIXTURE, () => {
     const root = mk();
     const r = readSandbox({ [SANDBOX_ENV]: "bwrap", TORIEL_SCOPE_ROOT: root, [SHARED_DIR_ENV]: "/s", [SANDBOX_RW_ENV]: ["/a", "rel", "/b"].join(delimiter) });
     assert.deepEqual(r, { kind: "bwrap", root, shared: "/s", staticRw: ["/a", "/b"], sock: undefined, tmp: undefined });
@@ -86,14 +88,14 @@ describe("readSandbox", { skip: inSandbox ? IN_SANDBOX : false }, () => {
   });
 });
 
-describe("gitPolicy", { skip: inSandbox ? IN_SANDBOX : false }, () => {
-  it("carves hooks and config out of an ordinary checkout", () => {
+describe("gitPolicy", () => {
+  it("carves hooks and config out of an ordinary checkout", FIXTURE, () => {
     const root = mk();
     mkdirSync(join(root, ".git"));
     assert.deepEqual(gitPolicy(root), { writable: [], readOnly: [join(root, ".git", "hooks"), join(root, ".git", "config")] });
   });
 
-  it("opens only what git commit needs in a linked worktree and pins the pointer files", () => {
+  it("opens only what git commit needs in a linked worktree and pins the pointer files", FIXTURE, () => {
     const { wt, common, gitdir } = repoWithWorktree();
     const p = gitPolicy(wt);
     assert.deepEqual([...p.writable].sort(), [gitdir, join(common, "logs"), join(common, "objects"), join(common, "refs", "heads")].sort());
@@ -103,7 +105,7 @@ describe("gitPolicy", { skip: inSandbox ? IN_SANDBOX : false }, () => {
     assert.ok(!p.writable.some((w) => w === common || w === join(common, "hooks")), "never the whole common dir");
   });
 
-  it("gives nothing when there is no git, or the pointer is unusable", () => {
+  it("gives nothing when there is no git, or the pointer is unusable", FIXTURE, () => {
     const root = mk();
     assert.deepEqual(gitPolicy(root), { writable: [], readOnly: [] });
     writeFileSync(join(root, ".git"), "not a pointer\n");
@@ -113,13 +115,13 @@ describe("gitPolicy", { skip: inSandbox ? IN_SANDBOX : false }, () => {
   });
 });
 
-describe("derivePolicy", { skip: inSandbox ? IN_SANDBOX : false }, () => {
-  it("adds the resolved node_modules target when the symlink leaves the root", () => {
+describe("derivePolicy", () => {
+  it("adds the resolved node_modules target when the symlink leaves the root", FIXTURE, () => {
     const { wt, repo } = repoWithWorktree();
     assert.ok(derivePolicy(cfgFor(wt)).writable.includes(join(repo, "node_modules")));
   });
 
-  it("includes the shared directory, static roots and approved paths only when they exist", () => {
+  it("includes the shared directory, static roots and approved paths only when they exist", FIXTURE, () => {
     const root = mk();
     const shared = mk();
     const cache = mk();
@@ -127,9 +129,18 @@ describe("derivePolicy", { skip: inSandbox ? IN_SANDBOX : false }, () => {
     const p = derivePolicy(cfgFor(root, { shared, staticRw: [cache, "/no/such/cache"] }), [approved, "/no/such/approved"]);
     assert.deepEqual(p.writable, [root, shared, cache, approved]);
   });
+
+  it("drops an approved root that is /tmp, under it, or contains it: binding one would put the real /tmp back (ticket 206)", FIXTURE, () => {
+    const root = mk();
+    const under = realpathSync(mkdtempSync(join("/tmp", "toriel-sandbox-under-tmp-")));
+    made.push(under);
+    const p = derivePolicy(cfgFor(root, { staticRw: ["/tmp"] }), [under, "/tmp", "/", root]);
+    assert.deepEqual(p.writable, [root], "only the scope root is left");
+    assert.deepEqual(derivePolicy(cfgFor(root), ["/tmpfoo-not-there"]).writable, [root], "a lookalike name is judged by its own path, and does not exist anyway");
+  });
 });
 
-describe("bwrapArgs and makeWrap", { skip: inSandbox ? IN_SANDBOX : false }, () => {
+describe("bwrapArgs and makeWrap", () => {
   it("binds the persistent tmp over /tmp when there is one", () => {
     const args = bwrapArgs({ writable: [], readOnly: [], masked: [], hidden: [], tmp: "/d/tmp" }, "/w");
     assert.deepEqual(args.slice(0, 11), ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--bind", "/d/tmp", "/tmp", "--die-with-parent"]);
@@ -140,7 +151,7 @@ describe("bwrapArgs and makeWrap", { skip: inSandbox ? IN_SANDBOX : false }, () 
     assert.deepEqual(args, ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "--die-with-parent", "--tmpfs", "/run/user", "--bind", "/w", "/w", "--bind", "/x", "/x", "--ro-bind-try", "/w/.git", "/w/.git", "--ro-bind", "/dev/null", "/s/toriel.sock", "--chdir", "/w"]);
   });
 
-  it("masks the socket directories that exist and hides the daemon's socket unless it is already masked", () => {
+  it("masks the socket directories that exist and hides the daemon's socket unless it is already masked", FIXTURE, () => {
     const root = mk();
     const sockDir = mk();
     const sock = join(sockDir, "toriel.sock");
@@ -158,7 +169,7 @@ describe("bwrapArgs and makeWrap", { skip: inSandbox ? IN_SANDBOX : false }, () 
     assert.throws(() => wrap?.("echo hi", "/"), /sandbox: because; the command was not run/);
   });
 
-  it("wraps the command as bwrap ... bash -c <command>, recomputing the policy each time", () => {
+  it("wraps the command as bwrap ... bash -c <command>, recomputing the policy each time", FIXTURE, () => {
     const root = mk();
     const extra: string[] = [];
     const wrap = makeWrap(cfgFor(root), () => extra);
@@ -173,7 +184,7 @@ describe("bwrapArgs and makeWrap", { skip: inSandbox ? IN_SANDBOX : false }, () 
   });
 });
 
-describe("sandboxNote", { skip: inSandbox ? IN_SANDBOX : false }, () => {
+describe("sandboxNote", () => {
   it("is empty unless the sandbox is on, and names the root and the shared directory", () => {
     assert.equal(sandboxNote({ kind: "off" }), "");
     assert.equal(sandboxNote({ kind: "invalid", why: "x" }), "");
