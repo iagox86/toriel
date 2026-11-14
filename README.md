@@ -21,7 +21,8 @@ Requirements:
 - pi installed globally under that node (`npm install -g @earendil-works/pi-coding-agent`)
   and logged in to at least one provider
 - A truecolor terminal; one with the kitty keyboard protocol (kitty, ghostty, wezterm, ...) gives the best key handling.
-  Under tmux, Shift+Enter inserts a newline only with `set -g extended-keys on` in `~/.tmux.conf` (Alt+Enter always does); `toriel doctor` checks it
+  Under tmux, Shift+Enter inserts a newline only with `set -g extended-keys on` in `~/.tmux.conf` (Alt+Enter always does), and in kitty only with
+  `map shift+enter send_text all \x1b[13;2u` in `kitty.conf` (kitty sends a plain Enter for it otherwise); `toriel doctor` checks both
 - Optional, for clipboard and image paste: `wl-clipboard` (Wayland) or `xclip` (X11).
   toriel checks at startup and says so in the switcher if they are missing.
 

@@ -10,7 +10,8 @@
 // carries an id the catalog does not list.
 import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, readFileSync, renameSync, statSync } from "node:fs";
-import { delimiter, dirname, join } from "node:path";
+import { homedir } from "node:os";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { mcpWarnings, mergeMcpServers, loadAgents } from "./agents.ts";
 import { piAgentDir } from "./pi-dir.ts";
 import { startupProblems } from "./preflight.ts";
@@ -62,6 +63,7 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: "sleep-lock", level: "feature", title: "the machine is kept awake for scheduled runs (systemd-inhibit)" },
   { id: "clipboard", level: "feature", title: "clipboard tools for paste and copy (wl-clipboard on Wayland, xclip on X11)" },
   { id: "tmux-keys", level: "feature", title: "tmux passes Shift+Enter through (extended-keys)" },
+  { id: "kitty-shift-enter", level: "feature", title: "kitty sends Shift+Enter distinctly under tmux (kitty.conf mapping)" },
   { id: "truecolor", level: "feature", title: "the terminal shows toriel's theme as intended (truecolor)" },
   { id: "grants-path-rule", level: "hardening", title: "an agent cannot edit the permission grants file unasked (a path rule)", needsPermissionPackage: true },
   { id: "permission-package-scope-patch", level: "hardening", title: "the installed pi-permission-system carries the toriel scope patch (a trusted project config cannot override a scope root)", needsPermissionPackage: true },
@@ -93,15 +95,48 @@ export interface DoctorOptions extends AuditOptions {
   tty?: boolean;
   /** Runs bwrap once and says why it cannot, or undefined when it works (default: really runs it; tests inject). */
   probeBwrap?: () => string | undefined;
-  /** tmux's `extended-keys` option ("off", "on", "always"), or undefined when it cannot be read (default: asks tmux; tests inject). */
-  probeTmuxExtendedKeys?: () => string | undefined;
+  /** What tmux says about keys (default: asks the server this process runs under; tests inject). */
+  probeTmux?: () => TmuxKeys;
+  /** The text of kitty's config, including what it includes (default: read from kitty's config directory; tests inject). */
+  kittyConfig?: string;
 }
 
-/** What tmux's `extended-keys` is set to, asked of the server this process runs under. */
-export function probeTmuxExtendedKeys(): string | undefined {
-  const r = spawnSync("tmux", ["show-options", "-gv", "extended-keys"], { encoding: "utf8", timeout: 2000 });
+/** What `probeTmux` learned; a field is undefined when tmux could not be asked. */
+export interface TmuxKeys {
+  /** The `extended-keys` option: "off", "on" or "always". */
+  extendedKeys?: string;
+  /** The TERM of the terminal tmux is attached to (not the pane's own TERM, which tmux sets). */
+  clientTerm?: string;
+}
+
+function tmuxValue(args: string[]): string | undefined {
+  const r = spawnSync("tmux", args, { encoding: "utf8", timeout: 2000 });
   return r.error === undefined && r.status === 0 ? r.stdout.trim() || undefined : undefined;
 }
+
+export function probeTmux(): TmuxKeys {
+  return { extendedKeys: tmuxValue(["show-options", "-gv", "extended-keys"]), clientTerm: tmuxValue(["display-message", "-p", "#{client_termname}"]) };
+}
+
+/** kitty.conf with its `include`d files (plain paths only, a few levels), or "" when there is none. */
+export function readKittyConfig(env: NodeJS.ProcessEnv, depth = 0, file?: string): string {
+  const dir = env.KITTY_CONFIG_DIRECTORY ?? join(env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "kitty");
+  const path = file ?? join(dir, "kitty.conf");
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return "";
+  }
+  if (depth >= 3) {
+    return text;
+  }
+  const included = [...text.matchAll(/^\s*include\s+(\S+)\s*$/gm)].map((m) => readKittyConfig(env, depth + 1, resolve(dirname(path), (m[1] as string).replace(/^~(?=\/)/, homedir()))));
+  return [text, ...included].join("\n");
+}
+
+/** Whether kitty is told what to send for Shift+Enter: kitty alone sends a plain Enter inside tmux. */
+export const KITTY_SHIFT_ENTER = /^[ \t]*map[ \t]+shift\+enter[ \t]+\S/im;
 
 /**
  * Run bubblewrap once. `which bwrap` is not enough: it also needs unprivileged user namespaces,
@@ -291,10 +326,15 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
       out.push({ id: "truecolor", level: "feature", message: "the terminal does not advertise truecolor (COLORTERM/TERM), so toriel's theme colors are approximated; a terminal with truecolor support shows them as intended", manual: "the terminal emulator's capability, not a config file" });
     }
   }
-  // tmux answers pi-tui's keyboard negotiation itself and, with extended-keys off, sends Shift+Enter as a plain Enter (ticket 142)
+  // Shift+Enter under tmux (ticket 142) needs two things: tmux encoding extended keys, and the terminal sending a distinct key for it
   if (opts.tty === true && env.TMUX) {
-    if ((opts.probeTmuxExtendedKeys ?? probeTmuxExtendedKeys)() === "off") {
+    const tmux = (opts.probeTmux ?? probeTmux)();
+    if (tmux.extendedKeys === "off") {
       out.push({ id: "tmux-keys", level: "feature", message: "tmux has extended-keys off, so Shift+Enter sends the message instead of adding a newline (Alt+Enter works either way); add `set -g extended-keys on` to ~/.tmux.conf and reload it (`tmux source-file ~/.tmux.conf`)", manual: "~/.tmux.conf is not toriel's file, and the setting changes how tmux encodes keys for every program in it" });
+    }
+    // kitty does not negotiate with tmux, so it sends a plain Enter for Shift+Enter unless its own config says otherwise
+    if (/kitty/i.test(tmux.clientTerm ?? "") && !KITTY_SHIFT_ENTER.test(opts.kittyConfig ?? readKittyConfig(env))) {
+      out.push({ id: "kitty-shift-enter", level: "feature", message: "kitty sends a plain Enter for Shift+Enter inside tmux, so Shift+Enter sends the message instead of adding a newline; add `map shift+enter send_text all \\x1b[13;2u` to kitty.conf and reload it (ctrl+shift+f5). With tmux's extended-keys on, tmux turns that into the key toriel reads as Shift+Enter. Outside tmux a plain shell prompt may print the sequence", manual: "kitty.conf is not toriel's file, and the mapping applies to every program in kitty" });
     }
   }
   return out;
