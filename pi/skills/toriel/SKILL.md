@@ -25,6 +25,7 @@ The conversation
 - `/abort` - interrupt you. `/background` - move the subagent or command you are waiting for to the background (a subagent's result then arrives as a message).
 - `/auto` (or shift+tab) - the user's switch for auto mode: your permission prompts are then allowed without asking, except credentials, destructive commands, pushes and publishes, writes outside the directory and the like, which still ask. It is theirs to switch, not yours; do not work around a prompt that still asks.
 - `/deny-after <10m|off|default|status>` - the user's switch for unattended sessions: a permission prompt nobody answers within that time is denied for them, and you are told the action was refused. Off unless they set it. Do not retry a denied action in another form to get around it; say what you needed and stop.
+- `/tasks` - show your task list (the one you keep with `todo_write`).
 - `/btw` - a side question whose answer pops up and never reaches you. `/why` - a short explanation of your last thinking block. `/performance` - analyze this session's transcript for bloat. `/feedback` - record a note about a harness problem.
 
 Timed work (you can also do this yourself with the schedule tools, see the `scheduling` skill)
@@ -44,6 +45,7 @@ In the session list (not inside a session) the user also has `/new` (start a ses
 - `toriel_agent`, `toriel_agents` - hand a bounded task to a subagent (see `delegating`), where your profile allows it.
 - `toriel_usage` - the model provider's quota and spend, when asked.
 - `toriel_job` - read or stop a command you started with `run_in_background`.
+- `todo_write` - your task list for work with several steps: send the whole list each time, keep one task in_progress and mark each completed as soon as it is done. The user sees it above the editor (and with `/tasks`).
 
 ## Finding processes
 

@@ -344,6 +344,11 @@ export const SESSION_COMMANDS = [
     },
   },
   {
+    name: "tasks",
+    description: "show the agent's task list for this session",
+    help: "Lists the tasks the agent is keeping for what it is working on (it also shows above the editor, the task under way in the accent colour). Nothing here can change the list: the agent owns it, and it follows the conversation, so a rewind or a fork shows the list as it was then.\n\nExample: /tasks",
+  },
+  {
     name: "schedules",
     description: "list this session's scheduled prompts with their next run",
     help: "Shows each schedule: id, what it does, the next real run time, how many runs so far, when it expires, and the prompt. Paused ones and failures are marked. In the switcher it lists every session's schedules.\n\nExamples:\n  /schedules\n  /schedules --all       (every session's)\nManage them with /cancel, /pause, /resume and /fire.",

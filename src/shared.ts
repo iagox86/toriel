@@ -1,4 +1,5 @@
 // Wire protocol between the daemon and controllers: JSONL over a unix socket.
+import type { Todo } from "../pi/extensions/lib/tasks.ts";
 // Framing is LF-only (never readline: U+2028/U+2029 are legal inside JSON strings).
 //
 // Model: the daemon tracks SESSIONS; a session may have a live child process
@@ -119,6 +120,8 @@ export interface SessionMeta {
   nextFire?: number;
   /** The strip above the editor: a line per active schedule (see scheduleStripLines). */
   scheduleLines?: string[];
+  /** The agent's task list (ticket 228), drawn above the editor and listed by /tasks; undefined when it has none. */
+  tasks?: Todo[];
   /** Active permission grants in this session, the soonest expiry among the timed ones (epoch ms), and saved grants waiting for /permissions restore. */
   grants?: number;
   /** Auto mode is on (ticket 213), and when it ends by itself (epoch ms; undefined = it does not). */

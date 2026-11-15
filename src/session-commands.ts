@@ -25,6 +25,7 @@ import { askBtw, saveBtw } from "./btw.ts";
 import { runPerformance, savePerformance } from "./performance.ts";
 import { loadSettings, resolveChildConfig } from "./settings.ts";
 import { explainLastThinking } from "./why.ts";
+import { listing as taskListing } from "../pi/extensions/lib/tasks.ts";
 import { newView } from "./transcript.ts";
 import { continuePrompt } from "./continue-prompt.ts";
 import { styleHelp, styleListing } from "./help-format.ts";
@@ -141,6 +142,7 @@ export class SessionCommands {
       loop: (c) => addSchedule(this.h, "loop", "loop", c, this.viewedMeta()?.id),
       cron: (c) => addSchedule(this.h, "cron", "cron", c, this.viewedMeta()?.id),
       watch: (c) => addWatch(this.h, c, this.viewedMeta()?.id),
+      tasks: () => this.tasks(),
       schedules: (c) => showSchedules(this.h, c.opts.all === true ? undefined : this.viewedMeta()?.id),
       cancel: (c) => operateSchedule(this.h, "cancel", c, this.viewedMeta()?.id),
       pause: (c) => operateSchedule(this.h, "pause", c, this.viewedMeta()?.id),
@@ -646,6 +648,12 @@ export class SessionCommands {
   }
 
   /** Explain the last thinking block with the summary model; nothing is sent to the session. */
+  /** /tasks (ticket 228): the agent's task list as the daemon last had it. Reads the session list only, so it does not wake a sleeping session. */
+  private tasks(): void {
+    this.h.infoPanel.show(taskListing(this.viewedMeta()?.tasks ?? []).join("\n"));
+    this.h.tui.requestRender();
+  }
+
   private async why(model: string | undefined): Promise<void> {
     const key = this.h.viewing;
     if (!key?.startsWith("/")) {

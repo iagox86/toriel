@@ -26,6 +26,7 @@ import { floorReason, isPermissionPrompt, promptSubject } from "./auto-mode.ts";
 import { type ChildConfig, loadSettings, resolveChildConfig, settingsMtime } from "./settings.ts";
 import { fmtDuration, parseDurationText } from "./when.ts";
 import { errText } from "./util.ts";
+import { parseReport as parseTasksReport, STATUS_KEY as TASKS_KEY } from "../pi/extensions/lib/tasks.ts";
 
 export interface SlashCommand {
   name: string;
@@ -498,6 +499,21 @@ export class ChildManager {
     return true;
   }
 
+  /** Keep the agent's task list from a "toriel-tasks" status record (ticket 228); true if it was one. */
+  private takeTasksReport(s: DaemonSession, event: Record<string, unknown>): boolean {
+    if (event.method !== "setStatus" || event.statusKey !== TASKS_KEY) {
+      return false;
+    }
+    const todos = parseTasksReport(event.statusText);
+    if (todos === undefined) {
+      log(`session ${s.id}: ignored a malformed toriel-tasks record`);
+    } else {
+      s.tasks = todos.length > 0 ? todos : undefined;
+      this.hub.broadcastSessions();
+    }
+    return true;
+  }
+
   /** pi settles a dialog with a `timeout` by itself and says nothing, so the record is dropped then too. */
   private expireDialog(s: DaemonSession, dialog: Record<string, unknown>): void {
     const timeout = Number(dialog.timeout);
@@ -611,7 +627,7 @@ export class ChildManager {
     const type = event.type as string;
     this.onActivity?.(s);
     if (type === "extension_ui_request") {
-      if (this.takeUsageReport(event) || this.takeBridgeReport(s, event)) {
+      if (this.takeUsageReport(event) || this.takeBridgeReport(s, event) || this.takeTasksReport(s, event)) {
         return; // for the daemon, not for controllers
       }
       const tap = this.noticeTaps.get(s.id);
