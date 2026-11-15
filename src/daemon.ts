@@ -18,7 +18,7 @@ import "./migrate-on-start.ts";
 import * as fs from "node:fs";
 import { buildInfo } from "./build-id.ts";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { checkLitellmAtStart } from "./litellm-models.ts";
+import { checkGatewaysAtStart } from "./litellm-models.ts";
 import { piAgentDir } from "./pi-dir.ts";
 import { LITELLM_CACHE_FILE, LOG, PERMISSIONS_FILE, PID_FILE, PROFILE, SCHEDULES_FILE, SANDBOX_TMP_DIR, SHARED_DIR, SOCK, TRASH_DIR } from "./config.ts";
 import { BridgeTracker } from "./daemon-bridge.ts";
@@ -238,9 +238,9 @@ async function main(): Promise<void> {
   }
   // ticket 221: ask litellm once about its routes, after the socket is serving and off the event loop; the answer is cached, the controller's
   // notice line and /doctor read it from there (once per daemon start: models.json changes are caught by the next start or `toriel doctor`)
-  checkLitellmAtStart(piAgentDir(), LITELLM_CACHE_FILE)
+  checkGatewaysAtStart(piAgentDir(), LITELLM_CACHE_FILE)
     .then((cached) => {
-      for (const f of cached ? collectFindings(startupAudit).filter((x) => x.id === "litellm-models") : []) {
+      for (const f of cached ? collectFindings(startupAudit).filter((x) => x.id === "litellm-models" || x.id === "bifrost-models") : []) {
         log(`WARNING [${f.level}]: ${f.message}`);
       }
     })

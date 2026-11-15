@@ -145,22 +145,52 @@ describe("doctor checks", () => {
     assert.deepEqual(collectFindings(withCache).filter((f) => f.id === "litellm-models"), []);
     assert.equal(runDoctor(withCache).find((c) => c.id === "litellm-models")?.state, "skipped");
     // a cache for this proxy: the same finding the CLI would give, and the fix still rewrites the file
-    write({ checkedAt: Date.now(), baseUrl: "https://l.example/v1", routes });
+    write({ providers: { litellm: { checkedAt: Date.now(), baseUrl: "https://l.example/v1", routes } } });
     const found = collectFindings(withCache).filter((f) => f.id === "litellm-models");
     assert.equal(found.length, 1);
     assert.match(found[0]?.message ?? "", /local-model: contextWindow 122880 -> 262144/);
     assert.equal(runDoctor(withCache).find((c) => c.id === "litellm-models")?.state, "problem");
     // a cache that asked a different proxy says nothing about this one
-    write({ checkedAt: Date.now(), baseUrl: "https://other.example/v1", routes });
+    write({ providers: { litellm: { checkedAt: Date.now(), baseUrl: "https://other.example/v1", routes } } });
     assert.deepEqual(collectFindings(withCache).filter((f) => f.id === "litellm-models"), []);
     assert.equal(runDoctor(withCache).find((c) => c.id === "litellm-models")?.state, "skipped");
     // matching numbers: ok, with the time it was asked; an unreadable cache is no cache
-    write({ checkedAt: Date.now(), baseUrl: "https://l.example/v1", routes: { "local-model": { contextWindow: 122880, maxTokens: 65536 } } });
+    write({ providers: { litellm: { checkedAt: Date.now(), baseUrl: "https://l.example/v1", routes: { "local-model": { contextWindow: 122880, maxTokens: 65536 } } } } });
     const ok = runDoctor(withCache).find((c) => c.id === "litellm-models");
     assert.equal(ok?.state, "ok");
     assert.match(ok?.note ?? "", /when the daemon started/);
     fs.writeFileSync(cacheFile, "not json");
     assert.deepEqual(collectFindings(withCache).filter((f) => f.id === "litellm-models"), []);
+  });
+
+  it("checks a bifrost gateway the same way, per provider, and the fix edits only that provider (ticket 221)", () => {
+    const s = setup({});
+    const modelsFile = path.join(s.agentDir, "models.json");
+    const original = { providers: { litellm: { baseUrl: "https://l.example/v1", models: [{ id: "keep", contextWindow: 1 }] }, "work-bifrost": { baseUrl: "https://b.example/openai", apiKey: "BF_SECRET_ENV", models: [{ id: "anthropic/claude-x", name: "Claude", contextWindow: 100000, maxTokens: 8192 }] }, openai: { baseUrl: "https://o/v1", models: [{ id: "gpt", contextWindow: 5 }] } } };
+    fs.writeFileSync(modelsFile, JSON.stringify(original));
+    let asked: unknown[] = [];
+    const probe = (t: { kind?: string }) => {
+      asked.push(t.kind);
+      return t.kind === "bifrost" ? { routes: { "anthropic/claude-x": { contextWindow: 200000, maxTokens: 8192 } } } : "HTTP 401";
+    };
+    const found = collectFindings({ ...s.opts, probeLitellm: probe as never }).filter((f) => f.id === "bifrost-models");
+    assert.deepEqual(asked, ["litellm", "bifrost"], "each gateway is asked, an ordinary provider is not");
+    assert.equal(found.length, 1);
+    assert.match(found[0]?.message ?? "", /"work-bifrost"/);
+    assert.match(found[0]?.message ?? "", /anthropic\/claude-x: contextWindow 100000 -> 200000/);
+    assert.doesNotMatch(JSON.stringify(found), /BF_SECRET_ENV/, "the credential is never shown");
+    const fixed = found[0]?.fix?.edit(structuredClone(original) as Record<string, unknown>) as typeof original;
+    assert.equal(fixed.providers["work-bifrost"].models[0]?.contextWindow, 200000);
+    assert.deepEqual(fixed.providers.litellm, original.providers.litellm, "the other providers are untouched");
+    assert.deepEqual(fixed.providers.openai, original.providers.openai);
+    // the in-app report reads the daemon's cache for it, with its own catalog line
+    const { probeLitellm: _drop, ...noProbe } = s.opts;
+    const cacheFile = path.join(s.agentDir, "litellm-routes.json");
+    fs.writeFileSync(cacheFile, JSON.stringify({ providers: { "work-bifrost": { checkedAt: Date.now(), baseUrl: "https://b.example/openai", routes: { "anthropic/claude-x": { contextWindow: 200000 } } } } }));
+    const check = runDoctor({ ...noProbe, litellmCacheFile: cacheFile }).find((c) => c.id === "bifrost-models");
+    assert.equal(check?.state, "problem");
+    assert.equal(runDoctor({ ...noProbe, litellmCacheFile: cacheFile }).find((c) => c.id === "litellm-models")?.state, "skipped", "litellm has no cache entry");
+    asked = [];
   });
 
   it("only ever reports findings the catalog knows, and the catalog has no dead entries", () => {
@@ -182,6 +212,11 @@ describe("doctor checks", () => {
       setup({ scopePatch: "absent" }).opts,
       lanesScenario(),
       litellmScenario().opts,
+      (() => {
+        const s = setup({});
+        fs.writeFileSync(path.join(s.agentDir, "models.json"), JSON.stringify({ providers: { bifrost: { baseUrl: "https://b.example/v1", models: [{ id: "a/b", contextWindow: 1 }] } } }));
+        return { ...s.opts, probeLitellm: () => ({ routes: { "a/b": { contextWindow: 2 } } }) as never };
+      })(),
       setup({ mcpExtra: { broken: { exposure: "direct" } } }).opts,
       setup({ piMcpJson: { mcpServers: { freecad: { url: "http://127.0.0.1:39280/mcp" } } } }).opts,
       setup({ scopePatch: "absent", config: { authorizerChain: ["toriel-grants"], permission: { "*": "allow", external_directory_write: { "/tmp/*": "allow" }, path: { "*": "ask", [GRANTS_RULE]: "ask" } } }, settings: JSON.stringify({ scopeGuardAcceptedAllows: [{ surface: "external_directory_write", pattern: "/tmp/*" }, { surface: "*", pattern: "*" }] }) }).opts,
@@ -469,7 +504,7 @@ describe("doctor report", () => {
     assert.match(text, /Required: all 5 ok/);
     assert.match(text, /Recommended: all 5 ok/);
     assert.doesNotMatch(text, / ok {7}/);
-    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(14 ok\)/);
+    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(15 ok\)/);
   });
 });
 
@@ -498,7 +533,7 @@ describe("doctor report colours", () => {
   it("colours the compact report too, with the passing checks' count dim", () => {
     const coloured = renderDoctor(checks(), { compact: true, style: ANSI_STYLE });
     assert.match(coloured, /Required\x1b\[22m: \x1b\[32mall 5 ok\x1b\[39m/);
-    assert.match(coloured, /\x1b\[2m {2}\(14 ok\)\x1b\[22m/);
+    assert.match(coloured, /\x1b\[2m {2}\(15 ok\)\x1b\[22m/);
   });
 });
 
