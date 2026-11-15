@@ -78,6 +78,7 @@ export const SETTINGS_TEMPLATE: readonly Group[] = [
       { key: "warnNoPermissionSystem", value: true, comment: ["Warn when pi-permission-system is not installed or has no usable config."] },
       { key: "permissionGrantLimit", value: 100, comment: ["Most permission grants one session may hold. Read when the daemon starts."] },
       { key: "permissionGrantDurations", value: ["1h", "session"], comment: ['The "allow for ..." rows a permission prompt offers: up to 5 durations such as 30m, 1h, 8h,', 'or "session" for until revoked. [] = none.'] },
+      { key: "permissionDenyAfter", example: "10m", comment: ["Deny a permission prompt nobody has answered after this long (10s to 24h), so an unattended session fails the", "action instead of waiting for ever. Unset = wait for ever (the default). /deny-after sets it for one session."] },
       { key: "scopeGuardAcceptedAllows", example: '[{ surface: external_directory_write, pattern: "/tmp/*" }]', comment: ["Config allows the scope-guard doctor check treats as deliberate and does not flag.", 'surface is external_directory_write, external_directory or "*"; pattern is matched exactly.'] },
     ],
   },

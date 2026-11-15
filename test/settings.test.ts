@@ -76,6 +76,10 @@ describe("loadSettings", () => {
     }
     assert.match(loadSettings(tmp('{"permissionGrantLimit":0}')).problems[0] as string, /at least 1/);
     assert.match(loadSettings(tmp('{"permissionGrantDurations":["soon"]}')).problems[0] as string, /list of at most 5 durations/);
+    assert.equal(loadSettings(tmp('{"permissionDenyAfter":"10m"}')).settings.permissionDenyAfter, "10m");
+    for (const bad of ['"soon"', '"2 seconds"', '"3 days"', "5"]) {
+      assert.match(loadSettings(tmp(`{"permissionDenyAfter":${bad}}`)).problems[0] as string, /between 10 seconds and 24 hours/, bad);
+    }
     assert.match(loadSettings(tmp('{"permissionGrantDurations":"1h"}')).problems[0] as string, /list of at most 5 durations/);
     assert.match(loadSettings(tmp('{"permissionGrantDurations":["1h","2h","3h","4h","5h","6h"]}')).problems[0] as string, /at most 5/);
   });

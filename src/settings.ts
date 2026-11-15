@@ -46,6 +46,8 @@ export interface TorielSettings {
   permissionGrantLimit?: number;
   /** Lifetimes the permission dialog offers as "allow for ..." rows: durations, or "session" for until revoked (default ["1h", "session"]; [] = none). */
   permissionGrantDurations?: string[];
+  /** Deny a permission prompt nobody answers within this long (a duration such as "10m"; unset = wait forever, the default). A session's /deny-after overrides it. */
+  permissionDenyAfter?: string;
   /** Config allows the scope-guard doctor check treats as deliberate and does not flag: {surface, pattern} entries (surface "external_directory_write", "external_directory" or "*"; pattern a config glob). */
   scopeGuardAcceptedAllows?: Array<{ surface: string; pattern: string }>;
   /** Warn when pi-permission-system is not installed or has no usable config (default true). */
@@ -111,9 +113,13 @@ const NUMBER_KEYS = ["summaryIntervalMinutes", "summaryMinNewMessages", "schedul
 const BOOLEAN_KEYS = ["warnNoPermissionSystem", "preventSleep", "showExternalSessions", "autoName"] as const;
 /** Number settings where 0 is a meaningful "off". */
 const ZERO_OK: readonly string[] = ["summaryIntervalMinutes", "scheduleUsagePause", "trashRetentionDays", "subagentKeepMinutes", "subagentIdleMinutes", "subagentMaxMinutes"];
+/** The shortest and longest a prompt may wait before it is denied for nobody answering it (ticket 88). */
+export const minDenyMs = (): number => Number(process.env.TORIEL_DENY_MIN_MS) || 10_000; // the env var is for tests
+export const MAX_DENY_MS = 24 * 3_600_000;
+
 const STRING_KEYS = ["provider", "model", "thinking", "piCli", "summaryModel"] as const;
 /** Every key the file may hold; the commented template (settings-file.ts) must cover all of them. */
-export const SETTING_KEYS: readonly string[] = ["steeringMode", "permissionGrantDurations", "sandbox", "sandboxWritable", "scopeGuardAcceptedAllows", "agentLanes", ...BOOLEAN_KEYS, ...STRING_KEYS, ...NUMBER_KEYS];
+export const SETTING_KEYS: readonly string[] = ["steeringMode", "permissionGrantDurations", "permissionDenyAfter", "sandbox", "sandboxWritable", "scopeGuardAcceptedAllows", "agentLanes", ...BOOLEAN_KEYS, ...STRING_KEYS, ...NUMBER_KEYS];
 /** The surfaces a scopeGuardAcceptedAllows entry may name ("*" is the config fallback). */
 const SCOPE_GUARD_SURFACES = ["external_directory_write", "external_directory", "*"] as const;
 
@@ -202,6 +208,13 @@ function parseSettingsFile(file: string): LoadedSettings {
         settings.permissionGrantDurations = value as string[];
       } else {
         problems.push(`permissionGrantDurations must be a list of at most 5 durations such as ["1h", "8h", "session"]`);
+      }
+    } else if (key === "permissionDenyAfter") {
+      const d = typeof value === "string" ? parseDurationText(value) : undefined;
+      if (d?.ok && d.ms >= minDenyMs() && d.ms <= MAX_DENY_MS) {
+        settings.permissionDenyAfter = value as string;
+      } else {
+        problems.push(`permissionDenyAfter must be a duration between 10 seconds and 24 hours, such as "10m"`);
       }
     } else if (key === "sandbox") {
       if (value === "off" || value === "bwrap") {

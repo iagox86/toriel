@@ -279,6 +279,49 @@ describe("daemon: permission grants", () => {
     });
   });
 
+  describe("deny-after (ticket 88)", () => {
+    const denied = (c: Client) => c.waitFor((m) => m.type === "notice" && /^denied automatically/.test(m.text));
+    const sawDenied = (c: Client) => c.messages.some((m) => m.type === "notice" && /^denied automatically/.test(m.text));
+
+    it("is off by default: a prompt nobody answers just waits", async () => {
+      const h = await start({ FAKE_PI_ASK_COMMAND: "npm test", TORIEL_DENY_MIN_MS: "500" });
+      const { c, session } = await savedSession(h);
+      await c.request({ type: "prompt", session, message: "/ask-select" });
+      await c.waitFor((m) => m.type === "ui_request" && m.request?.id === "ask-select-1");
+      await new Promise((r) => setTimeout(r, 1500));
+      assert.equal(sawDenied(c), false);
+      assert.equal((await c.request({ type: "deny_after", session, after: "status" })).ms, undefined);
+    });
+
+    it("denies a prompt nobody answered in time, says so durably, and clears the open dialog", async () => {
+      const h = await start({ FAKE_PI_ASK_COMMAND: "npm test", TORIEL_DENY_MIN_MS: "500" });
+      const { c, session } = await savedSession(h);
+      const set = await c.request({ type: "deny_after", session, after: "1 second" });
+      assert.equal(set.ms, 1000);
+      await c.request({ type: "prompt", session, message: "/ask-select" });
+      await c.waitFor((m) => m.type === "ui_request" && m.request?.id === "ask-select-1");
+      const notice = await denied(c);
+      assert.match(notice.text, /^denied automatically: nobody answered in 1s: npm test/);
+      assert.equal(notice.durable, true);
+      const meta = await c.waitFor((m) => m.type === "sessions" && m.sessions.some((x: { id: number; pendingDialog: boolean }) => x.id === session && !x.pendingDialog));
+      assert.ok(meta, "the badge is gone");
+    });
+
+    it("an answer in time cancels it, and off or a bad duration is handled", async () => {
+      const h = await start({ FAKE_PI_ASK_COMMAND: "npm test", TORIEL_DENY_MIN_MS: "500" });
+      const { c, session } = await savedSession(h);
+      await c.request({ type: "deny_after", session, after: "1 second" });
+      await c.request({ type: "prompt", session, message: "/ask-select" });
+      await c.waitFor((m) => m.type === "ui_request" && m.request?.id === "ask-select-1");
+      await c.request({ type: "ui_response", session, response: { id: "ask-select-1", value: "Yes" } });
+      await new Promise((r) => setTimeout(r, 1600));
+      assert.equal(sawDenied(c), false, "the user answered first");
+      assert.equal((await c.request({ type: "deny_after", session, after: "off" })).ms, undefined);
+      await assert.rejects(c.request({ type: "deny_after", session, after: "soonish" }), /cannot read/);
+      await assert.rejects(c.request({ type: "deny_after", session, after: "2 days" }), /between/);
+    });
+  });
+
   describe("auto mode (ticket 213)", () => {
     const wantsAnswer = (c: Client) => c.waitFor((m) => m.type === "notice" && /allowed by auto mode/.test(m.text));
     const asked = (c: Client) => c.messages.some((m) => m.type === "ui_request" && m.request?.id === "ask-select-1");

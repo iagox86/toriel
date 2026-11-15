@@ -380,6 +380,15 @@ export const SESSION_COMMANDS = [
       cmd.argument("[on|off|status|duration...]", "on, off or status, optionally followed by how long it lasts (2h)");
     },
   },
+  {
+    name: "deny-after",
+    description: "deny a permission prompt nobody answers within a time (off by default)",
+    help: "Makes this session deny a permission prompt that has waited that long with no answer, instead of waiting for ever. The agent is told the action was refused, and a note under the tool call says it was automatic and how long it waited. Meant for sessions nobody is watching (a long run you walk away from, scheduled prompts); it is off unless you set it, so a prompt you are slow to answer is never lost by default.\n\nThe permissionDenyAfter setting turns it on for every session; this command overrides it for one (the answer is kept until the daemon restarts). Between 10 seconds and 24 hours.\n\nExamples:\n  /deny-after 10m   deny prompts that wait 10 minutes\n  /deny-after off   wait for ever, whatever the setting says\n  /deny-after default   follow the setting again\n  /deny-after status",
+    complete: async (typed) => matching(["off", "default", "status"], typed),
+    build: (cmd) => {
+      cmd.argument("<10m|off|default|status>", "how long a prompt may wait (10m), off, default or status");
+    },
+  },
   { name: "detach", description: "cut this subagent loose from the agent that started it (no more banner or nesting)",
     help: "Removes the parent link of this session when an agent started it, so it stops being nested and the banner goes. Does nothing for copies made with /fork or /adopt, which are never nested." },
   { name: "parent", description: "jump to the agent that started this subagent",

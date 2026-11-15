@@ -19,6 +19,7 @@ import { clearFile, latestClearBackup, restoreClear, rewindFile } from "./rewind
 import { setSessionFileCwd } from "./session-header.ts";
 import { encodeLine } from "./shared.ts";
 import { fmtClock, fmtDuration, parseDurationText } from "./when.ts";
+import { MAX_DENY_MS, minDenyMs } from "./settings.ts";
 
 /** The longest one stretch of timed auto mode (a forgotten one should not outlive the day). */
 const MAX_AUTO_MS = 24 * 3_600_000;
@@ -140,6 +141,43 @@ export function handleAutoMode(ctx: DaemonContext, cmd: Cmd<"auto_mode">, res: R
   });
   ctx.hub.broadcastSessions();
   res(true, undefined, { on, until });
+}
+
+/**
+ * Set how long this session's permission prompts wait before the daemon denies them (ticket 88): a duration, `off` (wait for ever,
+ * whatever the setting says), `default` (follow the permissionDenyAfter setting) or `status`. Replies with the effective wait in ms.
+ */
+export function handleDenyAfter(ctx: DaemonContext, cmd: Cmd<"deny_after">, res: Responder): void {
+  const s = ctx.registry.get(cmd.session);
+  if (!s) {
+    throw new Error(`no session #${cmd.session}`);
+  }
+  const word = cmd.after.trim().toLowerCase();
+  if (word === "off") {
+    s.denyAfter = null;
+  } else if (word === "default") {
+    s.denyAfter = undefined;
+  } else if (word !== "status") {
+    const d = parseDurationText(cmd.after);
+    if (!d.ok) {
+      throw new Error(d.error);
+    }
+    if (d.ms < minDenyMs() || d.ms > MAX_DENY_MS) {
+      throw new Error(`a prompt can wait between ${fmtDuration(minDenyMs())} and ${fmtDuration(MAX_DENY_MS)} before it is denied`);
+    }
+    s.denyAfter = d.ms;
+  }
+  const ms = ctx.children.denyAfterMs(s);
+  if (word !== "status") {
+    log(`deny-after ${ms === undefined ? "off" : fmtDuration(ms)} for session ${s.id}`);
+    ctx.hub.broadcast({
+      type: "notice",
+      session: s.id,
+      text: ms === undefined ? "deny-after OFF: permission prompts wait until you answer" : `deny-after ${fmtDuration(ms)}: a permission prompt nobody answers in that time is denied (the agent is told it was refused); /deny-after off ends it`,
+      durable: true,
+    });
+  }
+  res(true, undefined, { ms });
 }
 
 /** A timed auto mode ran out. */
@@ -429,6 +467,8 @@ export function handleUiResponse(
   }
   s.pendingDialog = false;
   s.lastDialog = undefined;
+  clearTimeout(s.denyTimer);
+  s.denyTimer = undefined;
   ctx.hub.broadcastSessions();
   // Write raw: RpcClient.send() overwrites the record's id with its own
   // correlation id, which would break the dialog reply matching, and it

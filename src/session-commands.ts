@@ -33,7 +33,7 @@ import { renameNotice } from "./session-id.ts";
 import { runPermissions } from "./permission-commands.ts";
 import { addSchedule, addWatch, operateSchedule, showSchedules } from "./schedule-commands.ts";
 import { errText } from "./util.ts";
-import { fmtClock } from "./when.ts";
+import { fmtClock, fmtDuration } from "./when.ts";
 import { log } from "./log.ts";
 
 const COMPACT_TIMEOUT_MS = 10 * 60_000;
@@ -113,6 +113,7 @@ export class SessionCommands {
       },
       abort: () => this.abort(),
       auto: (c) => this.auto(c.args.join(" ")),
+      "deny-after": (c) => this.denyAfter(c.args.join(" ")),
       background: () => this.background(),
       parent: () => this.parent(),
       detach: () => this.detach(),
@@ -338,6 +339,24 @@ export class SessionCommands {
     } catch (err) {
       const stale = err instanceof Error && /timed out/.test(err.message);
       this.h.notify(stale ? "auto mode: no answer from the daemon (is it older than this toriel? restart it: toriel kill-server)" : `auto mode failed: ${errText(err)}`);
+    }
+  }
+
+  /** `/deny-after <duration|off|default|status>` (ticket 88). */
+  private async denyAfter(text: string): Promise<void> {
+    const meta = this.viewedMeta();
+    if (meta?.id === undefined) {
+      this.h.notify("deny-after: open a session first");
+      return;
+    }
+    try {
+      const reply = (await this.h.request({ type: "deny_after", session: meta.id, after: text.trim() || "status" }, 5000)) as { ms?: number } | undefined;
+      if (text.trim() === "" || text.trim().toLowerCase() === "status") {
+        this.h.notify(reply?.ms === undefined ? "deny-after is off: permission prompts wait until you answer" : `deny-after is ${fmtDuration(reply.ms)}: an unanswered permission prompt is denied after that`);
+      }
+    } catch (err) {
+      const stale = err instanceof Error && /timed out/.test(err.message);
+      this.h.notify(stale ? "deny-after: no answer from the daemon (is it older than this toriel? restart it: toriel kill-server)" : `deny-after failed: ${errText(err)}`);
     }
   }
 

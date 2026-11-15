@@ -62,6 +62,10 @@ export interface DaemonSession {
   autoUntil?: number | null;
   /** Ends a timed auto mode. */
   autoTimer?: NodeJS.Timeout;
+  /** This session's own deny-after (ticket 88), in ms: undefined follows the permissionDenyAfter setting, null is off. */
+  denyAfter?: number | null;
+  /** Fires when the open permission prompt has waited too long. */
+  denyTimer?: NodeJS.Timeout;
 }
 
 /** Whether auto mode is on for `s` now. */
