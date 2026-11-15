@@ -435,10 +435,10 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
     });
   }
   // the per-command sandbox (board 190) refuses to run a command rather than run it unsandboxed, so a setting that asks for bwrap without a working bwrap would stop every scoped session's bash
-  if (loaded.settings.sandbox === "bwrap") {
+  if (loaded.settings.sandbox !== "off") {
     const why = (opts.probeBwrap ?? probeBwrap)();
     if (why !== undefined) {
-      out.push({ id: "sandbox-bwrap", level: "feature", message: `the toriel setting "sandbox" is "bwrap" but ${why}; scoped sessions would refuse every bash command (install bubblewrap and enable user namespaces, or set "sandbox": "off")`, manual: 'installing bubblewrap is a system package install, and switching the sandbox off would drop protection you asked for' });
+      out.push({ id: "sandbox-bwrap", level: "feature", message: `the command sandbox is on (the toriel setting "sandbox" is "bwrap", which is the default) but ${why}; scoped sessions would refuse every bash command (install bubblewrap and enable user namespaces, or set "sandbox": "off")`, manual: 'installing bubblewrap is a system package install, and switching the sandbox off would drop protection you asked for' });
     }
   }
   const dirs = opts.pathDirs ?? (env.PATH ?? "").split(delimiter).filter(Boolean);

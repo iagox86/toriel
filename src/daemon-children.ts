@@ -126,9 +126,9 @@ export class ChildManager {
     if (scope !== undefined) {
       log(`scope for ${s.sessionId ?? s.id}: ${scope.root} (mode ${scope.mode})`);
     }
-    // the per-command bash sandbox (board 190): only for a scoped session, only when the setting asks; read now, so a change applies to sessions started after it
+    // the per-command bash sandbox (board 190): only for a scoped session, on unless the setting says "off"; read now, so a change applies to sessions started after it
     const settings = loadSettings().settings;
-    const sandbox = scope !== undefined && settings.sandbox === "bwrap" ? sandboxWritableRoots(settings, process.env.HOME ?? "") : undefined;
+    const sandbox = scope !== undefined && settings.sandbox !== "off" ? sandboxWritableRoots(settings, process.env.HOME ?? "") : undefined;
     if (sandbox !== undefined) {
       log(`sandbox for ${s.sessionId ?? s.id}: bwrap, writable ${[scope?.root, SHARED_DIR, ...sandbox].join(", ")}`);
     }

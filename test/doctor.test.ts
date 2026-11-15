@@ -438,15 +438,16 @@ describe("doctor checks", () => {
     assert.deepEqual(grade("mcp-git-direct", { gdbMcp: "codemode", ghidraMcp: "none" }), [], "one server's problem is not another's");
   });
 
-  it("checks that bwrap works only when the sandbox setting asks for it", () => {
+  it("checks that bwrap works unless the sandbox setting is off (the default is on since 2026-11-15)", () => {
     const broken = () => "bwrap is not installed (the bubblewrap package)";
-    const on = collectFindings({ ...setup({ settings: '{"sandbox":"bwrap"}' }).opts, probeBwrap: broken });
-    assert.deepEqual(on.map((x) => [x.id, x.level]), [["sandbox-bwrap", "feature"]]);
-    assert.match(on[0]?.message ?? "", /"sandbox" is "bwrap" but bwrap is not installed.*refuse every bash command.*"sandbox": "off"/);
-    assert.equal(on[0]?.fix, undefined, "installing a package is not an automatic edit");
-    assert.deepEqual(collectFindings({ ...setup({ settings: '{"sandbox":"bwrap"}' }).opts, probeBwrap: () => undefined }), [], "a working bwrap is fine");
-    assert.deepEqual(collectFindings({ ...setup({}).opts, probeBwrap: broken }), [], "the default is off: nothing to check");
-    assert.deepEqual(collectFindings({ ...setup({ settings: '{"sandbox":"off"}' }).opts, probeBwrap: broken }), []);
+    for (const settings of ['{"sandbox":"bwrap"}', undefined]) {
+      const on = collectFindings({ ...setup(settings === undefined ? {} : { settings }).opts, probeBwrap: broken });
+      assert.deepEqual(on.map((x) => [x.id, x.level]), [["sandbox-bwrap", "feature"]], `settings ${settings ?? "(default)"}`);
+      assert.match(on[0]?.message ?? "", /the command sandbox is on.*but bwrap is not installed.*refuse every bash command.*"sandbox": "off"/);
+      assert.equal(on[0]?.fix, undefined, "installing a package is not an automatic edit");
+    }
+    assert.deepEqual(collectFindings({ ...setup({}).opts, probeBwrap: () => undefined }), [], "a working bwrap is fine");
+    assert.deepEqual(collectFindings({ ...setup({ settings: '{"sandbox":"off"}' }).opts, probeBwrap: broken }), [], "switched off: nothing to check");
   });
 
   it("flags a model tier whose provider pi does not know, and stays quiet without lanes or with known providers", () => {

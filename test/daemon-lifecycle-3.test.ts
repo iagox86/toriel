@@ -158,7 +158,7 @@ describe("daemon: lifecycle (3/3)", () => {
     assert.equal(none.TORIEL_SCOPE_MODE, null);
   });
 
-  it("turns the per-command sandbox on only for scoped children and only when the setting asks, and always makes the shared directory (board 190)", async () => {
+  it("turns the per-command sandbox on only for scoped children, with the setting's writable roots, and always makes the shared directory (board 190)", async () => {
     const settings = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "toriel-sandbox-settings-")), "settings.json");
     fs.writeFileSync(settings, '{"sandbox":"bwrap","sandboxWritable":["/cache/a","~/b"]}');
     harness = await startDaemon({ TORIEL_AGENTS_DIR: path.join(os.tmpdir(), "toriel-no-user-agents"), TORIEL_SETTINGS: settings });
@@ -184,15 +184,25 @@ describe("daemon: lifecycle (3/3)", () => {
     assert.equal(scoped.TORIEL_SCOPE_ROOT, fs.realpathSync(dir), "the sandbox rides on the scope root");
   });
 
-  it("leaves the sandbox off by default", async () => {
-    harness = await startDaemon({ TORIEL_AGENTS_DIR: path.join(os.tmpdir(), "toriel-no-user-agents") });
-    const c = await harness.connect();
-    const { sessionId } = await c.request({ type: "spawn", cwd: harness.dir, agent: "explore" });
-    await c.waitFor((m) => m.type === "history" && m.session === sessionId);
-    const f = c.sessions().find((x) => x.id === sessionId)?.sessionFile as string;
-    const env = JSON.parse(fs.readFileSync(`${f}.env.json`, "utf8"));
-    assert.equal(env.TORIEL_SANDBOX, null);
-    assert.equal(env.TORIEL_SCOPE_MODE, "ask", "scoped as before");
+  it("sandboxes a scoped child by default, and the setting \"off\" turns that off", async () => {
+    for (const setting of [undefined, "off"]) {
+      const env: Record<string, string> = { TORIEL_AGENTS_DIR: path.join(os.tmpdir(), "toriel-no-user-agents") };
+      if (setting !== undefined) {
+        const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "toriel-sandbox-off-")), "settings.json");
+        fs.writeFileSync(file, JSON.stringify({ sandbox: setting }));
+        env.TORIEL_SETTINGS = file;
+      }
+      harness = await startDaemon(env);
+      const c = await harness.connect();
+      const { sessionId } = await c.request({ type: "spawn", cwd: harness.dir, agent: "explore" });
+      await c.waitFor((m) => m.type === "history" && m.session === sessionId);
+      const f = c.sessions().find((x) => x.id === sessionId)?.sessionFile as string;
+      const childEnv = JSON.parse(fs.readFileSync(`${f}.env.json`, "utf8"));
+      assert.equal(childEnv.TORIEL_SANDBOX, setting === undefined ? "bwrap" : null, `sandbox setting ${setting ?? "(default)"}`);
+      assert.equal(childEnv.TORIEL_SCOPE_MODE, "ask", "scoped as before");
+      await harness.stop();
+      harness = undefined;
+    }
   });
 
   it("adds toriel's tools to the loadout on every start and resume, unless a profile owns the tool list", async () => {
