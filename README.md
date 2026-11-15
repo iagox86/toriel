@@ -145,7 +145,8 @@ session) in a [bubblewrap](https://github.com/containers/bubblewrap) sandbox: th
 read-only except the session's working directory, a few cache directories and the shared
 directory `~/.local/share/toriel/shared`, so a program an agent runs cannot write elsewhere
 even where the permission system would have let the write through. It needs `bwrap` installed
-and working (`toriel doctor` runs it once to check). It is off by default and applies to
+and working (`toriel doctor` runs it once to check). It is on by default now (set
+`"sandbox": "off"` to turn it off) and applies to
 sessions started after you set it. Details and limits: "Command sandbox" in
 [docs/reference.md](docs/reference.md).
 
