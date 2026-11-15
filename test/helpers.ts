@@ -60,6 +60,8 @@ export async function startDaemon(extraEnv: Record<string, string> = {}): Promis
     // where the write/edit tools journal what they change (ticket 11): not the real state directory
     TORIEL_FILE_HISTORY_DIR: path.join(dir, "file-history"),
     TORIEL_PLAN_DIR: path.join(dir, "plan-mode"),
+    // no bundled pi packages unless a test makes some (ticket 230), so the arguments a child gets do not depend on what npm installed here
+    TORIEL_BUNDLED_ROOT: path.join(dir, "no-bundled-packages"),
     // settings come from XDG_CONFIG_HOME, so pin it too: a test daemon must not read the user's real settings file
     XDG_CONFIG_HOME: path.join(dir, "config"),
     // a test daemon must not take real logind sleep locks

@@ -200,6 +200,7 @@ describe("doctor checks", () => {
       setup({ noSettings: true }).opts,
       legacySetup().opts,
       setup({ noPackage: true }).opts,
+      setup({ noBundled: true }).opts,
       setup({ config: {} }).opts,
       { ...setup({}).opts, env: { WAYLAND_DISPLAY: "wayland-0" }, pathDirs: ["/nonexistent-path"], startup: [] },
       { ...setup({}).opts, tty: true, env: { TERM: "xterm-256color" }, startup: [] },
@@ -416,20 +417,31 @@ describe("doctor checks", () => {
     assert.match(grade("none")[0]?.message ?? "", /the "git" MCP server is missing from .*mcp\.yaml/);
   });
 
-  it("asks for pi-web-access when it is missing from pi's packages, since the research-web agent has no web tools without it", () => {
+  it("asks for pi-web-access when it is neither bundled nor the user's own, since the research-web agent has no web tools without it", () => {
     assert.deepEqual(collectFindings(setup({}).opts).filter((x) => x.id === "web-package"), []);
     const [f] = collectFindings(setup({ noWeb: true }).opts).filter((x) => x.id === "web-package");
     assert.equal(f?.level, "feature");
-    assert.match(f?.message ?? "", /advisory-diff and research-web agents need pi-web-access in the packages of .*settings\.json \(pi install npm:pi-web-access\)/);
+    assert.match(f?.message ?? "", /advisory-diff and research-web agents need pi-web-access .*toriel's copy is not installed \(run npm install in the toriel directory\) and it is not in the packages of .*settings\.json/);
     assert.equal(f?.fix, undefined);
+    // the user's own install is enough, even when toriel's copy is not there
+    assert.deepEqual(collectFindings(setup({ noWeb: true, userWeb: true }).opts).filter((x) => x.id === "web-package"), []);
   });
 
-  it("asks for the ask-the-user package when pi's packages lack it (ticket 227)", () => {
-    assert.deepEqual(collectFindings(setup({}).opts).filter((x) => x.id === "ask-package"), []);
-    const [f] = collectFindings(setup({ noAsk: true }).opts).filter((x) => x.id === "ask-package");
+  it("says when the bundledPackagesOff setting is why there is no web package (ticket 230)", () => {
+    const { opts } = setup({ settings: "bundledPackagesOff:\n  - pi-web-access\n" });
+    const [f] = collectFindings(opts).filter((x) => x.id === "web-package");
+    assert.match(f?.message ?? "", /the bundledPackagesOff setting turns toriel's copy off/);
+  });
+
+  it("reports a bundled package that npm install did not leave behind, and not one the user has or switched off (ticket 230)", () => {
+    const ok = collectFindings(setup({}).opts).filter((x) => x.id === "bundled-packages");
+    assert.deepEqual(ok, []);
+    const [f] = collectFindings(setup({ noBundled: true }).opts).filter((x) => x.id === "bundled-packages");
     assert.equal(f?.level, "feature");
-    assert.match(f?.message ?? "", /agents cannot ask you a question: @juicesharp\/rpiv-ask-user-question is not in the packages of .*settings\.json \(pi install npm:@juicesharp\/rpiv-ask-user-question\)/);
+    assert.match(f?.message ?? "", /@juicesharp\/rpiv-ask-user-question, pi-web-access and pi-hermes-memory are bundled with toriel but not installed in .*run npm install/);
     assert.equal(f?.fix, undefined);
+    const off = collectFindings(setup({ noBundled: true, settings: "bundledPackagesOff:\n  - pi-hermes-memory\n" }).opts).filter((x) => x.id === "bundled-packages");
+    assert.match(off[0]?.message ?? "", /^@juicesharp\/rpiv-ask-user-question and pi-web-access are bundled/);
   });
 
   it("asks for the gdb and ghidra MCP servers the same way, one check per server", () => {

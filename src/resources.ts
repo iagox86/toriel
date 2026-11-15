@@ -178,6 +178,21 @@ export function piPackageListed(agentDir: string, name: string): boolean | undef
 }
 
 /**
+ * Whether the project's own pi settings (`<cwd>/.pi/settings.json`, what `pi install -l` writes) list a package whose entry mentions
+ * `name`. pi reads them only once the project is trusted, but a session that lists the package there and also gets toriel's copy fails to
+ * start (a tool registered twice), so an untrusted or unreadable file is treated as listing it when it does: leaving toriel's copy out is the
+ * safe side. A missing or unreadable file lists nothing.
+ */
+export function projectPackageListed(cwd: string, name: string): boolean {
+  try {
+    const settings = JSON.parse(readFileSync(join(cwd, ".pi", "settings.json"), "utf8")) as { packages?: unknown };
+    return Array.isArray(settings.packages) && settings.packages.some((p) => JSON.stringify(p).includes(name));
+  } catch {
+    return false;
+  }
+}
+
+/**
  * pi-permission-system gates the tools its rules mark `ask`, and toriel shows its dialogs, but
  * it is the user's own pi package (settings.json `packages`), not something toriel ships. Without
  * it nothing asks; with it but without a readable config, it asks about everything.

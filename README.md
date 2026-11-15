@@ -36,7 +36,11 @@ There is no install step for pi: the daemon loads toriel's extensions and skill
 into every session it starts, by path from this checkout (`-e` / `--skill`
 flags), so moving or updating the repo needs nothing else. toriel never writes
 into `~/.pi/agent`; your pi settings, models, MCP servers and packages there
-are used as they are. [pi-permission-system](https://www.npmjs.com/package/@gotgenes/pi-permission-system)
+are used as they are. `npm install` also brings the third-party pi packages toriel carries, so a new
+machine needs nothing else: `@juicesharp/rpiv-ask-user-question` (agents can ask you a question),
+`pi-web-access` (web search and fetch; set up a search provider for it in `~/.pi/agent/web-search.json`)
+and `pi-hermes-memory` (persistent memory). One you installed yourself in pi's `packages` wins over
+toriel's copy, and `bundledPackagesOff` in the toriel settings turns any of them off. [pi-permission-system](https://www.npmjs.com/package/@gotgenes/pi-permission-system)
 is a good package to have in pi's `packages`: it asks before the tools your
 rules mark `ask`, and toriel shows those prompts. toriel does not install or
 manage it; it only warns in the notice line when it is missing (turn that off

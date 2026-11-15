@@ -83,6 +83,12 @@ export const SETTINGS_TEMPLATE: readonly Group[] = [
     ],
   },
   {
+    heading: "Bundled pi packages",
+    entries: [
+      { key: "bundledPackagesOff", example: "[pi-hermes-memory]", comment: ["Third-party pi packages toriel carries and loads into every session (ask_user_question, web search, memory) that you do not want. A package you installed yourself in pi's settings.json always wins over toriel's copy. Unset = all on."] },
+    ],
+  },
+  {
     heading: "Command sandbox",
     entries: [
       { key: "sandbox", value: "bwrap", comment: ['"bwrap" (the default; "off" turns it off) runs each bash command of a directory-scoped session in a bubblewrap sandbox whose only writable places are', "the scope root and the ones below (needs bwrap; toriel doctor checks it). Read when a session starts."] },
