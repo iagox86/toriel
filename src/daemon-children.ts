@@ -15,6 +15,8 @@ import { type AgentProfile, loadAgents, profileArgs, profileHasMcp, withResolved
 import { recordHandled } from "./handled-files.ts";
 import { exitNote, stderrTail } from "./subagent-exit.ts";
 import { historyLength } from "./daemon-history.ts";
+import { bundledArgs, bundledTools } from "./bundled-packages.ts";
+import { piAgentDir } from "./pi-dir.ts";
 import { resourceArgs, SPAWN_TOOLS, TORIEL_TOOLS } from "./resources.ts";
 import { lineageArgs, loadLineage, parentMap, subagentDepth } from "./lineage.ts";
 import { sessionIdOfFile } from "./session-file.ts";
@@ -208,12 +210,15 @@ export class ChildManager {
       args.push(...profileArgs(launched, { isNew }));
     }
     args.push(...resourceArgs({ skills: !agent?.minimal }));
+    // the third-party pi packages toriel carries (ticket 230), unless the user has installed one themselves or switched it off
+    const bundle = { agentDir: piAgentDir(), off: loadSettings().settings.bundledPackagesOff };
+    args.push(...bundledArgs(agent, bundle));
     // A resume restores the tool list recorded in the transcript, so tools of extensions
     // installed since never reach the model. +name entries join them to that loadout. A
     // profile that lists tools owns the loadout (pi forbids mixing the two forms).
     if (!agent?.tools) {
       const mayDelegate = this.mayDelegate(s); // reads lineage.json: once per start, not once per tool
-      args.push("--tools", TORIEL_TOOLS.filter((t) => mayDelegate || !SPAWN_TOOLS.includes(t.slice(1))).join(","));
+      args.push("--tools", [...TORIEL_TOOLS.filter((t) => mayDelegate || !SPAWN_TOOLS.includes(t.slice(1))), ...bundledTools(agent, bundle)].join(","));
     }
     if (isNew && cfg.thinking && !agent?.thinking) {
       args.push("--thinking", cfg.thinking);

@@ -8,6 +8,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { parseDocument } from "yaml";
 import { type AgentLanes, isModelTier, MODEL_TIERS } from "./agents.ts";
+import { BUNDLED_NAMES } from "./bundled-packages.ts";
 import { DEFAULT_PI_CLI } from "./config.ts";
 import { configDir, yamlSettingsFile } from "./config-dir.ts";
 import { errText } from "./util.ts";
@@ -56,6 +57,8 @@ export interface TorielSettings {
   sandbox?: "off" | "bwrap";
   /** Extra places a sandboxed command may write, absolute or ~/ paths, mainly package caches (default ~/.npm and ~/.cache; [] = none). */
   sandboxWritable?: string[];
+  /** Bundled third-party pi packages (ticket 230, src/bundled-packages.ts) to leave out of every session; a package the user installed in pi's settings.json always wins over toriel's copy. Default: none are off. */
+  bundledPackagesOff?: string[];
   /** Deleted sessions (and rewind/clear backups) stay in the trash this many days (default 90; 0 = keep forever; read daily by the daemon). */
   trashRetentionDays?: number;
   /** Subagents running at once, daemon-wide (default 3; read when the daemon starts). */
@@ -119,7 +122,7 @@ export const MAX_DENY_MS = 24 * 3_600_000;
 
 const STRING_KEYS = ["provider", "model", "thinking", "piCli", "summaryModel"] as const;
 /** Every key the file may hold; the commented template (settings-file.ts) must cover all of them. */
-export const SETTING_KEYS: readonly string[] = ["steeringMode", "permissionGrantDurations", "permissionDenyAfter", "sandbox", "sandboxWritable", "scopeGuardAcceptedAllows", "agentLanes", ...BOOLEAN_KEYS, ...STRING_KEYS, ...NUMBER_KEYS];
+export const SETTING_KEYS: readonly string[] = ["steeringMode", "permissionGrantDurations", "permissionDenyAfter", "sandbox", "sandboxWritable", "bundledPackagesOff", "scopeGuardAcceptedAllows", "agentLanes", ...BOOLEAN_KEYS, ...STRING_KEYS, ...NUMBER_KEYS];
 /** The surfaces a scopeGuardAcceptedAllows entry may name ("*" is the config fallback). */
 const SCOPE_GUARD_SURFACES = ["external_directory_write", "external_directory", "*"] as const;
 
@@ -227,6 +230,12 @@ function parseSettingsFile(file: string): LoadedSettings {
         settings.sandboxWritable = value as string[];
       } else {
         problems.push(`sandboxWritable must be a list of at most 20 absolute or ~/ paths such as ["~/.npm", "~/.cache"]`);
+      }
+    } else if (key === "bundledPackagesOff") {
+      if (Array.isArray(value) && value.every((n) => typeof n === "string" && BUNDLED_NAMES.includes(n))) {
+        settings.bundledPackagesOff = value as string[];
+      } else {
+        problems.push(`bundledPackagesOff must be a list of bundled package names (${BUNDLED_NAMES.join(", ")}), or [] for none`);
       }
     } else if (key === "agentLanes") {
       const lanes = validAgentLanes(value);

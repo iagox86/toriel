@@ -7,8 +7,11 @@
   "dependencies": {
     "@earendil-works/pi-coding-agent": "1.4.0",
     "@earendil-works/pi-tui": "1.4.0",
+    "@juicesharp/rpiv-ask-user-question": "2.15.0",
     "commander": "^15.0.0",
     "cron-parser": "^5.10.3",
+    "pi-hermes-memory": "0.11.0",
+    "pi-web-access": "0.48.0",
     "yaml": "^2.9.0"
   },
   "devDependencies": {

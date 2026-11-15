@@ -64,6 +64,9 @@ export const PLAN_TOOLS: ReadonlySet<string> = new Set([
   "fetch_content",
   "get_search_content",
   "code_search",
+  "source_check",
+  "memory_search", // pi-hermes-memory: the two that only read
+  "session_search",
   "toriel_usage",
   "toriel_job",
   "toriel_schedule_list",

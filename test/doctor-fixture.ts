@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { DoctorOptions } from "../src/doctor.ts";
+import { BUNDLED_PACKAGES } from "../src/bundled-packages.ts";
 import { RESOURCES } from "../src/resources.ts";
 import { renderSettings } from "../src/settings-file.ts";
 
@@ -38,10 +39,12 @@ export interface Over {
   noInhibit?: boolean;
   /** The git MCP server in mcp.yaml: "direct" (default, healthy), another exposure, or "none" for no mcp.yaml at all. */
   gitMcp?: string;
-  /** Leave pi-web-access out of pi's packages. */
+  /** Leave pi-web-access out of toriel's bundled packages (and out of pi's own). */
   noWeb?: boolean;
-  /** Leave the ask-the-user package out of pi's packages. */
-  noAsk?: boolean;
+  /** Leave every bundled package out of toriel's node_modules (an install that did not run). */
+  noBundled?: boolean;
+  /** Add the web package to pi's own packages, as a user who installed it themselves has. */
+  userWeb?: boolean;
   /** Same for the gdb and ghidra servers (the debug and re-* agents). */
   gdbMcp?: string;
   ghidraMcp?: string;
@@ -59,7 +62,7 @@ export function setup(home: string, over: Over = {}) {
   const mcpFile = path.join(base, "mcp.yaml");
   if (!over.noPiDir) {
     mk(path.join(agentDir, "extensions", "pi-permission-system"));
-    fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ packages: [...(over.noPackage ? [] : ["npm:@gotgenes/pi-permission-system"]), ...(over.noWeb ? [] : ["npm:pi-web-access"]), ...(over.noAsk ? [] : ["npm:@juicesharp/rpiv-ask-user-question"])] }));
+    fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ packages: [...(over.noPackage ? [] : ["npm:@gotgenes/pi-permission-system"]), ...(over.userWeb ? ["npm:pi-web-access"] : [])] }));
     if (!over.noPackage) {
       fs.writeFileSync(path.join(agentDir, "extensions", "pi-permission-system", "config.json"), typeof over.config === "string" ? over.config : JSON.stringify(over.config ?? GOOD_CONFIG));
     }
@@ -83,6 +86,14 @@ export function setup(home: string, over: Over = {}) {
   if (over.piMcpJson !== undefined && !over.noPiDir) {
     mk(agentDir);
     fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify(over.piMcpJson));
+  }
+  // the packages toriel carries: a directory each in a stand-in node_modules
+  const bundledRoot = path.join(base, "bundled");
+  mk(bundledRoot);
+  for (const pkg of BUNDLED_PACKAGES) {
+    if (!over.noBundled && !(over.noWeb && pkg.name === "pi-web-access")) {
+      mk(path.join(bundledRoot, pkg.name));
+    }
   }
   const root = path.join(base, "pi");
   if (!over.noResources) {
@@ -112,6 +123,6 @@ export function setup(home: string, over: Over = {}) {
     fs.writeFileSync(settingsFile, renderSettings());
   }
   const grantsFile = path.join(home, ".local", "share", "toriel", "permissions.json");
-  const opts: DoctorOptions = { agentDir, mcpFile, root, grantsFile, settingsFile, piCli, pathDirs: [bin], platform: "linux", startup: [], probeLitellm: () => "not asked in this test", env: { TORIEL_NODE: "/nonexistent-node" } };
+  const opts: DoctorOptions = { agentDir, mcpFile, root, bundledRoot, grantsFile, settingsFile, piCli, pathDirs: [bin], platform: "linux", startup: [], probeLitellm: () => "not asked in this test", env: { TORIEL_NODE: "/nonexistent-node" } };
   return { agentDir, mcpFile, opts, config: path.join(agentDir, "extensions", "pi-permission-system", "config.json"), grantsFile };
 }
