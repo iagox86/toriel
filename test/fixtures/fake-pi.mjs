@@ -25,6 +25,13 @@ import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 
 const args = process.argv.slice(2);
+if (!args.includes("--mode")) {
+  // `node --test` sweeps every file under test/ as a test file, including this fixture, which would then sit waiting on
+  // stdin for ever (the whole run wedges for minutes and fails). The daemon always launches it with --mode rpc, and
+  // npm test (test/*.test.ts) never runs it directly, so reaching this line means a bare sweep: say so and leave at once.
+  console.error("fake-pi.mjs is a fixture, not a test file: the daemon runs it with --mode rpc; use npm test");
+  process.exit(0);
+}
 const flag = (name) => {
   const i = args.indexOf(name);
   return i === -1 ? undefined : args[i + 1];
