@@ -5,6 +5,7 @@ import type { Component } from "@earendil-works/pi-tui";
 import { truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { durationWords } from "./permission-format.ts";
 import { attention, dim, panel, panelInnerWidth, selected } from "./theme.ts";
+import { fmtClock } from "./when.ts";
 
 export interface DialogRequest {
   id: string;
@@ -21,7 +22,7 @@ export interface DialogRequest {
    * What the daemon knows about this ask (docs/permissions.md): the grants pi would record for it, or `protectedAsk` when
    * it is about the grants file or pi's own configuration, which no grant ever covers.
    */
-  toriel?: { grants?: Array<{ surface: string; pattern: string }>; protectedAsk?: boolean };
+  toriel?: { grants?: Array<{ surface: string; pattern: string }>; protectedAsk?: boolean; denyAt?: number };
   /** toriel's own "allow for ..." rows, among `options` (see withOwnLayout). */
   extraRows?: GrantRow[];
   /** When toriel relabelled the options: what pi is told for each label, since pi only understands its own wording. */
@@ -252,6 +253,10 @@ export function dialogLines(d: DialogRequest, index: number, width: number, reas
     }
     out.push(dim(`  ${truncateToWidth(` ${lead}${o}`, width - 2)}`));
   });
+  if (typeof d.toriel?.denyAt === "number") {
+    // ticket 220: a clock time, not a ticking count, so the panel needs no redraw timer; it goes away with the dialog
+    out.push(...wrapRows(`toriel: denied automatically at ${fmtClock(d.toriel.denyAt, new Date())} if nobody answers (deny-after)`, width, " -- ", "    ").map(dim));
+  }
   if (d.toriel?.protectedAsk) {
     out.push(...wrapRows("toriel: grants never cover the permission grants file or pi's own configuration, so this is always asked", width, " -- ", "    ").map(dim));
   }
