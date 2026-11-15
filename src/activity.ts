@@ -147,6 +147,10 @@ export function activityLines(state: ActivityState, width: number, now: number):
   if (state.queue.length > shown.length) {
     lines.push(queued(`  queued: +${state.queue.length - shown.length} more`));
   }
+  if (state.queue.length > 0) {
+    // ticket 222: without this they arrive at the next step; the key stops the running one and sends them now
+    lines.push(truncateToWidth(dim("  ctrl-s: send now (stops the running step)"), width));
+  }
   if (state.activity) {
     const { ms, waiting } = runElapsed(state, state.activity, now);
     const label = waiting ? "waiting on you" : state.activity.label;

@@ -50,10 +50,11 @@ describe("activity", () => {
   it("lists queued messages above the spinner line, capped", () => {
     const s: ActivityState = { queue: ["one", "two", "three", "four"], activity: { label: "thinking", since: 0 } };
     const lines = activityLines(s, 80, 65_000);
-    assert.equal(lines.length, 5);
+    assert.equal(lines.length, 6);
     assert.match(lines[0] as string, /queued: one/);
     assert.match(lines[3] as string, /\+1 more/);
-    assert.match(lines[4] as string, /thinking.*1m05s/);
+    assert.match(lines[4] as string, /ctrl-s: send now \(stops the running step\)/, "ticket 222: the key is offered while something is queued");
+    assert.match(lines[5] as string, /thinking.*1m05s/);
   });
 
   it("draws nothing when idle with an empty queue", () => {

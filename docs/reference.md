@@ -115,6 +115,7 @@ Session view (chat):
   (read from its file, so it survives restarts) and slash commands, in the
   order typed (draft is stashed and restored; cursor movement wins in
   multi-line editors)
+- `ctrl-s` - while messages you typed during a run are queued: send them now (ticket 222). A queued message is otherwise delivered at the next step (after the current model response and its tool calls); this stops the running step the way esc does (the partial answer stays, a running command is killed) and sends the queued messages together as the next prompt. Nothing queued, or already delivered: nothing happens; if the run cannot be stopped the texts go back in the box. Inside ctrl-r history search the key still means "newer"
 - `ctrl-b` - while the agent works: move the subagent it is waiting for to the background, else the bash command it is waiting for (also `/background`; see "Background commands" and "Subagents")
 - `shift+tab` - toggle auto mode for the viewed session (also `/auto`; see "Auto mode" under "Permission grants"). A completion popup keeps the key while it is open.
 - `esc` - abort the running agent; messages still queued come back into the
