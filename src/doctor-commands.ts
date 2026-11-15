@@ -1,6 +1,7 @@
 // The controller side of /doctor: the setup report in a panel, and with --fix a confirmation
 // before anything is written. Shared by the session and switcher command tables.
 import type { Invocation } from "./cli.ts";
+import { LITELLM_CACHE_FILE } from "./config.ts";
 import { applyFixes, type DoctorOptions, type DoctorStyle, plannedFixes, previewFixes, renderDoctor, runDoctor } from "./doctor.ts";
 import type { Host } from "./host.ts";
 import { attention, dim, success } from "./theme.ts";
@@ -11,7 +12,7 @@ const PANEL_STYLE: DoctorStyle = { heading: (t) => t, ok: success, problem: atte
 
 /** `/doctor [--fix]`. A running controller has passed the start-up checks, so those are not repeated. */
 export function runDoctorCommand(h: Host, call: Invocation, opts: DoctorOptions = {}): void {
-  const checks = runDoctor({ ...opts, startup: [] });
+  const checks = runDoctor({ litellmCacheFile: LITELLM_CACHE_FILE, ...opts, startup: [] });
   const report = `${renderDoctor(checks, { compact: true, style: PANEL_STYLE })}\n\n${h.daemonReport()}`;
   if (call.opts.fix !== true) {
     h.infoPanel.show(report);

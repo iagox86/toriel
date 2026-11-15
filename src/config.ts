@@ -71,6 +71,8 @@ export const FEEDBACK_FILE = process.env.TORIEL_FEEDBACK ?? path.join(DATA_DIR, 
 /** Logs and other state that is not user data (XDG_STATE_HOME), kept out of the source tree. */
 export const STATE_DIR = PROFILE_DIR ? path.join(PROFILE_DIR, "state") : path.join(process.env.XDG_STATE_HOME ?? path.join(process.env.HOME ?? "", ".local", "state"), "toriel");
 export const LOG = process.env.TORIEL_LOG ?? path.join(STATE_DIR, "daemon.log");
+/** What the daemon learned from the litellm proxy at start (ticket 221): the doctor findings in the controller and /doctor compare it with models.json. */
+export const LITELLM_CACHE_FILE = process.env.TORIEL_LITELLM_CACHE ?? path.join(STATE_DIR, "litellm-routes.json");
 
 /**
  * Key/UI debug log, enabled by setting TORIEL_KEYS to anything (e.g. 1). It goes

@@ -85,7 +85,7 @@ export const SETTINGS_TEMPLATE: readonly Group[] = [
   {
     heading: "Command sandbox",
     entries: [
-      { key: "sandbox", value: "off", comment: ['"bwrap" runs each bash command of a directory-scoped session in a bubblewrap sandbox whose only writable places are', "the scope root and the ones below (needs bwrap; toriel doctor checks it). Read when a session starts."] },
+      { key: "sandbox", value: "bwrap", comment: ['"bwrap" (the default; "off" turns it off) runs each bash command of a directory-scoped session in a bubblewrap sandbox whose only writable places are', "the scope root and the ones below (needs bwrap; toriel doctor checks it). Read when a session starts."] },
       { key: "sandboxWritable", value: ["~/.npm", "~/.cache"], comment: ["Extra places a sandboxed command may write: absolute or ~/ paths, mostly package caches. [] = none."] },
     ],
   },

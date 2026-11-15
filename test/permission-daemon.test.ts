@@ -307,6 +307,24 @@ describe("daemon: permission grants", () => {
       assert.ok(meta, "the badge is gone");
     });
 
+    it("the dialog carries when it will be denied (ticket 220); with deny-after off it carries nothing", async () => {
+      const h = await start({ FAKE_PI_ASK_COMMAND: "npm test", TORIEL_DENY_MIN_MS: "500" });
+      const { c, session } = await savedSession(h);
+      await c.request({ type: "prompt", session, message: "/ask-select" });
+      const plain = await c.waitFor((m) => m.type === "ui_request" && m.request?.id === "ask-select-1");
+      assert.equal(plain.request.toriel?.denyAt, undefined, "off: the dialog renders as before");
+      await c.request({ type: "ui_response", session, response: { id: "ask-select-1", value: "No" } });
+      await c.request({ type: "deny_after", session, after: "1 second" });
+      const before = Date.now();
+      c.messages.length = 0;
+      await c.request({ type: "prompt", session, message: "/ask-select" });
+      const armed = await c.waitFor((m) => m.type === "ui_request" && m.request?.id === "ask-select-1");
+      const at = armed.request.toriel?.denyAt;
+      assert.equal(typeof at, "number");
+      assert.ok(at >= before + 900 && at <= Date.now() + 1100, `denyAt is about a second out: ${at - before}ms`);
+      await denied(c);
+    });
+
     it("an answer in time cancels it, and off or a bad duration is handled", async () => {
       const h = await start({ FAKE_PI_ASK_COMMAND: "npm test", TORIEL_DENY_MIN_MS: "500" });
       const { c, session } = await savedSession(h);

@@ -12,7 +12,8 @@ import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, readFileSync, renameSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
-import { applyDrift, diffRoutes, type LitellmProbe, readLitellmEntries } from "./litellm-models.ts";
+import { applyDrift, cachedFor, diffRoutes, type GatewayKind, type LitellmProbe, readGateways, readRoutesCache } from "./litellm-models.ts";
+import { fmtClock } from "./when.ts";
 import { mcpWarnings, mergeMcpServers, loadAgents } from "./agents.ts";
 import { piAgentDir } from "./pi-dir.ts";
 import { startupProblems } from "./preflight.ts";
@@ -45,7 +46,7 @@ export interface CatalogEntry {
   /** Only checkable when the permission package is set up; otherwise shown as skipped. */
   needsPermissionPackage?: boolean;
   /** Only checked when the caller supplies a probe that asks the network (`toriel doctor` does; the in-app /doctor does not, because it would block the screen). */
-  needsProbe?: "litellm";
+  needsProbe?: GatewayKind;
 }
 
 /** Every check doctor makes, in the order it prints them within a level. */
@@ -66,6 +67,7 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: "mcp-ghidra-direct", level: "feature", title: 'the ghidra MCP server is configured with "exposure": "direct" (the re-explain, re-find, re-trace and binary-diff agents need it)' },
   { id: "agent-lanes", level: "feature", title: "every model tier in agentLanes (cheap, medium, expensive) names a provider pi knows (models.json or a login)" },
   { id: "litellm-models", level: "feature", title: "pi's models.json matches what the litellm proxy says about each route (context window, output limit, cost)", needsProbe: "litellm" },
+  { id: "bifrost-models", level: "feature", title: "pi's models.json matches what the bifrost gateway says about each route (context window, output limit)", needsProbe: "bifrost" },
   { id: "mcp-yaml", level: "recommended", title: "toriel's mcp.yaml (the MCP servers) is valid" },
   { id: "mcp-json", level: "recommended", title: "pi's own mcp.json holds no servers (toriel keeps them in mcp.yaml and pi would start the old ones itself)" },
   { id: "sandbox-bwrap", level: "feature", title: 'bubblewrap works (needed only when the "sandbox" setting is "bwrap": scoped sessions run each bash command sandboxed)' },
@@ -109,6 +111,8 @@ export interface DoctorOptions extends AuditOptions {
   probeTmux?: () => TmuxKeys;
   /** Asks the litellm proxy about its routes (ticket 215). Not set: the check is skipped ("run toriel doctor"). `toriel doctor` passes the real one. */
   probeLitellm?: LitellmProbe;
+  /** What the daemon learned from litellm at start (ticket 221); read when `probeLitellm` is not set. The running daemon and controller pass theirs. */
+  litellmCacheFile?: string;
   /** toriel's mcp.yaml (default: beside the settings file; tests inject). */
   mcpFile?: string;
   /** The text of kitty's config, including what it includes (default: read from kitty's config directory; tests inject). */
@@ -364,34 +368,37 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
     }
   }
   // pi's models.json hardcodes the litellm routes' metadata (ticket 215); litellm itself says what it believes, so a stale number is findable
-  const litellm = opts.probeLitellm !== undefined ? readLitellmEntries(opts.agentDir ?? piAgentDir(env)) : undefined;
-  if (litellm !== undefined && opts.probeLitellm !== undefined) {
-    const modelsFile = join(opts.agentDir ?? piAgentDir(env), "models.json");
-    const answer = opts.probeLitellm({ baseUrl: litellm.baseUrl, apiKey: litellm.apiKey });
-    if (typeof answer !== "string") {
-      const { drift, gone, extra } = diffRoutes(litellm.models, answer.routes);
-      if (drift.length > 0) {
-        const lines = drift.map((d) => `${d.id}: ${d.changes.map(([f, was, now]) => `${f} ${was === undefined ? "(unset)" : was} -> ${now}`).join(", ")}`);
-        out.push({
-          id: "litellm-models",
-          level: "feature",
-          message: `${modelsFile} has stale numbers for the litellm routes (pi truncates and compacts by them): ${lines.join("; ")}. litellm reports its own configured metadata for a route, not the backend's real limits, so this copies litellm's belief${gone.length > 0 ? `; ${nameList(gone)} ${gone.length > 1 ? "are" : "is"} in models.json but not served by litellm` : ""}${extra.length > 0 ? `; ${extra.length} route${extra.length > 1 ? "s" : ""} litellm serves ${extra.length > 1 ? "are" : "is"} not in models.json (add by hand if you want them)` : ""}`,
-          fix: {
-            file: modelsFile,
-            summary: `update ${drift.length} litellm model${drift.length > 1 ? "s" : ""} in models.json to litellm's numbers`,
-            edit: (c) => {
-              const providers = (typeof c.providers === "object" && c.providers !== null ? c.providers : {}) as Record<string, { models?: Array<Record<string, unknown>> }>;
-              const entry = providers.litellm;
-              if (entry === undefined || !Array.isArray(entry.models)) {
-                return c;
-              }
-              return { ...c, providers: { ...providers, litellm: { ...entry, models: applyDrift(entry.models, drift) } } };
-            },
-          },
-        });
-      }
+  // the CLI asks the proxy itself; everything else reads what the daemon learned at start (ticket 221) and never asks
+  // The same for a bifrost gateway (ticket 221 follow-up); each gateway provider of models.json is asked on its own.
+  const cache = opts.probeLitellm === undefined ? readRoutesCache(opts.litellmCacheFile) : undefined;
+  for (const gw of readGateways(opts.agentDir ?? piAgentDir(env))) {
+    const answer = opts.probeLitellm !== undefined ? opts.probeLitellm({ baseUrl: gw.baseUrl, apiKey: gw.apiKey, kind: gw.kind }) : cache === undefined ? undefined : cachedFor(cache, gw.provider, gw.baseUrl);
+    if (answer === undefined || typeof answer === "string") {
+      continue; // an unreachable or unauthorised proxy says nothing about the numbers: doctor stays quiet rather than nag when the server is down
     }
-    // an unreachable or unauthorised proxy says nothing about the numbers: doctor stays quiet rather than nag when the server is down
+    const modelsFile = join(opts.agentDir ?? piAgentDir(env), "models.json");
+    const { drift, gone, extra } = diffRoutes(gw.models, answer.routes);
+    if (drift.length > 0) {
+      const name = gw.kind;
+      const lines = drift.map((d) => `${d.id}: ${d.changes.map(([f, was, now]) => `${f} ${was === undefined ? "(unset)" : was} -> ${now}`).join(", ")}`);
+      out.push({
+        id: gw.kind === "bifrost" ? "bifrost-models" : "litellm-models",
+        level: "feature",
+        message: `${modelsFile} has stale numbers for the ${name} routes of "${gw.provider}" (pi truncates and compacts by them): ${lines.join("; ")}. ${name} reports its own configured metadata for a route, not the backend's real limits, so this copies ${name}'s belief${gone.length > 0 ? `; ${nameList(gone)} ${gone.length > 1 ? "are" : "is"} in models.json but not served by ${name}` : ""}${extra.length > 0 ? `; ${extra.length} route${extra.length > 1 ? "s" : ""} ${name} serves ${extra.length > 1 ? "are" : "is"} not in models.json (add by hand if you want them)` : ""}`,
+        fix: {
+          file: modelsFile,
+          summary: `update ${drift.length} ${name} model${drift.length > 1 ? "s" : ""} of "${gw.provider}" in models.json to ${name}'s numbers`,
+          edit: (c) => {
+            const providers = (typeof c.providers === "object" && c.providers !== null ? c.providers : {}) as Record<string, { models?: Array<Record<string, unknown>> }>;
+            const entry = providers[gw.provider];
+            if (entry === undefined || !Array.isArray(entry.models)) {
+              return c;
+            }
+            return { ...c, providers: { ...providers, [gw.provider]: { ...entry, models: applyDrift(entry.models, drift) } } };
+          },
+        },
+      });
+    }
   }
   // toriel's MCP config (tickets 209, 216): a bad entry is left out of the session, so say which and why
   for (const problem of readMcpYaml(mcpFile).problems) {
@@ -428,10 +435,10 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
     });
   }
   // the per-command sandbox (board 190) refuses to run a command rather than run it unsandboxed, so a setting that asks for bwrap without a working bwrap would stop every scoped session's bash
-  if (loaded.settings.sandbox === "bwrap") {
+  if (loaded.settings.sandbox !== "off") {
     const why = (opts.probeBwrap ?? probeBwrap)();
     if (why !== undefined) {
-      out.push({ id: "sandbox-bwrap", level: "feature", message: `the toriel setting "sandbox" is "bwrap" but ${why}; scoped sessions would refuse every bash command (install bubblewrap and enable user namespaces, or set "sandbox": "off")`, manual: 'installing bubblewrap is a system package install, and switching the sandbox off would drop protection you asked for' });
+      out.push({ id: "sandbox-bwrap", level: "feature", message: `the command sandbox is on (the toriel setting "sandbox" is "bwrap", which is the default) but ${why}; scoped sessions would refuse every bash command (install bubblewrap and enable user namespaces, or set "sandbox": "off")`, manual: 'installing bubblewrap is a system package install, and switching the sandbox off would drop protection you asked for' });
     }
   }
   const dirs = opts.pathDirs ?? (env.PATH ?? "").split(delimiter).filter(Boolean);
@@ -487,8 +494,15 @@ export function runDoctor(opts: DoctorOptions = {}): Check[] {
     if (noPackage && entry.needsPermissionPackage) {
       return { ...entry, state: "skipped", findings: [], note: "needs pi-permission-system (see above)" };
     }
-    if (entry.needsProbe === "litellm" && opts.probeLitellm === undefined) {
-      return { ...entry, state: "skipped", findings: [], note: "asks the litellm server: run `toriel doctor` in a terminal to check" };
+    if (entry.needsProbe !== undefined && opts.probeLitellm === undefined) {
+      const kind = entry.needsProbe;
+      const cache = readRoutesCache(opts.litellmCacheFile);
+      const mine = readGateways(opts.agentDir ?? piAgentDir(opts.env ?? process.env)).filter((g) => g.kind === kind);
+      const heard = mine.map((g) => cachedFor(cache, g.provider, g.baseUrl)).filter((c) => c !== undefined);
+      if (heard.length === 0) {
+        return { ...entry, state: "skipped", findings: [], note: `asks the ${kind} server: run \`toriel doctor\` in a terminal to check` };
+      }
+      return { ...entry, state: "ok", findings: [], note: `compared with what ${kind} said when the daemon started (${fmtClock(Math.min(...heard.map((c) => c.checkedAt)), new Date())}); \`toriel doctor\` in a terminal asks again` };
     }
     return { ...entry, state: "ok", findings: [] };
   });

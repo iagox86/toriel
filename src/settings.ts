@@ -52,7 +52,7 @@ export interface TorielSettings {
   scopeGuardAcceptedAllows?: Array<{ surface: string; pattern: string }>;
   /** Warn when pi-permission-system is not installed or has no usable config (default true). */
   warnNoPermissionSystem?: boolean;
-  /** "bwrap" runs each bash command of a directory-scoped session in a bubblewrap sandbox whose only writable places are the scope root and a few others (default "off"; read when a session starts). */
+  /** "bwrap" runs each bash command of a directory-scoped session in a bubblewrap sandbox whose only writable places are the scope root and a few others (default "bwrap": sandboxed unless set to "off"; read when a session starts). */
   sandbox?: "off" | "bwrap";
   /** Extra places a sandboxed command may write, absolute or ~/ paths, mainly package caches (default ~/.npm and ~/.cache; [] = none). */
   sandboxWritable?: string[];

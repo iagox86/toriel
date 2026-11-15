@@ -18,7 +18,9 @@ import "./migrate-on-start.ts";
 import * as fs from "node:fs";
 import { buildInfo } from "./build-id.ts";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { LOG, PERMISSIONS_FILE, PID_FILE, PROFILE, SCHEDULES_FILE, SANDBOX_TMP_DIR, SHARED_DIR, SOCK, TRASH_DIR } from "./config.ts";
+import { checkGatewaysAtStart } from "./litellm-models.ts";
+import { piAgentDir } from "./pi-dir.ts";
+import { LITELLM_CACHE_FILE, LOG, PERMISSIONS_FILE, PID_FILE, PROFILE, SCHEDULES_FILE, SANDBOX_TMP_DIR, SHARED_DIR, SOCK, TRASH_DIR } from "./config.ts";
 import { BridgeTracker } from "./daemon-bridge.ts";
 import { ChildManager } from "./daemon-children.ts";
 import type { DaemonContext } from "./daemon-context.ts";
@@ -230,9 +232,19 @@ async function main(): Promise<void> {
   const awakeKeeper = setInterval(keepAwake, 5_000);
   awakeKeeper.unref();
   // the start-up self-check: every finding is logged, the controller's notice line shows the ones that matter most
-  for (const f of collectFindings({ permissionSystem: loadSettings().settings.warnNoPermissionSystem !== false, startup: [] })) {
+  const startupAudit = { permissionSystem: loadSettings().settings.warnNoPermissionSystem !== false, startup: [], litellmCacheFile: LITELLM_CACHE_FILE };
+  for (const f of collectFindings(startupAudit)) {
     log(`WARNING [${f.level}]: ${f.message}`);
   }
+  // ticket 221: ask litellm once about its routes, after the socket is serving and off the event loop; the answer is cached, the controller's
+  // notice line and /doctor read it from there (once per daemon start: models.json changes are caught by the next start or `toriel doctor`)
+  checkGatewaysAtStart(piAgentDir(), LITELLM_CACHE_FILE)
+    .then((cached) => {
+      for (const f of cached ? collectFindings(startupAudit).filter((x) => x.id === "litellm-models" || x.id === "bifrost-models") : []) {
+        log(`WARNING [${f.level}]: ${f.message}`);
+      }
+    })
+    .catch((err: unknown) => log(`litellm check failed: ${errText(err)}`));
 
   // Prune external presence registrations whose pi exited, whose session
   // file was deleted (e.g. via pi's resume picker), or that stopped

@@ -207,6 +207,18 @@ describe("toriel's own layout on a permission prompt", () => {
     assert.doesNotMatch(stripTerminalSequences(dialogLines(withOwnLayout(ask, ["1h"]), 0, 120).join("\n")), /grants never cover/);
   });
 
+  it("a dialog that will be denied automatically says when (ticket 220), and one without deny-after says nothing", () => {
+    const at = Date.now() + 90_000;
+    const withDeny = withOwnLayout({ ...ask, toriel: { denyAt: at } }, ["1h"]);
+    const text = stripTerminalSequences(dialogLines(withDeny, 0, 120).join("\n"));
+    assert.match(text, /denied automatically at \d\d:\d\d.* if nobody answers \(deny-after\)/);
+    assert.doesNotMatch(stripTerminalSequences(dialogLines(withOwnLayout(ask, ["1h"]), 0, 120).join("\n")), /denied automatically/);
+    // beside the protected-file line, not instead of it
+    const both = stripTerminalSequences(dialogLines(withOwnLayout({ ...ask, toriel: { protectedAsk: true, denyAt: at } }, ["1h"]), 0, 120).join("\n"));
+    assert.match(both, /denied automatically at/);
+    assert.match(both, /grants never cover/);
+  });
+
   it("answers a digit or enter on a toriel row with its label, which names the row", () => {
     const d = withOwnLayout(ask, ["1h", "session"]);
     const fields = dialogAnswer(d, "2");

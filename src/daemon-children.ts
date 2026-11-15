@@ -126,9 +126,9 @@ export class ChildManager {
     if (scope !== undefined) {
       log(`scope for ${s.sessionId ?? s.id}: ${scope.root} (mode ${scope.mode})`);
     }
-    // the per-command bash sandbox (board 190): only for a scoped session, only when the setting asks; read now, so a change applies to sessions started after it
+    // the per-command bash sandbox (board 190): only for a scoped session, on unless the setting says "off"; read now, so a change applies to sessions started after it
     const settings = loadSettings().settings;
-    const sandbox = scope !== undefined && settings.sandbox === "bwrap" ? sandboxWritableRoots(settings, process.env.HOME ?? "") : undefined;
+    const sandbox = scope !== undefined && settings.sandbox !== "off" ? sandboxWritableRoots(settings, process.env.HOME ?? "") : undefined;
     if (sandbox !== undefined) {
       log(`sandbox for ${s.sessionId ?? s.id}: bwrap, writable ${[scope?.root, SHARED_DIR, ...sandbox].join(", ")}`);
     }
@@ -574,10 +574,9 @@ export class ChildManager {
    * the same way a user's No is, and a durable notice says it was automatic (and why), so a session nobody watches fails the action
    * instead of waiting for ever. Only permission prompts: another extension's picker is left alone.
    */
-  private armDeny(s: DaemonSession, request: Record<string, unknown>, value: string | undefined): void {
+  private armDeny(s: DaemonSession, request: Record<string, unknown>, value: string | undefined, ms: number | undefined): void {
     clearTimeout(s.denyTimer);
-    const ms = this.denyAfterMs(s);
-    if (ms === undefined || !isPermissionPrompt(request)) {
+    if (ms === undefined) {
       return;
     }
     s.denyTimer = setTimeout(() => {
@@ -622,6 +621,7 @@ export class ChildManager {
       const suggested = DIALOG_METHODS.has(event.method as string) ? withSuggestion(event, s.suggestion, Date.now()) : event;
       // an ask about the grants file or pi's config is always asked: say so instead of offering rows that could only be refused
       const request = event.method === "select" && touchesProtected(typeof event.title === "string" ? event.title : "") ? { ...suggested, toriel: { protectedAsk: true } } : suggested;
+      let shown: Record<string, unknown> = request;
       if (DIALOG_METHODS.has(event.method as string)) {
         // the reason for the ask (ticket 213) is read before the suggestion is used up below: most asks carry a grant to suggest, so it is cleared for them
         const rule = ruleFor(event, s.suggestion, Date.now());
@@ -635,15 +635,18 @@ export class ChildManager {
         if (this.answerAuto(s, request, asked, rule)) {
           return; // answered by auto mode
         }
+        // ticket 220: the dialog says when it will be denied, so the wait is not silent; the same request is kept as lastDialog (a reattach sends it again)
+        const denyMs = isPermissionPrompt(request) ? this.denyAfterMs(s) : undefined;
+        shown = denyMs === undefined ? request : { ...request, toriel: { ...(request.toriel as object | undefined), denyAt: Date.now() + denyMs } };
         s.pendingDialog = true;
-        s.lastDialog = request;
+        s.lastDialog = shown;
         this.hub.broadcastSessions();
-        this.expireDialog(s, request);
-        this.armDeny(s, request, asked);
+        this.expireDialog(s, shown);
+        this.armDeny(s, shown, asked, denyMs);
       }
       // Dialogs go to the attached controller; fire-and-forget records and
       // unattached dialogs broadcast so somebody can pick them up.
-      const message = { type: "ui_request" as const, session: s.id, request };
+      const message = { type: "ui_request" as const, session: s.id, request: shown };
       if (s.attachedTo) {
         this.hub.send(s.attachedTo, message);
       } else {

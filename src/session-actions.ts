@@ -106,6 +106,17 @@ export class SessionActions {
       }
       return false;
     }
+    // ctrl-s = send the queued messages now (ticket 222): stop the running step and deliver them as the next prompt. Only while
+    // messages are queued (nothing to send otherwise); history search owns the key while it is open (the controller routes it first)
+    if (matchesKey(data, Key.ctrl("s"))) {
+      const meta = this.h.viewing ? this.h.metaForPath(this.h.viewing) : undefined;
+      const view = this.h.viewing ? this.h.views.get(this.h.viewing) : undefined;
+      if (meta?.id !== undefined && meta.attachedToYou && (view?.queue.length ?? 0) > 0) {
+        void this.sendQueuedNow(meta.id);
+        return true;
+      }
+      return false;
+    }
     // shift+tab = toggle auto mode, like Claude Code's mode key (ticket 213); a completion popup keeps the key
     if (matchesKey(data, Key.shift("tab")) && !this.h.editor.isShowingAutocomplete()) {
       const meta = this.h.viewing ? this.h.metaForPath(this.h.viewing) : undefined;
@@ -142,6 +153,39 @@ export class SessionActions {
     const queued = await this.takeQueue(session);
     this.h.send({ type: "abort", session });
     this.restoreQueued(queued, "aborted", "\n\n");
+  }
+
+  /**
+   * Ticket 222: deliver the queued messages now instead of at the next step. pi has no urgent delivery, so this is an abort that
+   * hands the texts straight back: take them out of pi's queue (so nothing is delivered twice), stop the run the way esc does (the
+   * partial answer stays, a running tool is killed), then send them together as the next prompt. If the run already moved on and
+   * the queue is empty there is nothing to do. If the abort or the send fails the texts go back in the editor, never lost.
+   */
+  private async sendQueuedNow(session: number): Promise<void> {
+    const queued = await this.takeQueue(session);
+    const view = this.h.viewing ? this.h.views.get(this.h.viewing) : undefined;
+    if (queued.length === 0) {
+      this.h.notify("nothing queued: it was already delivered");
+      return;
+    }
+    if (view) {
+      view.queue = [];
+    }
+    const text = queued.join("\n\n");
+    try {
+      await this.h.request({ type: "abort", session }, 15_000);
+    } catch (err) {
+      this.restoreQueued(queued, `could not stop the run (${errText(err)})`, "\n\n");
+      return;
+    }
+    this.h.notify(`stopped the running step - sending ${queued.length} queued message${queued.length === 1 ? "" : "s"}`);
+    if (!(await this.prompt(text))) {
+      // prompt() says why on screen; the text is not lost
+      if (this.h.editor.getText().trim() === "") {
+        this.h.editor.setText(text);
+        this.h.tui.requestRender();
+      }
+    }
   }
 
   /** Up in an empty box with messages queued: pull them back into the editor. */
@@ -662,8 +706,9 @@ export class SessionActions {
       images,
       sent: message || (images.length > 0 ? "(see the attached image)" : message),
       // Show the prompt now rather than when pi echoes it back. Slash lines may be handled by an
-      // extension without ever becoming a message, and a prompt sent mid-run is shown in the queue strip.
-      echo: !text.startsWith("/") && !meta?.streaming,
+      // extension without ever becoming a message, and a prompt sent mid-run (or while compacting: pi queues it then too)
+      // is shown in the queue strip, so an echo as well would show it twice.
+      echo: !text.startsWith("/") && !meta?.streaming && !meta?.compacting,
     };
   }
 

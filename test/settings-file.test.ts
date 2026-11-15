@@ -71,7 +71,7 @@ describe("the settings template", () => {
       warnNoPermissionSystem: true,
       permissionGrantLimit: DEFAULT_GRANT_LIMITS.perSession,
       permissionGrantDurations: [...DEFAULT_GRANT_DURATIONS],
-      sandbox: "off",
+      sandbox: "bwrap",
       sandboxWritable: [...DEFAULT_SANDBOX_WRITABLE],
     };
     assert.deepEqual(s, expected);

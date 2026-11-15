@@ -29,7 +29,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { buildInfo } from "./build-id.ts";
 import { explainMcpFailure } from "./mcp.ts";
 import { performanceReviewSeed } from "./session-commands.ts";
-import { DIALOG_METHODS, HISTORY_FILE, KEY_LOG, PROFILE } from "./config.ts";
+import { DIALOG_METHODS, HISTORY_FILE, KEY_LOG, LITELLM_CACHE_FILE, PROFILE } from "./config.ts";
 import { DaemonLink } from "./daemon-link.ts";
 import { buildLayouts } from "./layout.ts";
 
@@ -572,7 +572,7 @@ class Controller {
   }
 
   async loadLocal(): Promise<void> {
-    this.resourceNotice = summarizeFindings(collectFindings({ permissionSystem: loadSettings().settings.warnNoPermissionSystem !== false, startup: [] })) ?? "";
+    this.resourceNotice = summarizeFindings(collectFindings({ permissionSystem: loadSettings().settings.warnNoPermissionSystem !== false, startup: [], litellmCacheFile: LITELLM_CACHE_FILE })) ?? "";
     try {
       const infos = await SessionManager.listAll();
       this.local.clear();
