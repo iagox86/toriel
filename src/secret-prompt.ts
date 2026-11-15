@@ -64,7 +64,6 @@ export class SecretPrompt {
     }
     const text = data.startsWith(PASTE_START) ? data.slice(PASTE_START.length).replace(PASTE_END, "") : data;
     // printable text only: control sequences (arrows, function keys) and newlines are not part of a secret
-    // biome-ignore lint/suspicious/noControlCharactersInRegex: that is the point
     if (text !== "" && !/[\x00-\x1f\x7f]/.test(text.replace(/[\r\n]+$/, ""))) {
       this.buffer += text.replace(/[\r\n]+$/, "");
     }

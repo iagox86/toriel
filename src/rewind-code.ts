@@ -44,7 +44,8 @@ export function summarize(plan: CodePlan | undefined): CodeSummary | undefined {
 
 /**
  * Put the files back as they were when the message at `sinceMs` was sent. `dropRecords` also forgets the journal from then on, for a
- * rewind that cut the conversation away (with "code only" the conversation, and so the records, stay).
+ * rewind that cut the conversation away (with "code only" the conversation, and so the records, stay) - but only when every file went
+ * back: a file left behind keeps its records and blobs, the only copy of what it held.
  */
 export function restoreCode(sessionFile: string, sinceMs: number, dropRecords: boolean, root?: string): RestoreResult & { plan: CodePlan } {
   const dir = historyDirFor(sessionFile, root);
@@ -53,7 +54,7 @@ export function restoreCode(sessionFile: string, sinceMs: number, dropRecords: b
   }
   const plan = planRestore(dir, sinceMs);
   const result = applyRestore(dir, plan);
-  if (dropRecords) {
+  if (dropRecords && result.left.length === 0) {
     pruneFrom(dir, sinceMs);
   }
   return { ...result, plan };

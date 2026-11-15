@@ -84,4 +84,12 @@ describe("daemon: rewind with the code", () => {
     assert.equal(r.code.left.length, 1);
     assert.equal(fs.readFileSync(t.target, "utf8"), "the user edited this afterwards\n");
   });
+
+  it("keeps the records of a file that was left alone, so nothing is lost with it", async () => {
+    const t = await twoTurns();
+    fs.writeFileSync(t.target, "the user edited this afterwards\n");
+    await t.c.request({ type: "rewind", session: t.sessionId, entryId: t.second.id, code: true });
+    assert.equal(readChanges(t.journal).length, 1, "the journal is not pruned after a partial restore");
+    assert.ok(fs.readdirSync(path.join(t.journal, "blobs")).length >= 1);
+  });
 });

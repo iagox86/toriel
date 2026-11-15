@@ -203,6 +203,8 @@ export interface FilePlan {
   status: FileStatus;
   /** What the file held then (what a restore puts back). */
   then: FileState;
+  /** What it held when the plan was made: a restore checks it still does just before writing. */
+  now: FileState;
   /** Lines the agent's edits since then added and removed (counted from the file as it was then to the file as it is now). */
   added: number;
   removed: number;
@@ -242,7 +244,8 @@ export function planRestore(dir: string, sinceMs: number): CodePlan {
       status = "too-big";
     } else if (sameState(now, then)) {
       status = "same";
-    } else if (last.after !== undefined && !sameState(now, last.after)) {
+    } else if (last.after === undefined || !sameState(now, last.after)) {
+      // no record of what the agent left (its result never arrived): nothing says the file is still the agent's, so it is not overwritten
       status = "changed-since";
     } else {
       status = "restore";
@@ -254,7 +257,7 @@ export function planRestore(dir: string, sinceMs: number): CodePlan {
         // the blob is gone: the counts stay 0 and the restore will say so
       }
     }
-    files.push({ path: file, status, then, ...counts });
+    files.push({ path: file, status, then, now, ...counts });
   }
   const restorable = files.filter((f) => f.status === "restore");
   return { files, restorable: restorable.length, added: restorable.reduce((n, f) => n + f.added, 0), removed: restorable.reduce((n, f) => n + f.removed, 0) };
@@ -266,7 +269,7 @@ export interface RestoreResult {
   left: Array<{ path: string; why: string }>;
 }
 
-/** Put the files of `plan` back as they were: restorable ones only, each checked again just before it is written. */
+/** Put the files of `plan` back as they were: restorable ones only, each checked again just before it is written (a file that is no longer as the plan saw it is left alone). */
 export function applyRestore(dir: string, plan: CodePlan): RestoreResult {
   const restored: string[] = [];
   const left: RestoreResult["left"] = [];
@@ -280,6 +283,11 @@ export function applyRestore(dir: string, plan: CodePlan): RestoreResult {
     }
     if (f.status === "too-big") {
       left.push({ path: f.path, why: "it is too big for the history to keep" });
+      continue;
+    }
+    const nowState = stateOf(dir, f.path, false) ?? { kind: "absent" as const };
+    if (!sameState(nowState, f.now)) {
+      left.push({ path: f.path, why: "it changed while the restore was being prepared, so it was not overwritten" });
       continue;
     }
     try {

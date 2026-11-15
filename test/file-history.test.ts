@@ -153,6 +153,31 @@ describe("planRestore and applyRestore", () => {
     assert.equal(fs.readFileSync(f, "utf8"), "the user typed this");
   });
 
+  it("a call whose result never arrived does not license an overwrite", () => {
+    const w = world();
+    const f = w.file("a.txt");
+    fs.writeFileSync(f, "orig");
+    recordBefore(w.dir, "c1", "edit", f, 5000); // no recordAfter: the result was lost
+    fs.writeFileSync(f, "the user typed this");
+    const plan = planRestore(w.dir, 4000);
+    assert.equal(plan.files[0]?.status, "changed-since");
+    assert.deepEqual(applyRestore(w.dir, plan).restored, []);
+    assert.equal(fs.readFileSync(f, "utf8"), "the user typed this");
+  });
+
+  it("re-checks a file just before writing it", () => {
+    const w = world();
+    const f = w.file("a.txt");
+    fs.writeFileSync(f, "orig");
+    w.edit("c1", f, "agent", 5000);
+    const plan = planRestore(w.dir, 4000);
+    fs.writeFileSync(f, "changed after the plan was made");
+    const result = applyRestore(w.dir, plan);
+    assert.deepEqual(result.restored, []);
+    assert.match(result.left[0]?.why ?? "", /changed while the restore was being prepared/);
+    assert.equal(fs.readFileSync(f, "utf8"), "changed after the plan was made");
+  });
+
   it("a file already as it was is no change; a file too big to keep is left alone", () => {
     const w = world();
     const f = w.file("a.txt");
