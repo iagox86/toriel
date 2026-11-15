@@ -255,7 +255,8 @@ export function dialogLines(d: DialogRequest, index: number, width: number, reas
   });
   if (typeof d.toriel?.denyAt === "number") {
     // ticket 220: a clock time, not a ticking count, so the panel needs no redraw timer; it goes away with the dialog
-    out.push(...wrapRows(`toriel: denied automatically at ${fmtClock(d.toriel.denyAt, new Date())} if nobody answers (deny-after)`, width, " -- ", "    ").map(dim));
+    const what = (d.title ?? "").startsWith("Permission Required") ? "denied" : "dismissed";
+    out.push(...wrapRows(`toriel: ${what} automatically at ${fmtClock(d.toriel.denyAt, new Date())} if nobody answers (deny-after)`, width, " -- ", "    ").map(dim));
   }
   if (d.toriel?.protectedAsk) {
     out.push(...wrapRows("toriel: grants never cover the permission grants file or pi's own configuration, so this is always asked", width, " -- ", "    ").map(dim));

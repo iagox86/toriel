@@ -325,6 +325,18 @@ describe("daemon: permission grants", () => {
       await denied(c);
     });
 
+    it("dismisses a question nobody answered in time (ticket 227), with its own notice", async () => {
+      const h = await start({ TORIEL_DENY_MIN_MS: "500" });
+      const { c, session } = await savedSession(h);
+      await c.request({ type: "deny_after", session, after: "1 second" });
+      await c.request({ type: "prompt", session, message: "/ask-question" });
+      const q = await c.waitFor((m) => m.type === "ui_request" && m.request?.id === "question-1");
+      assert.equal(typeof q.request.toriel?.denyAt, "number");
+      const notice = await c.waitFor((m) => m.type === "notice" && /^dismissed automatically/.test(m.text));
+      assert.match(notice.text, /^dismissed automatically: nobody answered in 1s: Ship it now\?/);
+      assert.equal(sawDenied(c), false, "it was not a permission prompt");
+    });
+
     it("an answer in time cancels it, and off or a bad duration is handled", async () => {
       const h = await start({ FAKE_PI_ASK_COMMAND: "npm test", TORIEL_DENY_MIN_MS: "500" });
       const { c, session } = await savedSession(h);
@@ -349,6 +361,16 @@ describe("daemon: permission grants", () => {
       const link = await h.connect();
       await link.request({ type: "permission_check", uuid, grants, value, ...(rule ? { rule } : {}) });
     };
+
+    it("never answers a question for the user, even one that offers Yes and No (ticket 227)", async () => {
+      const h = await start();
+      const { c, session } = await savedSession(h);
+      await c.request({ type: "auto_mode", session, on: true });
+      await c.request({ type: "prompt", session, message: "/ask-question" });
+      await c.waitFor((m) => m.type === "ui_request" && m.request?.id === "question-1");
+      await new Promise((r) => setTimeout(r, 300));
+      assert.equal(c.messages.some((m) => m.type === "notice" && /allowed by auto mode|auto mode still asks/.test(m.text)), false);
+    });
 
     it("answers an ordinary prompt itself and says so, durably, with what it allowed", async () => {
       const h = await start({ FAKE_PI_ASK_COMMAND: "npm test" });

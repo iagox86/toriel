@@ -21,7 +21,7 @@ import { sessionIdOfFile } from "./session-file.ts";
 import { mayDelegate, type SubagentLimits } from "./subagents.ts";
 import { profileOfSession, saveSessionAgent } from "./session-agents.ts";
 import { log } from "./log.ts";
-import { type AskRule, AUTO_ANSWERED_NOTICE, AUTO_DENIED_NOTICE, encodeLine, GRANT_ANSWERED_NOTICE, type UsageReport } from "./shared.ts";
+import { type AskRule, AUTO_ANSWERED_NOTICE, AUTO_DENIED_NOTICE, AUTO_DISMISSED_NOTICE, encodeLine, GRANT_ANSWERED_NOTICE, type UsageReport } from "./shared.ts";
 import { floorReason, isPermissionPrompt, promptSubject } from "./auto-mode.ts";
 import { type ChildConfig, loadSettings, resolveChildConfig, settingsMtime } from "./settings.ts";
 import { fmtDuration, parseDurationText } from "./when.ts";
@@ -559,7 +559,7 @@ export class ChildManager {
     return true;
   }
 
-  /** How long a permission prompt of this session may wait before it is denied (ticket 88): its own setting, else the global one; undefined = for ever. */
+  /** How long a permission prompt or question of this session may wait before it is denied or dismissed (ticket 88): its own setting, else the global one; undefined = for ever. */
   denyAfterMs(s: DaemonSession): number | undefined {
     if (s.denyAfter !== undefined) {
       return s.denyAfter === null ? undefined : s.denyAfter;
@@ -572,7 +572,8 @@ export class ChildManager {
   /**
    * Ticket 88: opt-in, never the default. A permission prompt still unanswered after the session's deny-after is answered "No" here,
    * the same way a user's No is, and a durable notice says it was automatic (and why), so a session nobody watches fails the action
-   * instead of waiting for ever. Only permission prompts: another extension's picker is left alone.
+   * instead of waiting for ever. A question an agent put to the user (the ask-the-user tool's dialogs, any other extension's picker)
+   * is dismissed the same way, as if the user had cancelled it, so a run nobody watches goes on without an answer.
    */
   private armDeny(s: DaemonSession, request: Record<string, unknown>, value: string | undefined, ms: number | undefined): void {
     clearTimeout(s.denyTimer);
@@ -585,11 +586,13 @@ export class ChildManager {
       if (!s.pendingDialog || s.lastDialog !== request || !stdin || typeof request.id !== "string") {
         return;
       }
-      stdin.write(encodeLine({ type: "extension_ui_response", id: request.id, value: "No" }));
-      const what = promptSubject(typeof request.title === "string" ? request.title : "", value).slice(0, 160) || "a prompt";
-      log(`prompt denied after ${fmtDuration(ms)} without an answer for session ${s.sessionId}: ${what}`);
+      const permission = isPermissionPrompt(request);
+      stdin.write(encodeLine(permission ? { type: "extension_ui_response", id: request.id, value: "No" } : { type: "extension_ui_response", id: request.id, cancelled: true }));
+      const title = typeof request.title === "string" ? request.title : "";
+      const what = (permission ? promptSubject(title, value) : (title.split("\n")[0] ?? "")).slice(0, 160) || (permission ? "a prompt" : "a question");
+      log(`${permission ? "prompt denied" : "question dismissed"} after ${fmtDuration(ms)} without an answer for session ${s.sessionId}: ${what}`);
       this.clearDialog(s);
-      this.hub.broadcast({ type: "notice", session: s.id, text: `${AUTO_DENIED_NOTICE}: nobody answered in ${fmtDuration(ms)}: ${what}`, durable: true });
+      this.hub.broadcast({ type: "notice", session: s.id, text: `${permission ? AUTO_DENIED_NOTICE : AUTO_DISMISSED_NOTICE}: nobody answered in ${fmtDuration(ms)}: ${what}`, durable: true });
     }, ms);
     s.denyTimer.unref();
   }
@@ -636,7 +639,7 @@ export class ChildManager {
           return; // answered by auto mode
         }
         // ticket 220: the dialog says when it will be denied, so the wait is not silent; the same request is kept as lastDialog (a reattach sends it again)
-        const denyMs = isPermissionPrompt(request) ? this.denyAfterMs(s) : undefined;
+        const denyMs = this.denyAfterMs(s);
         shown = denyMs === undefined ? request : { ...request, toriel: { ...(request.toriel as object | undefined), denyAt: Date.now() + denyMs } };
         s.pendingDialog = true;
         s.lastDialog = shown;

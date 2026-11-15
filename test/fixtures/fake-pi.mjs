@@ -417,6 +417,11 @@ async function handle(cmd) {
           options: ["Yes", `Yes, allow bash "${command}" for this session`, "No", "No, provide reason"],
         });
       }
+      if (cmd.message.trim() === "/ask-question") {
+        // a question an agent puts to the user (the ask-the-user tool's dialog): a select that happens to offer Yes and No, but is no permission prompt
+        ok(cmd.id, "prompt", { disposition: "started" });
+        return out({ type: "extension_ui_request", id: "question-1", method: "select", title: "Ship it now?", options: ["Yes", "No", "Type something else"] });
+      }
       if (cmd.message.trim() === "/mcp") {
         // like pi's extension command: answered as a notice, never entering the conversation
         ok(cmd.id, "prompt", { disposition: "started" });

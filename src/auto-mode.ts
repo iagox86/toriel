@@ -7,10 +7,15 @@
 import { touchesProtected } from "./daemon-permissions.ts";
 import type { AskRule } from "./shared.ts";
 
-/** Whether `request` is a permission prompt (pi-permission-system's "Yes / ... / No" select), as opposed to another extension's select. */
+/**
+ * Whether `request` is a permission prompt (pi-permission-system's "Permission Required" select with a plain Yes and No), as opposed
+ * to another extension's select. The title matters: a question an agent puts to the user (the ask-the-user tool) can offer "Yes" and
+ * "No" too, and auto mode must never answer that one for the user.
+ */
 export function isPermissionPrompt(request: Record<string, unknown>): boolean {
   const options = Array.isArray(request.options) ? request.options : [];
-  return request.method === "select" && typeof request.id === "string" && options.includes("Yes") && options.includes("No");
+  const title = typeof request.title === "string" ? request.title : "";
+  return request.method === "select" && typeof request.id === "string" && title.startsWith("Permission Required") && options.includes("Yes") && options.includes("No");
 }
 
 /** Where tools and shells split one command into several: `&&`, `||`, `;`, `|`, `&`, a newline, a backtick, `(`, `)` and `$(`. */
