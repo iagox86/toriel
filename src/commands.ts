@@ -444,6 +444,29 @@ export const SESSION_COMMANDS = [
     },
   },
   {
+    name: "provider",
+    description: "list the model providers pi knows, add an OpenAI-compatible endpoint (asks for its key, fetches its models), or remove one",
+    help: "Providers are pi's: the `providers` of ~/.pi/agent/models.json. This edits that file for you (the original is kept as models.json.bak-<time>, and it stays owner-only), then reloads this session so its /model list shows the change. Other open sessions pick it up when reloaded.\n\nActions:\n  list                       every provider in models.json with its URL, how its key is held (typed in, environment variable or command) and how many models it has. The keys themselves are never shown\n  add <name> <base-url>      add an endpoint. Asks for its API key (typed or pasted, shown as dots, kept in models.json), then asks the endpoint what it serves (GET <base-url>/models) and writes those models. --key-env VAR reads the key from an environment variable instead (written as $VAR, so the secret is not in the file; the variable has to be in the environment the daemon was started from, so `toriel kill-server` after exporting it), --no-key is for an endpoint that takes none, --no-models skips asking, --api picks the API (default openai-completions)\n  remove <name>              take a provider out of models.json (asks first)\n\nA name containing litellm or bifrost marks the endpoint as that kind of gateway, and /doctor then compares its model numbers (context window, output limit, cost) with what the gateway says.\n\nExamples:\n  /provider list\n  /provider add home-ollama http://server2:11434/v1 --no-key\n  /provider add my-litellm https://litellm.example.com/v1\n  /provider add work-bifrost https://bifrost.example.com/openai --key-env BIFROST_KEY\n  /provider remove home-ollama",
+    build: (cmd) => {
+      cmd
+        .argument("[action]", "list (default), add or remove")
+        .argument("[name]", "the provider's name (add: the name to give it)")
+        .argument("[base-url]", "add: the endpoint's base URL, e.g. https://host/v1")
+        .option("--key-env <var>", "add: read the API key from this environment variable instead of asking")
+        .option("--no-key", "add: the endpoint takes no key")
+        .option("--no-models", "add: do not ask the endpoint for its models")
+        .option("--api <api>", "add: openai-completions (default), openai-responses, anthropic-messages or google-generative-ai");
+    },
+  },
+  {
+    name: "login",
+    description: "set the API key of a model provider (asks for it, shown as dots)",
+    help: "Stores an API key for a provider in pi's models.json (the original is kept as models.json.bak-<time>) and reloads this session. The key is typed or pasted into a masked prompt: it is not shown, and it does not go into the history, the transcript or the daemon's log. A provider that is not in models.json yet is created as just that key, which is how a built-in provider (anthropic, openai, openrouter, ...) gets one; /provider add adds a whole endpoint. --key-env VAR reads the key from an environment variable instead (the secret then stays out of the file).\n\nThis is for API keys. A provider that signs in with OAuth is not set up here: pi's own login for it is not reachable from toriel.\n\nExamples:\n  /login openrouter\n  /login my-litellm\n  /login openai --key-env OPENAI_API_KEY",
+    build: (cmd) => {
+      cmd.argument("[provider]", "the provider's name (see /provider list); leave out to list them").option("--key-env <var>", "read the key from this environment variable instead of asking");
+    },
+  },
+  {
     name: "fork",
     description: "continue in a copy of this session, listed right below it",
     help: "Makes a copy of this session's file and continues in the copy; the original is untouched. The copy knows it is a fork, but is an ordinary session in the list (not nested). With a prompt the copy starts working on it at once.\n\nA session that is busy can be forked too: the copy has everything up to the last finished step (a tool call still running is left out), and the original carries on untouched. The copy starts with no permission grants unless you pass --keep-permissions, which copies the ones that are active now (with their expiry times).\n\nExamples:\n  /fork\n  /fork --keep-permissions\n  /fork -n \"Try the other approach\" --no-switch\n  /fork -- -v is the flag I meant",
