@@ -706,8 +706,9 @@ export class SessionActions {
       images,
       sent: message || (images.length > 0 ? "(see the attached image)" : message),
       // Show the prompt now rather than when pi echoes it back. Slash lines may be handled by an
-      // extension without ever becoming a message, and a prompt sent mid-run is shown in the queue strip.
-      echo: !text.startsWith("/") && !meta?.streaming,
+      // extension without ever becoming a message, and a prompt sent mid-run (or while compacting: pi queues it then too)
+      // is shown in the queue strip, so an echo as well would show it twice.
+      echo: !text.startsWith("/") && !meta?.streaming && !meta?.compacting,
     };
   }
 
