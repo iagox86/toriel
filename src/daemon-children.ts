@@ -284,7 +284,7 @@ export class ChildManager {
     }
     s.child = undefined;
     s.attachedTo = undefined;
-    s.pendingDialog = false;
+    this.clearDialog(s); // was a bare pendingDialog = false, which left a deny-after timer armed on the stopped session
     s.streaming = false;
     s.compacting = false;
     this.dropBridge(s, "the session was stopped");
@@ -379,6 +379,7 @@ export class ChildManager {
     s.dead = true;
     s.streaming = false;
     s.compacting = false;
+    this.clearDialog(s); // a dead child cannot answer its open prompt, and the deny-after timer must not fire on it (review of batch 7)
     this.dropBridge(s, reason);
     this.onStopped?.(s, crash);
   }

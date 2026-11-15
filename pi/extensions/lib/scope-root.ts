@@ -84,6 +84,9 @@ const PAYLOAD_RUNNER = /(?<![\w.-])(?:sh|bash|zsh|dash|ksh|fish|python[\d.]*|nod
 /** Absolute paths, `~` and `$VAR` paths in a text; a `//` of a URL or a word-internal slash does not start one. */
 const PATH_LIKE = /(?<![\w/.:$~{}-])(?:(?:~|\$\{?\w+\}?)(?:\/[^\s"'`,;)\]}]*)?|\/[\w.~-][^\s"'`,;)\]}]*)/g;
 
+/** A path that walks up out of the cwd (`../x`, `sub/../../x`): not caught by PATH_LIKE (no leading `/`, `~` or `$`), but the bash session's cwd is the scope root, so it leaves it. */
+const RELATIVE_UP = /(?<![\w.])\.\.\/[^\s"'`,;)\]}]*/;
+
 /** Where scratch files are fine in every scope (the sandbox gives a session its own /tmp). */
 const SCRATCH = /^(?:\/tmp|\/var\/tmp)(?:\/|$)|^\/dev\/(?:null|stdout|stderr|stdin|tty)$/;
 
@@ -99,7 +102,12 @@ export function payloadEscape(command: string, root: string, home: string = proc
   if (at < 0) {
     return undefined;
   }
-  for (const m of command.slice(at).matchAll(PATH_LIKE)) {
+  const rest = command.slice(at);
+  const up = RELATIVE_UP.exec(rest);
+  if (up !== null) {
+    return up[0]; // `python3 -c "open('../evil','w')"` resolves against the session cwd, which is the root
+  }
+  for (const m of rest.matchAll(PATH_LIKE)) {
     const raw = m[0];
     const expanded = /^(?:~|\$\{?HOME\}?)(?=\/|$)/.test(raw) ? raw.replace(/^(?:~|\$\{?HOME\}?)/, home) : raw;
     if (expanded.startsWith("$") || (expanded.startsWith("~") && !expanded.startsWith("~/"))) {

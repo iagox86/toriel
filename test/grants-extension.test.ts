@@ -236,6 +236,8 @@ describe("scope link", () => {
         `ruby --eval "File.write('/opt/x', 'y')"`,
         `cd sub && python3 -c "open('/etc/x','w')"`,
         `python3 -c "open('${W}/../outside','w')"`,
+        `python3 -c "open('../evil','w')"`,
+        `cd sub && python3 -c "open('../../evil','w')"`,
         `python3 -c "open('$OUT/x','w')"`,
         `python3 -c "open('${W}-evil/x','w')"`,
       ]) {
