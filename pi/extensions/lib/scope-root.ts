@@ -123,3 +123,84 @@ export function payloadEscape(command: string, root: string, home: string = proc
   }
   return undefined;
 }
+
+/** Resolve a write target the way the file would be reached: `~` expanded, relative to `cwd`, every existing component followed through symlinks, `..` applied to the REAL parent. */
+export function resolveTarget(raw: string, cwd: string, home: string = process.env.HOME ?? "", realpath: (p: string) => string = fs.realpathSync): string {
+  const expanded = raw === "~" || raw.startsWith("~/") ? home + raw.slice(1) : raw;
+  // The naive way (path.resolve first, then realpath the nearest existing ancestor) normalizes `..` lexically, but the kernel applies
+  // `..` to the real directory, so `root/link/../x` (link -> outside) is root/x lexically and outside's parent / x really. Walk the
+  // segments on the real filesystem instead: realpath every component that exists, apply `..` to the realpath'd parent, and keep the
+  // segments below the deepest existing one as the not-yet-created tail.
+  const rawAbs = path.isAbsolute(expanded) ? expanded : `${cwd}/${expanded}`;
+  const segs = rawAbs.split(path.sep).filter((s) => s !== "" && s !== ".");
+  let cur: string;
+  try {
+    cur = realpath(path.parse(rawAbs).root);
+  } catch {
+    cur = path.parse(rawAbs).root;
+  }
+  const tail: string[] = [];
+  for (const seg of segs) {
+    if (seg === "..") {
+      // below a not-yet-existing component the fs behaviour is moot (nothing was created there), so `..` pops lexically
+      if (tail.length > 0) {
+        tail.pop();
+      } else {
+        cur = path.dirname(cur);
+      }
+      continue;
+    }
+    const next = `${cur}${path.sep}${seg}`;
+    try {
+      cur = realpath(next); // resolves the whole chain when it exists, so the tail restarts from the real thing
+      tail.length = 0;
+    } catch (err) {
+      if (!(err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT")) {
+        throw err; // EACCES and friends: fail closed, the veto turns this into a block
+      }
+      tail.push(seg);
+    }
+  }
+  return tail.length > 0 ? `${cur}${path.sep}${tail.join(path.sep)}` : cur;
+}
+
+/** Ticket 219: the resolved path of a write/edit target that is not inside the scope root (undefined when it is inside, or is scratch). */
+export function writeEscape(root: string, raw: string, cwd: string, home: string = process.env.HOME ?? "", realpath: (p: string) => string = fs.realpathSync): string | undefined {
+  const target = resolveTarget(raw, cwd, home, realpath);
+  if (SCRATCH.test(target) && !SCRATCH.test(root)) {
+    return undefined;
+  }
+  return isInside(root, target) ? undefined : target;
+}
+
+/**
+ * Ticket 219: the scope boundary as a veto on a tool call, whatever the permission rules say (the authorizer link only sees asks, so an
+ * allow rule skipped it). Deny mode only; ask mode leaves the decision to the dialog. Returns a reason to block, or undefined to let the
+ * call go on to the permission system. Total: never throws; an unexpected error in deny mode blocks a write rather than letting it by.
+ */
+export function vetoVerdict(scope: Scope, toolName: string, input: unknown, cwd: string): string | undefined {
+  if (scope.kind === "off" || scope.mode !== "deny") {
+    return undefined;
+  }
+  const writes = toolName === "write" || toolName === "edit";
+  try {
+    if (scope.kind === "invalid") {
+      return writes ? `scope guard: TORIEL_SCOPE_ROOT is set but unusable (${scope.why}); denying all writes. Fix the environment the daemon starts this session with.` : undefined;
+    }
+    const args = (input ?? {}) as { path?: unknown; command?: unknown };
+    if (toolName === "bash" && typeof args.command === "string") {
+      const escaped = payloadEscape(args.command, scope.root);
+      return escaped === undefined ? undefined : `scope guard: this command hands code to an interpreter that names ${escaped}, which is not inside this session's write scope ${scope.root} (TORIEL_SCOPE_ROOT). Put the code in a script file under ${scope.root} and run that, and keep what it writes under ${scope.root}.`;
+    }
+    if (writes) {
+      if (typeof args.path !== "string" || args.path === "") {
+        return `scope guard: cannot resolve a target for this ${toolName}; denying (scope root ${scope.root})`;
+      }
+      const escaped = writeEscape(scope.root, args.path, cwd);
+      return escaped === undefined ? undefined : `scope guard: ${escaped} is outside this session's write scope ${scope.root} (TORIEL_SCOPE_ROOT). Write only under ${scope.root}.`;
+    }
+    return undefined;
+  } catch {
+    return writes ? "scope guard: internal error evaluating this write; denying" : undefined;
+  }
+}
