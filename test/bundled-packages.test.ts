@@ -47,6 +47,18 @@ describe("packageState", () => {
     assert.equal(packageState(pkg(WEB), { agentDir, root }), "user", "even with toriel's copy gone");
   });
 
+  it("is the user's when the project's own pi settings list it (pi install -l), or it would load twice there", () => {
+    const project = path.join(dir, "project");
+    fs.mkdirSync(path.join(project, ".pi"), { recursive: true });
+    fs.writeFileSync(path.join(project, ".pi", "settings.json"), JSON.stringify({ packages: [{ source: "npm:pi-web-access", extensions: ["dist"] }] }));
+    assert.equal(packageState(pkg(WEB), { agentDir, root, cwd: project }), "user");
+    assert.equal(packageState(pkg(ASK), { agentDir, root, cwd: project }), "bundled");
+    assert.equal(packageState(pkg(WEB), { agentDir, root }), "bundled", "without the directory, the project's file is not looked at");
+    assert.equal(packageState(pkg(WEB), { agentDir, root, cwd: dir }), "bundled", "a project without the file lists nothing");
+    fs.writeFileSync(path.join(project, ".pi", "settings.json"), "not json");
+    assert.equal(packageState(pkg(WEB), { agentDir, root, cwd: project }), "bundled", "an unreadable file lists nothing");
+  });
+
   it("is off when the setting says so, and that outranks everything", () => {
     listed(WEB);
     assert.equal(packageState(pkg(WEB), { agentDir, root, off: [WEB] }), "off");

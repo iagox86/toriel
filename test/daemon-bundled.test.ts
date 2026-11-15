@@ -60,6 +60,17 @@ describe("daemon: bundled pi packages (ticket 230)", () => {
     assert.equal((flagged(argv, "--tools")[0] ?? "").includes("+web_search"), false, "its tools are the user's package's to offer");
   });
 
+  it("leaves out a package the project's own pi settings list", async () => {
+    const w = world();
+    harness = await startDaemon({ TORIEL_BUNDLED_ROOT: w.bundledRoot, PI_CODING_AGENT_DIR: w.agentDir });
+    fs.mkdirSync(path.join(harness.dir, ".pi"), { recursive: true });
+    fs.writeFileSync(path.join(harness.dir, ".pi", "settings.json"), JSON.stringify({ packages: ["npm:pi-hermes-memory"] }));
+    const argv = await argvOf(harness);
+    const packages = flagged(argv, "-e").filter((p) => p.startsWith(w.bundledRoot));
+    assert.equal(packages.some((p) => p.endsWith("pi-hermes-memory")), false);
+    assert.equal(packages.length, BUNDLED_NAMES.length - 1);
+  });
+
   it("gives a minimal profile none of them", async () => {
     const w = world();
     harness = await startDaemon({ TORIEL_BUNDLED_ROOT: w.bundledRoot, PI_CODING_AGENT_DIR: w.agentDir, TORIEL_AGENTS_DIR: path.join(os.tmpdir(), "toriel-no-user-agents") });

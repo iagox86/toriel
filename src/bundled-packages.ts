@@ -7,7 +7,7 @@
 // `bundledPackagesOff` turns a bundled one off for every session.
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { piPackageListed } from "./resources.ts";
+import { piPackageListed, projectPackageListed } from "./resources.ts";
 
 /** The directory the dependencies are installed in (toriel's own node_modules; `TORIEL_BUNDLED_ROOT` points tests elsewhere). */
 export const NODE_MODULES_DIR = process.env.TORIEL_BUNDLED_ROOT ?? join(import.meta.dirname, "..", "node_modules");
@@ -46,6 +46,8 @@ export type PackageState =
 export interface BundleOptions {
   /** Pi's config directory, where settings.json lists the user's own packages. */
   agentDir: string;
+  /** The session's working directory: pi also reads `<cwd>/.pi/settings.json` for packages installed with `pi install -l`, and a package listed there is loaded too. */
+  cwd?: string;
   /** Names switched off in the toriel settings. */
   off?: readonly string[];
   root?: string;
@@ -56,7 +58,7 @@ export function packageState(pkg: BundledPackage, opts: BundleOptions): PackageS
   if (opts.off?.includes(pkg.name)) {
     return "off";
   }
-  if (piPackageListed(opts.agentDir, pkg.name) === true) {
+  if (piPackageListed(opts.agentDir, pkg.name) === true || (opts.cwd !== undefined && projectPackageListed(opts.cwd, pkg.name))) {
     return "user";
   }
   return existsSync(join(opts.root ?? NODE_MODULES_DIR, pkg.name)) ? "bundled" : "missing";

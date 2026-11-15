@@ -211,7 +211,7 @@ export class ChildManager {
     }
     args.push(...resourceArgs({ skills: !agent?.minimal }));
     // the third-party pi packages toriel carries (ticket 230), unless the user has installed one themselves or switched it off
-    const bundle = { agentDir: piAgentDir(), off: loadSettings().settings.bundledPackagesOff };
+    const bundle = { agentDir: piAgentDir(), cwd: s.cwd, off: loadSettings().settings.bundledPackagesOff };
     args.push(...bundledArgs(agent, bundle));
     // A resume restores the tool list recorded in the transcript, so tools of extensions
     // installed since never reach the model. +name entries join them to that loadout. A
