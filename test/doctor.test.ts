@@ -134,6 +134,35 @@ describe("doctor checks", () => {
     assert.match(check?.note ?? "", /toriel doctor/);
   });
 
+  it("reads what the daemon learned at start instead of asking the proxy, and only for the proxy models.json names (ticket 221)", () => {
+    const s = litellmScenario();
+    const { probeLitellm: _drop, ...noProbe } = s.opts;
+    const cacheFile = path.join(s.agentDir, "litellm-routes.json");
+    const write = (c: object) => fs.writeFileSync(cacheFile, JSON.stringify(c));
+    const routes = { "local-model": { contextWindow: 262144, maxTokens: 65536 } };
+    const withCache = { ...noProbe, litellmCacheFile: cacheFile };
+    // no cache: nothing found, shown as skipped
+    assert.deepEqual(collectFindings(withCache).filter((f) => f.id === "litellm-models"), []);
+    assert.equal(runDoctor(withCache).find((c) => c.id === "litellm-models")?.state, "skipped");
+    // a cache for this proxy: the same finding the CLI would give, and the fix still rewrites the file
+    write({ checkedAt: Date.now(), baseUrl: "https://l.example/v1", routes });
+    const found = collectFindings(withCache).filter((f) => f.id === "litellm-models");
+    assert.equal(found.length, 1);
+    assert.match(found[0]?.message ?? "", /local-model: contextWindow 122880 -> 262144/);
+    assert.equal(runDoctor(withCache).find((c) => c.id === "litellm-models")?.state, "problem");
+    // a cache that asked a different proxy says nothing about this one
+    write({ checkedAt: Date.now(), baseUrl: "https://other.example/v1", routes });
+    assert.deepEqual(collectFindings(withCache).filter((f) => f.id === "litellm-models"), []);
+    assert.equal(runDoctor(withCache).find((c) => c.id === "litellm-models")?.state, "skipped");
+    // matching numbers: ok, with the time it was asked; an unreadable cache is no cache
+    write({ checkedAt: Date.now(), baseUrl: "https://l.example/v1", routes: { "local-model": { contextWindow: 122880, maxTokens: 65536 } } });
+    const ok = runDoctor(withCache).find((c) => c.id === "litellm-models");
+    assert.equal(ok?.state, "ok");
+    assert.match(ok?.note ?? "", /when the daemon started/);
+    fs.writeFileSync(cacheFile, "not json");
+    assert.deepEqual(collectFindings(withCache).filter((f) => f.id === "litellm-models"), []);
+  });
+
   it("only ever reports findings the catalog knows, and the catalog has no dead entries", () => {
     const scenarios: DoctorOptions[] = [
       { ...setup({ noPiDir: true, noResources: true, stale: false, noCli: true, noInhibit: true, settings: '{"bogus":1}' }).opts, startup: ["node is too old"] },

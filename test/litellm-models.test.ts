@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 import { spawn } from "node:child_process";
-import { applyDrift, diffRoutes, probeLitellm, readLitellmEntries, resolveApiKey, routeInfo } from "../src/litellm-models.ts";
+import { applyDrift, checkLitellmAtStart, diffRoutes, probeLitellm, probeLitellmAsync, readLitellmEntries, readRoutesCache, resolveApiKey, routeInfo } from "../src/litellm-models.ts";
 
 describe("routeInfo: litellm's /model/info row in pi's units", () => {
   it("maps tokens and per-token cost to per-million", () => {
@@ -73,6 +73,62 @@ describe("readLitellmEntries / resolveApiKey", () => {
   });
 });
 
+describe("checkLitellmAtStart: the daemon asks once and keeps the answer (ticket 221)", () => {
+  const setup = (models: unknown) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-litellm-start-"));
+    if (models !== undefined) {
+      fs.writeFileSync(path.join(dir, "models.json"), JSON.stringify({ providers: { litellm: { baseUrl: "https://l.example/v1", apiKey: "sk-secret", models } } }));
+    }
+    return { dir, cache: path.join(dir, "state", "litellm-routes.json") };
+  };
+
+  it("writes the routes and the proxy it asked, never the credential", async () => {
+    const s = setup([{ id: "a" }]);
+    try {
+      let asked: unknown;
+      const wrote = await checkLitellmAtStart(
+        s.dir,
+        s.cache,
+        async (t) => {
+          asked = t;
+          return { routes: { a: { contextWindow: 5 } } };
+        },
+        1234,
+      );
+      assert.equal(wrote, true);
+      assert.deepEqual(asked, { baseUrl: "https://l.example/v1", apiKey: "sk-secret" });
+      assert.deepEqual(readRoutesCache(s.cache), { checkedAt: 1234, baseUrl: "https://l.example/v1", routes: { a: { contextWindow: 5 } } });
+      assert.doesNotMatch(fs.readFileSync(s.cache, "utf8"), /sk-secret/);
+    } finally {
+      fs.rmSync(s.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("stays silent and writes nothing without a litellm provider, or when the proxy cannot be asked", async () => {
+    const none = setup(undefined);
+    const down = setup([{ id: "a" }]);
+    try {
+      let probed = false;
+      const probe = async () => {
+        probed = true;
+        return { routes: {} };
+      };
+      assert.equal(await checkLitellmAtStart(none.dir, none.cache, probe), false);
+      assert.equal(probed, false, "no provider: the network is not touched");
+      assert.equal(await checkLitellmAtStart(down.dir, down.cache, async () => "HTTP 401"), false);
+      assert.equal(fs.existsSync(none.cache) || fs.existsSync(down.cache), false);
+    } finally {
+      fs.rmSync(none.dir, { recursive: true, force: true });
+      fs.rmSync(down.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("an unreadable or missing cache reads as none", () => {
+    assert.equal(readRoutesCache(undefined), undefined);
+    assert.equal(readRoutesCache("/nonexistent/litellm-routes.json"), undefined);
+  });
+});
+
 describe("probeLitellm against a real (child-process) server", () => {
   /** A litellm stand-in in its own process (the probe blocks this one): 401 without the bearer, /model/info with it. */
   async function serve(): Promise<{ url: string; stop(): void }> {
@@ -90,6 +146,22 @@ describe("probeLitellm against a real (child-process) server", () => {
     const port = await new Promise<string>((resolve) => child.stdout.once("data", (d) => resolve(String(d).trim())));
     return { url: `http://127.0.0.1:${port}/v1`, stop: () => child.kill() };
   }
+
+  it("asks the same question without blocking, a !command credential included (ticket 221)", async () => {
+    const server = await serve();
+    try {
+      const ticks: number[] = [];
+      const timer = setInterval(() => ticks.push(Date.now()), 5);
+      const ok = await probeLitellmAsync({ baseUrl: server.url, apiKey: "!printf sk-test" });
+      clearInterval(timer);
+      assert.deepEqual(ok, { routes: { "local-model": { contextWindow: 262144, maxTokens: 65536, cost: { input: 1 } }, "no-info": {} } });
+      assert.ok(ticks.length > 3, "the event loop kept running while the child asked");
+      assert.equal(await probeLitellmAsync({ baseUrl: server.url, apiKey: "wrong" }), "HTTP 401");
+      assert.equal(typeof (await probeLitellmAsync({ baseUrl: "http://127.0.0.1:1/v1", apiKey: "x" })), "string");
+    } finally {
+      server.stop();
+    }
+  });
 
   it("sends the credential as a bearer token, reads the routes, and reports why when it cannot", async () => {
     const server = await serve();

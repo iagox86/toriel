@@ -5,9 +5,10 @@
 // Caveat, said in the finding too: litellm reports its OWN configured metadata for a route, not the backend's ground truth. If the
 // route points at a server whose real context differs from litellm's config, this copies litellm's belief - still one source of
 // truth instead of two.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { writeFileAtomic } from "./util.ts";
 
 /** The provider this check looks at: pi's models.json `providers` key for the litellm proxy. */
 export const LITELLM_PROVIDER = "litellm";
@@ -151,30 +152,111 @@ try {
 } catch (e) { process.stdout.write(JSON.stringify({ error: String(e && e.message || e) })); }
 `;
 
+/** The probe child's output as routes, or why not. */
+function parseReply(stdout: string): { routes: Record<string, RouteInfo> } | string {
+  const body = JSON.parse(stdout) as { error?: string; data?: Array<{ model_name?: unknown; model_info?: Record<string, unknown> }> };
+  if (typeof body.error === "string") {
+    return body.error;
+  }
+  if (!Array.isArray(body.data)) {
+    return "unexpected reply (no data list)";
+  }
+  const routes: Record<string, RouteInfo> = {};
+  for (const row of body.data) {
+    if (typeof row.model_name === "string") {
+      routes[row.model_name] = routeInfo(row.model_info);
+    }
+  }
+  return { routes };
+}
+
+const rootOf = (baseUrl: string): string => baseUrl.replace(/\/+$/, "").replace(/\/v1$/, "");
+const probeEnv = (root: string, key: string | undefined): NodeJS.ProcessEnv => ({ ...process.env, TORIEL_LITELLM_ROOT: root, ...(key !== undefined ? { TORIEL_LITELLM_KEY: key } : {}) });
+
 /** Ask the litellm proxy (once, a few seconds at most) what it believes about its routes. Never throws. */
 export const probeLitellm: LitellmProbe = ({ baseUrl, apiKey }) => {
   try {
-    const root = baseUrl.replace(/\/+$/, "").replace(/\/v1$/, "");
-    const key = resolveApiKey(apiKey, process.env);
-    const r = spawnSync(process.execPath, ["--input-type=module", "-e", FETCH_SCRIPT], { encoding: "utf8", timeout: 8000, env: { ...process.env, TORIEL_LITELLM_ROOT: root, ...(key !== undefined ? { TORIEL_LITELLM_KEY: key } : {}) } });
-    if (r.status !== 0) {
-      return "the request did not finish";
-    }
-    const body = JSON.parse(r.stdout) as { error?: string; data?: Array<{ model_name?: unknown; model_info?: Record<string, unknown> }> };
-    if (typeof body.error === "string") {
-      return body.error;
-    }
-    if (!Array.isArray(body.data)) {
-      return "unexpected reply (no data list)";
-    }
-    const routes: Record<string, RouteInfo> = {};
-    for (const row of body.data) {
-      if (typeof row.model_name === "string") {
-        routes[row.model_name] = routeInfo(row.model_info);
-      }
-    }
-    return { routes };
+    const r = spawnSync(process.execPath, ["--input-type=module", "-e", FETCH_SCRIPT], { encoding: "utf8", timeout: 8000, env: probeEnv(rootOf(baseUrl), resolveApiKey(apiKey, process.env)) });
+    return r.status !== 0 ? "the request did not finish" : parseReply(r.stdout);
   } catch (err) {
     return err instanceof Error ? err.message : String(err);
   }
 };
+
+/** Runs `command` and resolves its trimmed output, or undefined; never blocks the event loop. */
+function runAsync(file: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    try {
+      const child = spawn(file, args, { env, stdio: ["ignore", "pipe", "ignore"] });
+      let out = "";
+      child.stdout.setEncoding("utf8");
+      child.stdout.on("data", (d: string) => (out += d));
+      const timer = setTimeout(() => child.kill(), timeoutMs);
+      timer.unref();
+      child.on("error", () => {
+        clearTimeout(timer);
+        resolve(undefined);
+      });
+      child.on("close", (code) => {
+        clearTimeout(timer);
+        resolve(code === 0 ? out : undefined);
+      });
+    } catch {
+      resolve(undefined);
+    }
+  });
+}
+
+/** The same question as {@link probeLitellm} without blocking the caller (the daemon asks at start, ticket 221), `!command` credentials included. Never rejects. */
+export async function probeLitellmAsync({ baseUrl, apiKey }: { baseUrl: string; apiKey: string | undefined }): Promise<{ routes: Record<string, RouteInfo> } | string> {
+  try {
+    const key = apiKey?.startsWith("!") ? (await runAsync("sh", ["-c", apiKey.slice(1)], process.env, 5000))?.trim() || undefined : resolveApiKey(apiKey, process.env);
+    const out = await runAsync(process.execPath, ["--input-type=module", "-e", FETCH_SCRIPT], probeEnv(rootOf(baseUrl), key), 8000);
+    return out === undefined ? "the request did not finish" : parseReply(out);
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+}
+
+/** What the daemon learned at start: the routes litellm reported for the baseUrl it asked. Never the credential. */
+export interface RoutesCache {
+  checkedAt: number;
+  baseUrl: string;
+  routes: Record<string, RouteInfo>;
+}
+
+/** The cache, or undefined when there is none or it cannot be read. */
+export function readRoutesCache(file: string | undefined): RoutesCache | undefined {
+  if (file === undefined) {
+    return undefined;
+  }
+  try {
+    const c = JSON.parse(readFileSync(file, "utf8")) as Partial<RoutesCache>;
+    return typeof c.checkedAt === "number" && typeof c.baseUrl === "string" && typeof c.routes === "object" && c.routes !== null ? (c as RoutesCache) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Ticket 221: ask litellm once, off the event loop, and keep its answer in `cacheFile`, so the controller's notice line and /doctor can
+ * compare it with models.json without a network call of their own (the comparison is redone against the file as it is then, so a fix
+ * makes the finding go away). No litellm provider, an unreachable or unauthorised proxy, or an odd reply leaves everything as it was
+ * (silent, like the CLI). True when the cache was written.
+ */
+export async function checkLitellmAtStart(agentDir: string, cacheFile: string, probe: (t: { baseUrl: string; apiKey: string | undefined }) => Promise<{ routes: Record<string, RouteInfo> } | string> = probeLitellmAsync, now = Date.now()): Promise<boolean> {
+  const entries = readLitellmEntries(agentDir);
+  if (entries === undefined) {
+    return false;
+  }
+  const answer = await probe({ baseUrl: entries.baseUrl, apiKey: entries.apiKey });
+  if (typeof answer === "string") {
+    return false;
+  }
+  try {
+    writeFileAtomic(cacheFile, JSON.stringify({ checkedAt: now, baseUrl: entries.baseUrl, routes: answer.routes } satisfies RoutesCache));
+    return true;
+  } catch {
+    return false;
+  }
+}

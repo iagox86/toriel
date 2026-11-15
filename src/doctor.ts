@@ -12,7 +12,8 @@ import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, readFileSync, renameSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
-import { applyDrift, diffRoutes, type LitellmProbe, readLitellmEntries } from "./litellm-models.ts";
+import { applyDrift, diffRoutes, type LitellmProbe, readLitellmEntries, readRoutesCache } from "./litellm-models.ts";
+import { fmtClock } from "./when.ts";
 import { mcpWarnings, mergeMcpServers, loadAgents } from "./agents.ts";
 import { piAgentDir } from "./pi-dir.ts";
 import { startupProblems } from "./preflight.ts";
@@ -109,6 +110,8 @@ export interface DoctorOptions extends AuditOptions {
   probeTmux?: () => TmuxKeys;
   /** Asks the litellm proxy about its routes (ticket 215). Not set: the check is skipped ("run toriel doctor"). `toriel doctor` passes the real one. */
   probeLitellm?: LitellmProbe;
+  /** What the daemon learned from litellm at start (ticket 221); read when `probeLitellm` is not set. The running daemon and controller pass theirs. */
+  litellmCacheFile?: string;
   /** toriel's mcp.yaml (default: beside the settings file; tests inject). */
   mcpFile?: string;
   /** The text of kitty's config, including what it includes (default: read from kitty's config directory; tests inject). */
@@ -265,6 +268,12 @@ function piProviders(agentDir: string): Set<string> | undefined {
   return read ? names : undefined;
 }
 
+/** The routes the daemon cached at start, when they were asked of the proxy this models.json names; undefined otherwise. */
+function cachedRoutes(opts: DoctorOptions, baseUrl: string): { routes: Record<string, import("./litellm-models.ts").RouteInfo> } | undefined {
+  const cache = readRoutesCache(opts.litellmCacheFile);
+  return cache !== undefined && cache.baseUrl === baseUrl ? { routes: cache.routes } : undefined;
+}
+
 /** Everything wrong that doctor can see, graded; the resource audit's findings plus the ones that need settings and the environment. */
 export function collectFindings(opts: DoctorOptions = {}): Finding[] {
   const env = opts.env ?? process.env;
@@ -364,10 +373,11 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
     }
   }
   // pi's models.json hardcodes the litellm routes' metadata (ticket 215); litellm itself says what it believes, so a stale number is findable
-  const litellm = opts.probeLitellm !== undefined ? readLitellmEntries(opts.agentDir ?? piAgentDir(env)) : undefined;
-  if (litellm !== undefined && opts.probeLitellm !== undefined) {
+  // the CLI asks the proxy itself; everything else reads what the daemon learned at start (ticket 221) and never asks
+  const litellm = readLitellmEntries(opts.agentDir ?? piAgentDir(env));
+  const answer = litellm === undefined ? undefined : opts.probeLitellm !== undefined ? opts.probeLitellm({ baseUrl: litellm.baseUrl, apiKey: litellm.apiKey }) : cachedRoutes(opts, litellm.baseUrl);
+  if (litellm !== undefined && answer !== undefined) {
     const modelsFile = join(opts.agentDir ?? piAgentDir(env), "models.json");
-    const answer = opts.probeLitellm({ baseUrl: litellm.baseUrl, apiKey: litellm.apiKey });
     if (typeof answer !== "string") {
       const { drift, gone, extra } = diffRoutes(litellm.models, answer.routes);
       if (drift.length > 0) {
@@ -488,7 +498,12 @@ export function runDoctor(opts: DoctorOptions = {}): Check[] {
       return { ...entry, state: "skipped", findings: [], note: "needs pi-permission-system (see above)" };
     }
     if (entry.needsProbe === "litellm" && opts.probeLitellm === undefined) {
-      return { ...entry, state: "skipped", findings: [], note: "asks the litellm server: run `toriel doctor` in a terminal to check" };
+      const entries = readLitellmEntries(opts.agentDir ?? piAgentDir(opts.env ?? process.env));
+      const cache = entries === undefined ? undefined : readRoutesCache(opts.litellmCacheFile);
+      if (cache === undefined || cache.baseUrl !== entries?.baseUrl) {
+        return { ...entry, state: "skipped", findings: [], note: "asks the litellm server: run `toriel doctor` in a terminal to check" };
+      }
+      return { ...entry, state: "ok", findings: [], note: `compared with what litellm said when the daemon started (${fmtClock(cache.checkedAt, new Date())}); \`toriel doctor\` in a terminal asks again` };
     }
     return { ...entry, state: "ok", findings: [] };
   });
