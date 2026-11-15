@@ -9,8 +9,8 @@ import { detachFromParent, loadLineage } from "./lineage.ts";
 import { relationOf } from "./session-tree.ts";
 import { piAgentDir } from "./pi-dir.ts";
 import { probeEntry, parseStatusDetailed, readConfigs, statusReport } from "./mcp-doctor.ts";
-import { addMcpServer, removeMcpServer } from "./mcp-config.ts";
-import { MCP_ACTIONS, mcpConfigFile, mcpEntry, mcpListLines, mcpServerConnected } from "./mcp.ts";
+import { addMcpServer, readMcpYaml, removeMcpServer, setMcpServerHeaders } from "./mcp-config.ts";
+import { bearerEnvHeader, bearerTokenHeader, MCP_ACTIONS, type McpAuthOptions, type McpEntry, mcpConfigFile, mcpEntry, mcpListLines, mcpServerConnected, parseHeaderArg, withHeaders } from "./mcp.ts";
 import { mcpExplorePrompt } from "./mcp-explore-prompt.ts";
 import { readHeader } from "./session-file.ts";
 import { mayWake } from "./wake-on-type.ts";
@@ -130,7 +130,7 @@ export class SessionCommands {
       continue: (c) => this.continueAfterAbort(c.args.join(" ")),
       clear: () => this.clear(),
       compact: (c) => this.compact(c.args.join(" ")),
-      mcp: (c) => this.mcp(c.args[0], c.args[1], c.args.slice(2)),
+      mcp: (c) => this.mcp(c.args[0], c.args[1], c.args.slice(2), { token: c.opts.token === true, bearerEnv: c.opts.bearerEnv as string | undefined, headers: (c.opts.header as string[] | undefined) ?? [] }),
       in: (c) => addSchedule(this.h, "in", "in", c, this.viewedMeta()?.id),
       at: (c) => addSchedule(this.h, "at", "at", c, this.viewedMeta()?.id),
       every: (c) => addSchedule(this.h, "every", "every", c, this.viewedMeta()?.id),
@@ -659,13 +659,17 @@ export class SessionCommands {
   }
 
   /** /mcp: our own list (pi shows its status as a one-line notice); the other actions are pi's, so they go to it. */
-  private async mcp(action = "list", server?: string, target: string[] = []): Promise<void> {
+  private async mcp(action = "list", server?: string, target: string[] = [], auth: McpAuthOptions = { token: false, headers: [] }): Promise<void> {
     if (!(MCP_ACTIONS as readonly string[]).includes(action)) {
       this.h.notify(`/mcp: unknown action "${action}" - use ${MCP_ACTIONS.join(", ")}`);
       return;
     }
     if (action === "add") {
-      await this.mcpAdd(server, target);
+      await this.mcpAdd(server, target, auth);
+      return;
+    }
+    if (action === "token") {
+      await this.mcpToken(server, auth);
       return;
     }
     if (action === "remove") {
@@ -743,19 +747,89 @@ export class SessionCommands {
   }
 
   /** /mcp add: write the server into toriel's mcp.yaml, then reload so the session picks it up. */
-  private async mcpAdd(name: string | undefined, target: string[]): Promise<void> {
+  private async mcpAdd(name: string | undefined, target: string[], auth: McpAuthOptions): Promise<void> {
     if (!name) {
-      this.h.notify("/mcp add <name> <url | command args...>");
+      this.h.notify("/mcp add <name> <url | command args...> [--token | --bearer-env VAR | --header NAME=VALUE]");
       return;
     }
+    let entry: McpEntry;
     try {
-      addMcpServer(mcpConfigFile(), name, mcpEntry(target));
+      entry = mcpEntry(target);
+      // validated before anything is asked or written
+      entry = withHeaders(entry, await this.authHeaders(auth, name, entry, false));
+    } catch (err) {
+      this.h.notify(`/mcp add: ${errText(err)}`);
+      return;
+    }
+    if (auth.token && entry.headers?.Authorization === undefined) {
+      return; // the token prompt was cancelled: nothing is added
+    }
+    try {
+      addMcpServer(mcpConfigFile(), name, entry);
     } catch (err) {
       this.h.notify(`/mcp add: ${errText(err)}`);
       return;
     }
     this.h.editor.setText("");
-    this.h.notify(`added "${name}" to ${mcpConfigFile()}`);
+    this.h.notify(`added "${name}" to ${mcpConfigFile()}${entry.headers ? " with its Authorization header (values hidden)" : ""}`);
+    await this.reload();
+  }
+
+  /**
+   * The headers `--token`, `--bearer-env` and `--header` ask for. `--token` asks for the secret here, so the text never goes through
+   * the chat box, the history or the transcript. An empty or cancelled token prompt gives none (the caller stops).
+   */
+  private async authHeaders(auth: McpAuthOptions, name: string, entry: McpEntry, tokenOnly: boolean): Promise<Record<string, string>> {
+    if (auth.token && auth.bearerEnv !== undefined) {
+      throw new Error("give --token or --bearer-env, not both");
+    }
+    const headers: Record<string, string> = {};
+    if (!tokenOnly) {
+      for (const h of auth.headers) {
+        const [key, value] = parseHeaderArg(h);
+        headers[key] = value;
+      }
+    }
+    if (auth.bearerEnv !== undefined) {
+      Object.assign(headers, bearerEnvHeader(auth.bearerEnv));
+    }
+    if (auth.token) {
+      if (entry.url === undefined) {
+        throw new Error("a token is for a server given as a URL");
+      }
+      const token = await this.h.askSecret(`bearer token for ${name}`);
+      if (token === undefined) {
+        this.h.notify(`no token entered - ${tokenOnly ? "nothing changed" : "the server was not added"}`);
+      } else {
+        Object.assign(headers, bearerTokenHeader(token));
+      }
+    }
+    return headers;
+  }
+
+  /** /mcp token <server>: put a bearer token (asked for here, or --bearer-env VAR) on a URL server already in mcp.yaml, then reload. */
+  private async mcpToken(name: string | undefined, auth: McpAuthOptions): Promise<void> {
+    if (!name) {
+      this.h.notify("/mcp token <server> [--bearer-env VAR] (tab completes the names)");
+      return;
+    }
+    const known = readMcpYaml(mcpConfigFile()).servers[name];
+    if (known === undefined) {
+      this.h.notify(`/mcp token: "${name}" is not in ${mcpConfigFile()} (/mcp add ${name} <url> --token adds it)`);
+      return;
+    }
+    try {
+      const headers = await this.authHeaders({ ...auth, token: auth.bearerEnv === undefined }, name, known, true);
+      if (headers.Authorization === undefined) {
+        return;
+      }
+      setMcpServerHeaders(mcpConfigFile(), name, { Authorization: headers.Authorization });
+    } catch (err) {
+      this.h.notify(`/mcp token: ${errText(err)}`);
+      return;
+    }
+    this.h.editor.setText("");
+    this.h.notify(`"${name}" now sends an Authorization header (value hidden)`);
     await this.reload();
   }
 

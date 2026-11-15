@@ -124,7 +124,7 @@ describe("argument completion", () => {
   });
 
   it("offers the MCP actions, then the servers with their states", async () => {
-    assert.deepEqual(await suggest({ ...base, sources }, "/mcp "), ["list", "status ", "explore ", "add ", "remove ", "reconnect ", "login ", "logout "]);
+    assert.deepEqual(await suggest({ ...base, sources }, "/mcp "), ["list", "status ", "explore ", "add ", "remove ", "token ", "reconnect ", "login ", "logout "]);
     assert.deepEqual(await suggest({ ...base, sources }, "/mcp rec"), ["reconnect "]);
     assert.deepEqual(await suggest({ ...base, sources }, "/mcp reconnect "), ["reconnect mealie", "reconnect freecad"]);
     assert.deepEqual(await suggest({ ...base, sources }, "/mcp reconnect f"), ["reconnect freecad"]);

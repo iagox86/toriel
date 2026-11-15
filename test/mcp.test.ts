@@ -58,7 +58,7 @@ describe("mcpCompletions", () => {
   const servers = parseMcpStatus(STATUS);
 
   it("offers the actions for the first word, narrowed by what is typed", () => {
-    assert.deepEqual(mcpCompletions("", servers).map((c) => c.value), ["list", "status ", "explore ", "add ", "remove ", "reconnect ", "login ", "logout "]);
+    assert.deepEqual(mcpCompletions("", servers).map((c) => c.value), ["list", "status ", "explore ", "add ", "remove ", "token ", "reconnect ", "login ", "logout "]);
     assert.deepEqual(mcpCompletions("lo", servers).map((c) => c.value), ["login ", "logout "]);
   });
 

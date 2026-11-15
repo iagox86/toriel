@@ -51,4 +51,4 @@ In the session list (not inside a session) the user also has `/new` (start a ses
 
 ## How to ask
 
-Say what and why in one line, with the exact command: "Run `/mcp add docs https://example.com/mcp`, then `/reload`." If a command needs a value only the user has (a token, a URL), ask for it or give the command with a placeholder. Do not paste secrets into a command suggestion.
+Say what and why in one line, with the exact command: "Run `/mcp add docs https://example.com/mcp`, then `/reload`." If a command needs a value only the user has (a token, a URL), ask for it or give the command with a placeholder. Do not paste secrets into a command suggestion: for a server that needs a bearer token, suggest `/mcp add <name> <url> --token` (or `/mcp token <name>` for one already added), which asks the user for the token with a masked prompt, or `--bearer-env VAR` to read it from an environment variable.
