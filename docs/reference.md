@@ -528,7 +528,7 @@ npm run lint        # biome (lint only; see ../.editorconfig for style: 2-space 
 - `test/daemon.test.ts` (and `test/daemon-lifecycle-1..3.test.ts`, one file split three ways so node runs the parts in parallel) runs a real daemon in a temp dir against `test/fixtures/fake-pi.mjs`
   (a stub speaking enough of pi's RPC protocol); `test/helpers.ts` is the harness.
   Daemon tests set `TORIEL_PI_CLI` to point the daemon at the stub.
-- `test/smoke-client.mjs` - manual: connect to a running daemon, prompt, wait for settle.
+- `test/smoke-client.mjs` - manual: starts a throwaway daemon (temp dir, fake pi, via `test/helpers.ts`), spawns a session, prompts it, waits for settle, then removes the daemon. It never meets your real one; `SMOKE_SOCK=...` points it at a daemon you started on purpose and it refuses the real default socket (ticket 214). The other manual routes (`probes/`, the controller UI smoke below) were audited: none connects to the default socket.
 - Controller UI smoke (manual): run `bin/toriel` (or `node toriel.ts`) in a detached tmux
   session with an isolated `TORIEL_SOCK` (keep the path short: unix sockets cap at 107 bytes),
   `TORIEL_LOG`, `TORIEL_PI_CLI=test/fixtures/fake-pi.mjs`, `XDG_DATA_HOME` (the daemon lock lives

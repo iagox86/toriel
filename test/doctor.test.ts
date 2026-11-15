@@ -107,6 +107,33 @@ describe("doctor checks", () => {
     return s.opts;
   };
 
+  /** models.json with a litellm route whose numbers litellm no longer agrees with (ticket 215). */
+  const litellmScenario = (routes: Record<string, unknown> = { "local-model": { contextWindow: 262144, maxTokens: 65536 }, "new-route": { contextWindow: 1 } }) => {
+    const s = setup({});
+    fs.writeFileSync(path.join(s.agentDir, "models.json"), JSON.stringify({ providers: { litellm: { baseUrl: "https://l.example/v1", apiKey: "!secret-command", models: [{ id: "local-model", name: "Local", contextWindow: 122880, maxTokens: 65536 }, { id: "retired" }] } } }));
+    return { ...s, opts: { ...s.opts, probeLitellm: () => ({ routes }) as never } };
+  };
+
+  it("finds stale litellm metadata, offers to rewrite it, and says so when the proxy cannot be asked (ticket 215)", () => {
+    const s = litellmScenario();
+    const found = collectFindings(s.opts).filter((f) => f.id === "litellm-models");
+    assert.equal(found.length, 1);
+    assert.match(found[0]?.message ?? "", /local-model: contextWindow 122880 -> 262144/);
+    assert.match(found[0]?.message ?? "", /retired is in models\.json but not served/);
+    assert.match(found[0]?.message ?? "", /1 route litellm serves is not in models\.json/);
+    assert.match(found[0]?.message ?? "", /not the backend's real limits/);
+    assert.doesNotMatch(JSON.stringify(found), /secret-command/, "the credential is never shown");
+    // matching numbers, an unreachable proxy and a missing litellm provider are all quiet
+    assert.deepEqual(collectFindings(litellmScenario({ "local-model": { contextWindow: 122880, maxTokens: 65536 } }).opts).filter((f) => f.id === "litellm-models"), []);
+    assert.deepEqual(collectFindings({ ...s.opts, probeLitellm: () => "HTTP 401" }).filter((f) => f.id === "litellm-models"), []);
+    assert.deepEqual(collectFindings(setup({}).opts).filter((f) => f.id === "litellm-models"), []);
+    // without a probe (the in-app /doctor) the check is shown as skipped, not as ok
+    const { probeLitellm: _drop, ...noProbe } = s.opts;
+    const check = runDoctor(noProbe).find((c) => c.id === "litellm-models");
+    assert.equal(check?.state, "skipped");
+    assert.match(check?.note ?? "", /toriel doctor/);
+  });
+
   it("only ever reports findings the catalog knows, and the catalog has no dead entries", () => {
     const scenarios: DoctorOptions[] = [
       { ...setup({ noPiDir: true, noResources: true, stale: false, noCli: true, noInhibit: true, settings: '{"bogus":1}' }).opts, startup: ["node is too old"] },
@@ -125,6 +152,7 @@ describe("doctor checks", () => {
       { ...setup({ settings: '{"sandbox":"bwrap"}' }).opts, probeBwrap: () => "bwrap is not installed (the bubblewrap package)" },
       setup({ scopePatch: "absent" }).opts,
       lanesScenario(),
+      litellmScenario().opts,
       setup({ mcpExtra: { broken: { exposure: "direct" } } }).opts,
       setup({ piMcpJson: { mcpServers: { freecad: { url: "http://127.0.0.1:39280/mcp" } } } }).opts,
       setup({ scopePatch: "absent", config: { authorizerChain: ["toriel-grants"], permission: { "*": "allow", external_directory_write: { "/tmp/*": "allow" }, path: { "*": "ask", [GRANTS_RULE]: "ask" } } }, settings: JSON.stringify({ scopeGuardAcceptedAllows: [{ surface: "external_directory_write", pattern: "/tmp/*" }, { surface: "*", pattern: "*" }] }) }).opts,
@@ -412,7 +440,7 @@ describe("doctor report", () => {
     assert.match(text, /Required: all 5 ok/);
     assert.match(text, /Recommended: all 5 ok/);
     assert.doesNotMatch(text, / ok {7}/);
-    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(13 ok\)/);
+    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(14 ok\)/);
   });
 });
 
@@ -441,11 +469,29 @@ describe("doctor report colours", () => {
   it("colours the compact report too, with the passing checks' count dim", () => {
     const coloured = renderDoctor(checks(), { compact: true, style: ANSI_STYLE });
     assert.match(coloured, /Required\x1b\[22m: \x1b\[32mall 5 ok\x1b\[39m/);
-    assert.match(coloured, /\x1b\[2m {2}\(13 ok\)\x1b\[22m/);
+    assert.match(coloured, /\x1b\[2m {2}\(14 ok\)\x1b\[22m/);
   });
 });
 
 describe("doctor fixes", () => {
+  it("rewrites stale litellm numbers in models.json, keeping everything else and a backup (ticket 215)", () => {
+    const s = setup({});
+    const file = path.join(s.agentDir, "models.json");
+    const original = JSON.stringify({ providers: { litellm: { baseUrl: "https://l.example/v1", apiKey: "k", models: [{ id: "local-model", name: "Local", reasoning: true, contextWindow: 122880, maxTokens: 65536 }] }, zai: { baseUrl: "https://z" } } }, null, 2);
+    fs.writeFileSync(file, original);
+    const opts = { ...s.opts, probeLitellm: () => ({ routes: { "local-model": { contextWindow: 262144, maxTokens: 65536 } } }) as never };
+    const [group] = plannedFixes(runDoctor(opts));
+    assert.equal(group?.file, file);
+    assert.match(previewFixes(file, group?.fixes ?? []), /\+ +"contextWindow": 262144/);
+    const backup = applyFixes(file, group?.fixes ?? [], new Date(2026, 10, 14, 9, 5, 7));
+    assert.equal(fs.readFileSync(backup as string, "utf8"), original);
+    const now = JSON.parse(fs.readFileSync(file, "utf8"));
+    assert.deepEqual(now.providers.litellm.models, [{ id: "local-model", name: "Local", reasoning: true, contextWindow: 262144, maxTokens: 65536 }]);
+    assert.equal(now.providers.litellm.apiKey, "k");
+    assert.deepEqual(now.providers.zai, { baseUrl: "https://z" });
+    assert.deepEqual(collectFindings(opts).filter((f) => f.id === "litellm-models"), [], "nothing left to fix");
+  });
+
   it("adds the chain entry and the path rule, keeping a backup and the file's mode", () => {
     const s = setup({ config: { permission: { "*": "allow", bash: { "*": "allow", "sudo *": "ask" } } } });
     fs.chmodSync(s.config, 0o640);

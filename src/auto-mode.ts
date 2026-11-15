@@ -46,6 +46,56 @@ export function shellCommands(text: string): string[][] {
 /** A word that names somewhere beyond the working tree: absolute, `~`, `$VAR`, a `..` path, or the whole of the tree (`.`, `*`). */
 const reachesOut = (w: string): boolean => (/^(\/|~|\$)/.test(w) && !/^\/(var\/)?tmp(\/|$)/.test(w)) || w === "." || w === "*" || w === ".." || w.startsWith("../") || w.includes("/../") || w.endsWith("/..");
 
+/** Devices a redirection may name without leaving the working tree in any way that matters. */
+const HARMLESS_DEVICE = /^\/dev\/(null|zero|stdout|stderr|stdin|tty|fd\/\d+)$/;
+
+/** Output flags that name a file or directory the program writes to, per program (ticket 217). */
+const OUTPUT_FLAGS: Readonly<Record<string, { short: readonly string[]; long: readonly string[] }>> = {
+  curl: { short: ["-o"], long: ["--output", "--output-dir"] },
+  wget: { short: ["-O", "-P"], long: ["--output-document", "--directory-prefix"] },
+  tar: { short: ["-C"], long: ["--directory"] },
+  unzip: { short: ["-d"], long: [] },
+  sort: { short: ["-o"], long: ["--output"] },
+};
+
+/**
+ * Where a command writes besides its operands (ticket 217): redirection targets (`> f`, `>> f`, `2> f`, `&> f`), the file arguments of
+ * `tee`, a copy or move's destination, and the values of a few output flags. The caller asks whether any of them leaves the tree.
+ */
+export function writeTargets(words: string[]): string[] {
+  const out: string[] = [];
+  const cmd = words[0] as string;
+  for (let i = 1; i < words.length; i++) {
+    const w = words[i] as string;
+    const m = /^(?:\d*|&)>>?(.*)$/.exec(w);
+    if (m !== null) {
+      const target = (m[1] as string) !== "" ? (m[1] as string) : (words[i + 1] ?? "");
+      if (target !== "" && !HARMLESS_DEVICE.test(target)) {
+        out.push(target);
+      }
+      continue;
+    }
+    const flags = OUTPUT_FLAGS[cmd];
+    if (flags !== undefined) {
+      const eq = /^(--[\w-]+)=(.*)$/.exec(w);
+      if (eq !== null && flags.long.includes(eq[1] as string)) {
+        out.push(eq[2] as string);
+      } else if (flags.short.includes(w) || flags.long.includes(w)) {
+        out.push(words[i + 1] ?? "");
+      } else if (w.length > 2 && flags.short.includes(w.slice(0, 2)) && /^-[A-Za-z]/.test(w) && !/^-[A-Za-z]{2,}$/.test(w)) {
+        out.push(w.slice(2)); // -o/path
+      }
+    }
+  }
+  const operands = words.slice(1).filter((w) => !w.startsWith("-") && !/^(\d*|&)>/.test(w));
+  if (cmd === "tee") {
+    out.push(...operands);
+  } else if ((cmd === "cp" || cmd === "mv" || cmd === "install" || cmd === "ln") && operands.length >= 2) {
+    out.push(operands[operands.length - 1] as string);
+  }
+  return out.filter((t) => t !== "" && !HARMLESS_DEVICE.test(t));
+}
+
 const hasFlag = (words: string[], short: RegExp, long: readonly string[]): boolean => words.some((w) => (/^-[A-Za-z]+$/.test(w) && short.test(w)) || long.includes(w));
 
 /** Commands that destroy or rewrite storage whatever their arguments. */
@@ -96,10 +146,14 @@ export function commandFloor(text: string): string | undefined {
   if (/>\s*\/dev\/(sd|nvme|hd|vd|mmcblk|loop|disk)/.test(text)) {
     return "it writes to a disk device";
   }
-  for (const words of shellCommands(text)) {
+  // `&> f` and `>& f` redirect both streams to a file; keep them whole, because `&` also separates commands
+  for (const words of shellCommands(text.replace(/&>>?/g, ">").replace(/>&(?=\s*[^\s\d&-])/g, ">"))) {
     const cmd = words[0] as string;
     if (INTERPRETERS.has(cmd) && words.slice(1).some((w) => /^-[A-Za-z]*[ce]$|^--(command|eval|exec)$/.test(w))) {
       return "it runs code given on its command line, which hides what it does";
+    }
+    if (writeTargets(words).some((t) => t !== "." && reachesOut(t))) {
+      return "it writes to a file outside the working tree";
     }
     const operands = words.slice(1).filter((w) => !w.startsWith("-"));
     if (cmd === "rm" || cmd === "rmdir" || cmd === "unlink") {

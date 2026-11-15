@@ -110,6 +110,6 @@ export function setup(home: string, over: Over = {}) {
     fs.writeFileSync(settingsFile, renderSettings());
   }
   const grantsFile = path.join(home, ".local", "share", "toriel", "permissions.json");
-  const opts: DoctorOptions = { agentDir, mcpFile, root, grantsFile, settingsFile, piCli, pathDirs: [bin], platform: "linux", startup: [], env: { TORIEL_NODE: "/nonexistent-node" } };
+  const opts: DoctorOptions = { agentDir, mcpFile, root, grantsFile, settingsFile, piCli, pathDirs: [bin], platform: "linux", startup: [], probeLitellm: () => "not asked in this test", env: { TORIEL_NODE: "/nonexistent-node" } };
   return { agentDir, mcpFile, opts, config: path.join(agentDir, "extensions", "pi-permission-system", "config.json"), grantsFile };
 }

@@ -77,3 +77,41 @@ export function isInside(root: string, target: string): boolean {
   }
   return target.startsWith(root + path.sep);
 }
+
+/** Interpreters that run code given on their command line (`python3 -c`, `node -e`, `sh -c`, `perl -e`), where the code hides what it touches. */
+const PAYLOAD_RUNNER = /(?<![\w.-])(?:sh|bash|zsh|dash|ksh|fish|python[\d.]*|node|nodejs|perl|ruby|php|deno|bun|lua)\s+(?:-[A-Za-z]*[ce]|--eval|--command|--exec)(?![\w-])/;
+
+/** Absolute paths, `~` and `$VAR` paths in a text; a `//` of a URL or a word-internal slash does not start one. */
+const PATH_LIKE = /(?<![\w/.:$~{}-])(?:(?:~|\$\{?\w+\}?)(?:\/[^\s"'`,;)\]}]*)?|\/[\w.~-][^\s"'`,;)\]}]*)/g;
+
+/** Where scratch files are fine in every scope (the sandbox gives a session its own /tmp). */
+const SCRATCH = /^(?:\/tmp|\/var\/tmp)(?:\/|$)|^\/dev\/(?:null|stdout|stderr|stdin|tty)$/;
+
+/**
+ * Ticket 218: the first path in an interpreter payload (`python3 -c "open('/etc/x','w')"`) that is not provably inside the scope root,
+ * or undefined when the command has no such payload or every path in it is inside. The package's bash parser sees `rm ~/x` but not a
+ * path inside a string handed to an interpreter, so deny mode checks the text itself. `~` and `$HOME` expand to the home directory; any
+ * other `$VAR` cannot be resolved, so it counts as outside. Lexical, like the rest of the guard: it closes the plain form, and a payload
+ * that builds the path at run time (`'/ho'+'me'`) is the sandbox's job.
+ */
+export function payloadEscape(command: string, root: string, home: string = process.env.HOME ?? ""): string | undefined {
+  const at = command.search(PAYLOAD_RUNNER);
+  if (at < 0) {
+    return undefined;
+  }
+  for (const m of command.slice(at).matchAll(PATH_LIKE)) {
+    const raw = m[0];
+    const expanded = /^(?:~|\$\{?HOME\}?)(?=\/|$)/.test(raw) ? raw.replace(/^(?:~|\$\{?HOME\}?)/, home) : raw;
+    if (expanded.startsWith("$") || (expanded.startsWith("~") && !expanded.startsWith("~/"))) {
+      return raw; // a variable (or another user's home) cannot be resolved here
+    }
+    const norm = path.normalize(expanded);
+    if (SCRATCH.test(norm) && !SCRATCH.test(root)) {
+      continue; // scratch is exempt unless the scope itself lives there (then a sibling in /tmp is outside it)
+    }
+    if (!isInside(root, norm)) {
+      return raw;
+    }
+  }
+  return undefined;
+}

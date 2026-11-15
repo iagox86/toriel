@@ -200,9 +200,9 @@ function permissionSystemProblem(agentDir: string): string | undefined {
   return why ? `${PERMISSION_PACKAGE} has no usable config at ${config} (${why}): every tool will ask for permission` : undefined;
 }
 
-/** The `path` rules of the permission package's config, in file order, with `~` expanded. */
-function pathRules(config: unknown): Array<[string, string]> {
-  const path = (config as { permission?: { path?: unknown } } | null)?.permission?.path;
+/** The rules of one section of the permission package's config (`path`, `external_directory_write`, ...), in file order, with `~` expanded. */
+function pathRules(config: unknown, section = "path"): Array<[string, string]> {
+  const path = (config as { permission?: Record<string, unknown> } | null)?.permission?.[section];
   if (typeof path !== "object" || path === null || Array.isArray(path)) {
     return [];
   }
@@ -213,9 +213,9 @@ function pathRules(config: unknown): Array<[string, string]> {
 }
 
 /** What the package's `path` rules (last match wins, `*` crosses directories) say about `file`; undefined when none matches. */
-export function pathAction(config: unknown, file: string): string | undefined {
+export function pathAction(config: unknown, file: string, section = "path"): string | undefined {
   let action: string | undefined;
-  for (const [pattern, a] of pathRules(config)) {
+  for (const [pattern, a] of pathRules(config, section)) {
     const re = new RegExp(`^${pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`);
     if (re.test(file)) {
       action = a;
@@ -267,28 +267,40 @@ function grantsFindings(agentDir: string, grantsFile: string): Finding[] {
     });
   }
   const action = pathAction(json, grantsFile);
-  if (action !== "ask" && action !== "deny") {
+  const pathOpen = action !== "ask" && action !== "deny";
+  // ticket 218: a bash command that writes the file is an external_directory_write ask, not a path ask, so a rule that allows the file
+  // there lets a command through unasked even with the path rule in place
+  const outside = ["external_directory_write", "external_directory"].filter((section) => pathAction(json, grantsFile, section) === "allow");
+  if (pathOpen || outside.length > 0) {
     const shown = shownPath(grantsFile);
     const permission = json.permission;
-    const fixable = (permission === undefined || isObject(permission)) && (!isObject(permission) || permission.path === undefined || isObject(permission.path));
+    const sectionOk = (name: string): boolean => !isObject(permission) || permission[name] === undefined || isObject(permission[name]);
+    const fixable = (permission === undefined || isObject(permission)) && sectionOk("path") && sectionOk("external_directory_write");
+    const what = [
+      ...(pathOpen ? [`add "${shown}": "ask" to the "permission" > "path" rules`] : []),
+      ...(outside.length > 0 ? [`make ${outside.map((o) => `"${o}"`).join(" and ")} stop allowing it (a command that writes it is asked about there, not under "path"): add "${shown}": "ask" to "external_directory_write"`] : []),
+    ].join(", and ");
     findings.push({
       id: "grants-path-rule",
       level: "hardening",
-      message: `nothing stops an agent editing the permission grants file: add "${shown}": "ask" to the "permission" > "path" rules in ${file} (last matching rule wins: put it after any catch-all allow entry)`,
+      message: `nothing stops an agent editing the permission grants file${pathOpen ? "" : " from a bash command"}: ${what} in ${file} (last matching rule wins: put it after any catch-all allow entry)`,
       ...resolution(
         fixable
           ? {
               file,
-              summary: `make writes to ${shown} ask first`,
+              summary: `make writes to ${shown} ask first${outside.length > 0 ? ", from commands too" : ""}`,
               edit: (c) => {
                 const perm = isObject(c.permission) ? c.permission : {};
-                const path = isObject(perm.path) ? perm.path : {};
-                const others = Object.entries(path).filter(([key]) => key !== shown && key !== grantsFile);
-                return { ...c, permission: { ...perm, path: { ...Object.fromEntries(others), [shown]: "ask" } } };
+                const withRule = (name: string): Record<string, unknown> => {
+                  const section = isObject(perm[name]) ? (perm[name] as Record<string, unknown>) : {};
+                  const others = Object.entries(section).filter(([key]) => key !== shown && key !== grantsFile);
+                  return { ...Object.fromEntries(others), [shown]: "ask" };
+                };
+                return { ...c, permission: { ...perm, ...(pathOpen ? { path: withRule("path") } : {}), ...(outside.length > 0 ? { external_directory_write: withRule("external_directory_write") } : {}) } };
               },
             }
           : undefined,
-        '"permission" or its "path" rules in that file are not objects, so an automatic edit could clobber what they hold; fix it by hand',
+        '"permission" or its "path" or "external_directory_write" rules in that file are not objects, so an automatic edit could clobber what they hold; fix it by hand',
       ),
     });
   }

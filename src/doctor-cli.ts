@@ -67,7 +67,9 @@ export async function doctorMain(args: readonly string[], io: DoctorIo, opts: Do
     return 1;
   }
   const doctor = await import("./doctor.ts");
-  const options = { ...opts, startup: [], tty: io.tty === true };
+  // the CLI may spend a few seconds asking the litellm proxy about its routes (ticket 215); the in-app /doctor never does
+  const { probeLitellm } = await import("./litellm-models.ts");
+  const options = { probeLitellm, ...opts, startup: [], tty: io.tty === true };
   const checks = doctor.runDoctor(options);
   const style = io.color ? doctor.ANSI_STYLE : undefined;
   io.write(`${doctor.renderDoctor(checks, { style })}\n`);
