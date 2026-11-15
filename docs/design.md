@@ -1559,3 +1559,33 @@ What was built, in two steps. First ticket 209's `mcpWhenUp` setting plus an ext
 - **Migration** is one `toriel doctor --fix` (finding `mcp-json`): missing servers are added to `mcp.yaml`, the old file is renamed to a backup. A real `mcp.json` with nine servers (stdio and URL, headers, env, exposure, timeouts) imports with nothing dropped.
 - **Protected path.** `mcp.yaml` joins the grants file and pi's agent dir in `protectedPaths`: an entry is a command the next session runs, so an ask about it always reaches the user and auto mode never answers it.
 - **Limits, stated.** One decision per session start (plus `/mcp-up`); a session started while an app was down has no tools of its `whenUp` server until `/mcp-up`; URL servers only for `whenUp`; pi's own `/mcp` panel changes to a registered server last for the session only; a project's `.pi/mcp.json` no longer applies.
+
+## Sending a queued message now (ticket 222, investigated 2026-11-15)
+
+The ask: while an agent is mid-run and going the wrong way, deliver the message just typed immediately, like Claude Code's ctrl-x ctrl-s, instead of waiting.
+
+**What exists today, read from pi's source** (`pi-agent-core` `agent-loop.js`, `agent.js`; `pi-coding-agent` `agent-session.js`, `rpc-mode.js`):
+
+- A message typed during a run is not held for the end of the run. toriel sends every prompt as `prompt(..., "steer")`, which pi queues (`queue_update`) and the agent loop drains at the next **turn boundary**: after the current assistant message and the tool calls it made have finished, before the next model request. With `steeringMode: "all"` (toriel's default) everything queued is delivered together there; `one-at-a-time` delivers one per boundary. (fake-pi's header says "when the turn ends", which is an approximation: in real pi a turn is one model response plus its tools.)
+- So the delay a user feels is the length of the **current** turn, not of the whole run. It is long exactly when it hurts: one long generation, a slow tool (a test suite, a build), or a subagent call. Nothing in pi delivers a steering message inside a running tool batch or inside a streaming response; there is no urgent flag. The RPC surface has `steer`, `follow_up`, `abort`, `clear_queue`, `set_steering_mode`, `set_follow_up_mode`; none interrupts.
+- `abort` aborts the stream and the tool signal (a running `bash` is killed), waits for idle, and the interrupted assistant message stays in the transcript with `stopReason: "aborted"` (partial text kept). The steering queue is NOT cleared by `abort` (only by `reset` and `clear_queue`); `Agent.continue()` after an aborted assistant message drains the steering queue and runs it, but the RPC surface does not expose `continue`. pi's interactive mode restores queued messages to its editor on abort (`restoreQueuedMessagesToEditor`); toriel's does not.
+
+**So there are two different needs**, and the second is the ask:
+
+1. *Sooner at the boundary*: already how it works; nothing to build except making it visible (the queued lines say "queued"; they could say "delivered at the next step").
+2. *Interrupt now*: only possible by aborting, which is the same thing a user does today with esc and then re-typing.
+
+**Design for the interrupt, using only what pi has** (no upstream change, no patch):
+
+`send now` on the queued message = `clear_queue` (returns the queued texts and empties pi's queue, so nothing is delivered twice) -> `abort` (the run ends the way an abort does today: partial assistant message stays, a running tool is killed) -> `prompt` with the texts joined (idle now, so it starts a new turn). The daemon does the three steps in order for one `send_now` command, so a controller that loses its connection halfway cannot leave the texts in limbo; the texts are held in the daemon between the steps and put back on failure.
+
+What it costs, said plainly:
+- the in-flight model response is dropped after whatever streamed (that output was already paid for; the partial message stays in the transcript and in the next request's context, marked aborted);
+- a running tool is killed. For a long build or test this loses its progress, and a tool with side effects can be left half-done. That is the same as esc today, but a user pressing "send now" on a message may not expect their command to die, so the row should say so ("stops the running step").
+- pi may have already moved to the next boundary between the user's keypress and the abort; then the queue is empty (`clear_queue` returns nothing) and `send now` is a no-op that says "already delivered".
+
+**UX**: the transcript's queued rows (`activity.ts` renders `queue`) get a hint on the last line, `ctrl-s: send now (stops the running step)`; the key acts on all queued messages (they are delivered together, like `steeringMode: "all"`), so there is no per-line cursor to build. Auto-interrupt as a setting (`steering: interrupt`) is possible on the same path but is a bigger change of behaviour: every typed message would kill the running tool, which is the wrong default; leave it as an explicit key.
+
+**Wiring** (nothing started): a `send_now` command in `shared.ts` (PROTOCOL bump) and handler in `daemon-handlers-ops.ts` next to `abort`; a key in `session-commands.ts` like `abort`; the hint in `activity.ts`; fake-pi needs `clear_queue` (it has it) and an `abort` that ends the run (it has it). Tests: the three steps in order, an empty queue is a no-op, a failed abort puts the texts back. Size: small to medium.
+
+**Open question for the owner**: bind it to a key only while messages are queued (so it cannot be pressed by accident with nothing to send), and pick the key (ctrl-s is taken by terminal flow control in some setups; ctrl-x ctrl-s is the chord Claude Code uses).
