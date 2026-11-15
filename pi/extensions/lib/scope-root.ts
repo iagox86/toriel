@@ -123,3 +123,63 @@ export function payloadEscape(command: string, root: string, home: string = proc
   }
   return undefined;
 }
+
+/** Resolve a write target the way the file would be reached: `~` expanded, relative to `cwd`, symlinks followed through the nearest existing ancestor (the file itself may not exist yet). */
+export function resolveTarget(raw: string, cwd: string, home: string = process.env.HOME ?? "", realpath: (p: string) => string = fs.realpathSync): string {
+  const expanded = raw === "~" || raw.startsWith("~/") ? home + raw.slice(1) : raw;
+  let abs = path.resolve(cwd, expanded);
+  const tail: string[] = [];
+  for (;;) {
+    try {
+      return path.join(realpath(abs), ...tail.reverse());
+    } catch {
+      const parent = path.dirname(abs);
+      if (parent === abs) {
+        return path.join(abs, ...tail.reverse());
+      }
+      tail.push(path.basename(abs));
+      abs = parent;
+    }
+  }
+}
+
+/** Ticket 219: the resolved path of a write/edit target that is not inside the scope root (undefined when it is inside, or is scratch). */
+export function writeEscape(root: string, raw: string, cwd: string, home: string = process.env.HOME ?? "", realpath: (p: string) => string = fs.realpathSync): string | undefined {
+  const target = resolveTarget(raw, cwd, home, realpath);
+  if (SCRATCH.test(target) && !SCRATCH.test(root)) {
+    return undefined;
+  }
+  return isInside(root, target) ? undefined : target;
+}
+
+/**
+ * Ticket 219: the scope boundary as a veto on a tool call, whatever the permission rules say (the authorizer link only sees asks, so an
+ * allow rule skipped it). Deny mode only; ask mode leaves the decision to the dialog. Returns a reason to block, or undefined to let the
+ * call go on to the permission system. Total: never throws; an unexpected error in deny mode blocks a write rather than letting it by.
+ */
+export function vetoVerdict(scope: Scope, toolName: string, input: unknown, cwd: string): string | undefined {
+  if (scope.kind === "off" || scope.mode !== "deny") {
+    return undefined;
+  }
+  const writes = toolName === "write" || toolName === "edit";
+  try {
+    if (scope.kind === "invalid") {
+      return writes ? `scope guard: TORIEL_SCOPE_ROOT is set but unusable (${scope.why}); denying all writes. Fix the environment the daemon starts this session with.` : undefined;
+    }
+    const args = (input ?? {}) as { path?: unknown; command?: unknown };
+    if (toolName === "bash" && typeof args.command === "string") {
+      const escaped = payloadEscape(args.command, scope.root);
+      return escaped === undefined ? undefined : `scope guard: this command hands code to an interpreter that names ${escaped}, which is not inside this session's write scope ${scope.root} (TORIEL_SCOPE_ROOT). Put the code in a script file under ${scope.root} and run that, and keep what it writes under ${scope.root}.`;
+    }
+    if (writes) {
+      if (typeof args.path !== "string" || args.path === "") {
+        return `scope guard: cannot resolve a target for this ${toolName}; denying (scope root ${scope.root})`;
+      }
+      const escaped = writeEscape(scope.root, args.path, cwd);
+      return escaped === undefined ? undefined : `scope guard: ${escaped} is outside this session's write scope ${scope.root} (TORIEL_SCOPE_ROOT). Write only under ${scope.root}.`;
+    }
+    return undefined;
+  } catch {
+    return writes ? "scope guard: internal error evaluating this write; denying" : undefined;
+  }
+}

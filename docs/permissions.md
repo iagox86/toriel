@@ -93,6 +93,8 @@ its source and docs:
    ask-mode half fails to prompting (an invalid env defers every covered write); and
    when the env is absent the guard is off and the link behaves exactly as before.
    Details and limits: `docs/reference.md` "Env" under `TORIEL_SCOPE_ROOT`.
+   Since ticket 219 the same boundary is also a `tool_call` veto (`pi/extensions/toriel-veto.ts`) that sees calls a rule
+   allows outright, which the link cannot; see `docs/reference.md` "The scope veto" and `docs/permission-gate-decision.md`.
 3. The operator opts in once by adding `"authorizerChain": ["toriel-grants"]` to
    pi-permission-system's config.json. toriel never edits that file. The resources
    audit warns, with the exact line, when the extension is loaded but the chain does

@@ -56,6 +56,12 @@ What this buys: the "only sees asks" gap closes; the `scope-guard-short-circuit`
 
 Risks to verify before building: the order of our handler relative to the package's (we only need ours to run, not to run first, since a block from either wins); pi's parallel preflight (siblings are preflighted sequentially, so a veto is not raced); that the handler receives bash `command` and path-bearing tool inputs in the same shapes the link sees; and fail-closed behaviour if the extension fails to load (the daemon already refuses to start a scoped child without its extensions, ticket 163).
 
+### Built (ticket 219) and what the checks found
+
+`pi/extensions/toriel-veto.ts` (see `docs/reference.md` "The scope veto"). Verified against pi's source (`core/extensions/runner.js`, `emitToolCall`): handlers run extension by extension and the first `{block: true}` returns at once, so a block from ours wins whatever the package returns, while a handler that returns nothing leaves the others to decide; an error in a handler blocks the call (fail closed); `ctx.cwd` is the session cwd. Order is load order, so if the package's handler runs first it may open its prompt before ours blocks (the user can be asked about a write that is then refused); the prompt is harmless, the write never runs. Input shapes: `write`/`edit` carry `path`, `bash` carries `command` (pi docs), so the veto does its own resolution (`~`, cwd-relative, symlinks through the nearest existing ancestor) instead of reading the package's `boundaryValue`.
+
+Deliberately left out: the protected-file check (grants file, pi config). Those are asks the user may approve today; a veto would remove that choice, which is a behaviour change, not a closed gap, so it stays in the daemon.
+
 ## 4. How the OS sandbox changes the answer
 
 With `sandbox: bwrap` the kernel enforces writes for bash commands, so the lexical parts (payload check, write-target floor) are defence in depth and UX (a clear reason beats `EROFS`). What the sandbox does not cover is pi's own `write`/`edit`/MCP file tools, which run in the pi process: those still need the realpath jail, which is the veto above or phase 2's owned tools. So the permission layer shrinks to three jobs: ordinary ask/allow/deny UX, a jail for the file tools, and refusing in advance what the sandbox would refuse anyway. The read jail (167) is a sandbox feature (bind only what may be read), not a permission-layer one.

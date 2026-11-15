@@ -237,6 +237,7 @@ describe("daemon: lifecycle (3/3)", () => {
       "toriel-mcp.ts",
       "toriel-session-bridge.ts",
       "toriel-usage.ts",
+      "toriel-veto.ts",
     ]);
     assert.ok(flagged(argv, "-e").every((f) => path.isAbsolute(f) && fs.existsSync(f)));
     assert.deepEqual(flagged(argv, "--skill").map((f) => path.basename(f)), ["messaging", "scheduling", "delegating", "toriel"]);
@@ -246,7 +247,7 @@ describe("daemon: lifecycle (3/3)", () => {
     await c.waitFor((m) => m.type === "history" && m.session === explore.sessionId);
     const eargv = argvOf(explore.sessionId as number);
     assert.ok(eargv.includes("--no-extensions"));
-    assert.equal(flagged(eargv, "-e").length, 7, "explicit -e still loads under --no-extensions");
+    assert.equal(flagged(eargv, "-e").length, 8, "explicit -e still loads under --no-extensions");
     assert.deepEqual(flagged(eargv, "--skill"), []);
   });
 
