@@ -344,6 +344,11 @@ export const SESSION_COMMANDS = [
     },
   },
   {
+    name: "tasks",
+    description: "show the agent's task list for this session",
+    help: "Lists the tasks the agent is keeping for what it is working on (it also shows above the editor, the task under way in the accent colour). Nothing here can change the list: the agent owns it, and it follows the conversation, so a rewind or a fork shows the list as it was then.\n\nExample: /tasks",
+  },
+  {
     name: "schedules",
     description: "list this session's scheduled prompts with their next run",
     help: "Shows each schedule: id, what it does, the next real run time, how many runs so far, when it expires, and the prompt. Paused ones and failures are marked. In the switcher it lists every session's schedules.\n\nExamples:\n  /schedules\n  /schedules --all       (every session's)\nManage them with /cancel, /pause, /resume and /fire.",
@@ -378,6 +383,15 @@ export const SESSION_COMMANDS = [
     complete: async (typed) => matching(["on", "off", "status"], typed),
     build: (cmd) => {
       cmd.argument("[on|off|status|duration...]", "on, off or status, optionally followed by how long it lasts (2h)");
+    },
+  },
+  {
+    name: "plan",
+    description: "plan mode: the agent can only look until you approve its plan",
+    help: "Switches plan mode for this session. While it is on the agent can read, search and run read-only commands, but it cannot write or edit files, and any tool that might change something is refused; commands run with the whole filesystem read-only (needs bubblewrap, which the sandbox uses). It explores, then shows you a plan: you approve it (plan mode ends and it starts), ask for changes, or reject it. The agent may also ask for plan mode itself before a large change.\n\nIt is a guardrail for an agent that follows instructions, not a boundary against one that does not: your permission rules and the sandbox are the boundaries. MCP tools are refused unless the server is marked `readOnly: true` in mcp.yaml. The status line shows PLAN MODE while it is on, and it survives a restart.\n\nWith no argument it toggles.\n\nExamples:\n  /plan            toggle\n  /plan on         look and plan first\n  /plan off        end it without a plan\n  /plan status     say whether it is on",
+    complete: async (typed) => matching(["on", "off", "status"], typed),
+    build: (cmd) => {
+      cmd.argument("[on|off|status]", "on, off or status; nothing toggles");
     },
   },
   {

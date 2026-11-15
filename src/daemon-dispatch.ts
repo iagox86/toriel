@@ -19,6 +19,7 @@ import {
   handleAbort,
   handleAbortBash,
   handleAutoMode,
+  handlePlanMode,
   handleDenyAfter,
   handleBackground,
   handleBash,
@@ -79,6 +80,8 @@ export async function dispatch(ctx: DaemonContext, cmd: ClientCommand, socket: n
       return handleDenyAfter(ctx, cmd, res);
     case "auto_mode":
       return handleAutoMode(ctx, cmd, res);
+    case "plan_mode":
+      return handlePlanMode(ctx, cmd, res);
     case "clear_queue":
       return handleClearQueue(ctx, cmd, res);
     case "commands":

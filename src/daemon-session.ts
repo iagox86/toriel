@@ -4,6 +4,7 @@ import type { RpcClient } from "@earendil-works/pi-coding-agent";
 import type { Suggestion } from "./permissions.ts";
 import type { AgentProfile } from "./agents.ts";
 import type { PromptImage } from "./shared.ts";
+import type { Todo } from "../pi/extensions/lib/tasks.ts";
 
 export interface DaemonSession {
   id: number;
@@ -66,6 +67,10 @@ export interface DaemonSession {
   denyAfter?: number | null;
   /** Fires when the open permission prompt has waited too long. */
   denyTimer?: NodeJS.Timeout;
+  /** The agent's task list (ticket 228), as its toriel-tasks extension last reported it; in memory only, the session file is the record. */
+  tasks?: Todo[];
+  /** Plan mode (ticket 229), as the daemon last set it or the toriel-plan extension reported it; the marker file is the truth. */
+  plan?: boolean;
 }
 
 /** Whether auto mode is on for `s` now. */

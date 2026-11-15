@@ -51,6 +51,7 @@ import { SwitcherActions } from "./switcher-actions.ts";
 import { killServer } from "./lifecycle.ts";
 import { compareDaemon, describeDaemon, type DaemonVerdict, type Hello } from "./version-check.ts";
 import { selectListTheme } from "./pi-theme.ts";
+import { stripLines as taskStripLines } from "../pi/extensions/lib/tasks.ts";
 import {
   displayName,
   sessionKey,
@@ -1072,7 +1073,10 @@ class Controller {
     const rel = relationOf(lineage, uuid);
     const parentName = rel ? this.nameOfSession(rel.parentId) ?? rel.parentName : undefined;
     this.banner.setText(rel && parentName && !this.switching.isOpen ? accent(truncateToWidth(` ${bannerText(rel, parentName)}`, width)) : "");
-    this.scheduleStrip.setText(meta?.scheduleLines?.length && !this.switching.isOpen ? meta.scheduleLines.map((l) => dim(truncateToWidth(` ${l}`, width))).join("\n") : "");
+    // the agent's task list (ticket 228) over the schedules: the header and what is queued dim, the task under way in the accent
+    const taskRows = meta?.tasks && !this.switching.isOpen ? taskStripLines(meta.tasks).map((l) => (l.startsWith("▸") ? accent : dim)(truncateToWidth(` ${l}`, width))) : [];
+    const scheduleRows = meta?.scheduleLines?.length && !this.switching.isOpen ? meta.scheduleLines.map((l) => dim(truncateToWidth(` ${l}`, width))) : [];
+    this.scheduleStrip.setText([...taskRows, ...scheduleRows].join("\n"));
     this.childBorder = !!rel && !this.switching.isOpen;
     const costOf = (id: string): number => [...this.sessions.values()].find((m) => m.sessionId === id)?.cost ?? 0;
     const status = buildStatusLine({

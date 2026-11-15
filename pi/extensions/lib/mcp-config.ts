@@ -14,7 +14,7 @@ export const PROBE_TIMEOUT_MS = 800;
 /** A server name as pi uses it in `mcp__<name>__<tool>`. */
 export const SERVER_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$/;
 
-/** What pi's own mcp.json entries may hold, plus `whenUp`, which is toriel's. */
+/** What pi's own mcp.json entries may hold, plus `whenUp` and `readOnly`, which are toriel's. */
 export interface McpServerConfig {
   command?: string;
   args?: string[];
@@ -30,10 +30,12 @@ export interface McpServerConfig {
   description?: string;
   /** Register the server only when something listens at its URL when a session starts (an app that is not always running); /mcp-up looks again. URL servers only. */
   whenUp?: boolean;
+  /** The server's tools change nothing outside their own process, so plan mode (ticket 229) lets them run. Only the owner of the file can say so; the default is that they may change things. */
+  readOnly?: boolean;
 }
 
 const EXPOSURES = ["codemode", "deferred", "direct", "hidden"];
-const KEYS = ["command", "args", "env", "cwd", "url", "headers", "type", "exposure", "toolExposure", "enabled", "timeout", "description", "whenUp"];
+const KEYS = ["command", "args", "env", "cwd", "url", "headers", "type", "exposure", "toolExposure", "enabled", "timeout", "description", "whenUp", "readOnly"];
 
 /** The http(s) URL a server is reached at, or undefined when `value` is not one. */
 export function serverUrl(value: unknown): string | undefined {
@@ -105,6 +107,9 @@ export function checkEntry(name: string, raw: unknown): { entry: McpServerConfig
   if (e.whenUp !== undefined && typeof e.whenUp !== "boolean") {
     return { problem: `"${name}": whenUp must be true or false` };
   }
+  if (e.readOnly !== undefined && typeof e.readOnly !== "boolean") {
+    return { problem: `"${name}": readOnly must be true or false` };
+  }
   if (e.whenUp === true && !hasUrl) {
     return { problem: `"${name}": whenUp needs a url (there is nothing to check for a command server)` };
   }
@@ -165,9 +170,9 @@ export function parseMcpYaml(text: string): { servers: Record<string, McpServerC
   return { servers, problems };
 }
 
-/** What pi's registerMcpServer takes: the entry without toriel's own `whenUp`. */
+/** What pi's registerMcpServer takes: the entry without toriel's own `whenUp` and `readOnly`. */
 export function piConfig(entry: McpServerConfig): Record<string, unknown> {
-  const { whenUp: _whenUp, ...rest } = entry;
+  const { whenUp: _whenUp, readOnly: _readOnly, ...rest } = entry;
   return rest;
 }
 

@@ -244,6 +244,8 @@ export function bwrapArgs(policy: SandboxPolicy, cwd: string): string[] {
 export interface Spawnable {
   file: string;
   args: string[];
+  /** What to say when the program cannot be started (instead of the sandbox's own message): the command was not run. */
+  failure?: string;
 }
 
 /**

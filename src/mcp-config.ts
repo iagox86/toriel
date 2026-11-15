@@ -25,6 +25,7 @@ export const MCP_YAML_HEADER = `# MCP servers for toriel. Every server a session
 #     env: { SOME_API_KEY: "..." }
 #     exposure: direct                        # direct = the agent gets the tools at once; codemode (default) = through a script
 #     timeout: 60                             # seconds
+#     readOnly: true                          # its tools change nothing: plan mode lets them run (default: they are refused there)
 #     enabled: true
 `;
 

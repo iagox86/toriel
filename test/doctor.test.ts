@@ -424,6 +424,14 @@ describe("doctor checks", () => {
     assert.equal(f?.fix, undefined);
   });
 
+  it("asks for the ask-the-user package when pi's packages lack it (ticket 227)", () => {
+    assert.deepEqual(collectFindings(setup({}).opts).filter((x) => x.id === "ask-package"), []);
+    const [f] = collectFindings(setup({ noAsk: true }).opts).filter((x) => x.id === "ask-package");
+    assert.equal(f?.level, "feature");
+    assert.match(f?.message ?? "", /agents cannot ask you a question: @juicesharp\/rpiv-ask-user-question is not in the packages of .*settings\.json \(pi install npm:@juicesharp\/rpiv-ask-user-question\)/);
+    assert.equal(f?.fix, undefined);
+  });
+
   it("asks for the gdb and ghidra MCP servers the same way, one check per server", () => {
     const grade = (id: string, over: object) => collectFindings(setup(over).opts).filter((x) => x.id === id);
     assert.deepEqual(grade("mcp-gdb-direct", {}), []);
@@ -505,7 +513,7 @@ describe("doctor report", () => {
     assert.match(text, /Required: all 5 ok/);
     assert.match(text, /Recommended: all 5 ok/);
     assert.doesNotMatch(text, / ok {7}/);
-    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(15 ok\)/);
+    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(16 ok\)/);
   });
 });
 
@@ -534,7 +542,7 @@ describe("doctor report colours", () => {
   it("colours the compact report too, with the passing checks' count dim", () => {
     const coloured = renderDoctor(checks(), { compact: true, style: ANSI_STYLE });
     assert.match(coloured, /Required\x1b\[22m: \x1b\[32mall 5 ok\x1b\[39m/);
-    assert.match(coloured, /\x1b\[2m {2}\(15 ok\)\x1b\[22m/);
+    assert.match(coloured, /\x1b\[2m {2}\(16 ok\)\x1b\[22m/);
   });
 });
 

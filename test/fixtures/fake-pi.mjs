@@ -417,6 +417,22 @@ async function handle(cmd) {
           options: ["Yes", `Yes, allow bash "${command}" for this session`, "No", "No, provide reason"],
         });
       }
+      if (cmd.message.trim() === "/tasks-report" || cmd.message.trim() === "/tasks-clear") {
+        // what the toriel-tasks extension reports after a todo_write call (or at a session start with no list)
+        ok(cmd.id, "prompt", { disposition: "started" });
+        const todos = cmd.message.trim() === "/tasks-clear" ? [] : [{ content: "Write it", status: "completed" }, { content: "Test it", status: "in_progress", activeForm: "Testing it" }, { content: "Ship it", status: "pending" }];
+        return out({ type: "extension_ui_request", id: randomUUID(), method: "setStatus", statusKey: "toriel-tasks", statusText: JSON.stringify({ v: 1, todos }) });
+      }
+      if (cmd.message.trim() === "/plan-report-on" || cmd.message.trim() === "/plan-report-off") {
+        // what the toriel-plan extension reports when the agent enters or leaves plan mode itself
+        ok(cmd.id, "prompt", { disposition: "started" });
+        return out({ type: "extension_ui_request", id: randomUUID(), method: "setStatus", statusKey: "toriel-plan", statusText: JSON.stringify({ v: 1, on: cmd.message.trim() === "/plan-report-on" }) });
+      }
+      if (cmd.message.trim() === "/ask-question") {
+        // a question an agent puts to the user (the ask-the-user tool's dialog): a select that happens to offer Yes and No, but is no permission prompt
+        ok(cmd.id, "prompt", { disposition: "started" });
+        return out({ type: "extension_ui_request", id: "question-1", method: "select", title: "Ship it now?", options: ["Yes", "No", "Type something else"] });
+      }
       if (cmd.message.trim() === "/mcp") {
         // like pi's extension command: answered as a notice, never entering the conversation
         ok(cmd.id, "prompt", { disposition: "started" });

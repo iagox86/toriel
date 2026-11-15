@@ -6,7 +6,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { compactAndWait } from "./compact-wait.ts";
 import { bangEnv } from "./child-env.ts";
-import { SOCK, TRASH_DIR } from "./config.ts";
+import { PLAN_DIR, SOCK, TRASH_DIR } from "./config.ts";
+import { planOn, setPlanOn } from "../pi/extensions/lib/plan-mode.ts";
 import { type Cmd, type DaemonContext, requireNotInPi, type Responder } from "./daemon-context.ts";
 import { deliverToSession } from "./daemon-handlers-bridge.ts";
 import { sendHistory } from "./daemon-history.ts";
@@ -142,6 +143,32 @@ export function handleAutoMode(ctx: DaemonContext, cmd: Cmd<"auto_mode">, res: R
   });
   ctx.hub.broadcastSessions();
   res(true, undefined, { on, until });
+}
+
+/**
+ * Switch plan mode for a session (ticket 229, pi/extensions/lib/plan-mode.ts): the marker file is the state, so a sleeping session
+ * may have it set and the child that wakes finds it. The agent learns on its next prompt; the notice says so in the transcript.
+ */
+export function handlePlanMode(ctx: DaemonContext, cmd: Cmd<"plan_mode">, res: Responder): void {
+  const s = ctx.registry.get(cmd.session);
+  if (!s) {
+    throw new Error(`no session #${cmd.session}`);
+  }
+  if (!s.sessionId) {
+    throw new Error("this session has no id yet: send a message first");
+  }
+  const on = cmd.on ?? !planOn(PLAN_DIR, s.sessionId);
+  setPlanOn(PLAN_DIR, s.sessionId, on);
+  s.plan = on;
+  log(`plan mode ${on ? "on" : "off"} for session ${s.id}`);
+  ctx.hub.broadcast({
+    type: "notice",
+    session: s.id,
+    text: on ? "plan mode ON: the agent can only look (no writes, no edits, commands run read-only) until you approve a plan; /plan off ends it" : "plan mode OFF: the agent can change things again",
+    durable: true,
+  });
+  ctx.hub.broadcastSessions();
+  res(true, undefined, { on });
 }
 
 /**

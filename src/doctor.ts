@@ -25,6 +25,8 @@ import { mcpYamlFile } from "./config-dir.ts";
 import { onPathDirs as onPath, writeFileAtomic } from "./util.ts";
 
 const WEB_PACKAGE = "pi-web-access";
+/** The package that gives agents a tool for asking the user a question (ticket 227); it has a fallback that works in the RPC children toriel runs. */
+const ASK_PACKAGE = "@juicesharp/rpiv-ask-user-question";
 /** "a", "a and b", "a, b and c". */
 function nameList(names: readonly string[]): string {
   return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
@@ -63,6 +65,7 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: "grants-chain", level: "feature", title: 'permission grants are switched on ("toriel-grants" in authorizerChain)', needsPermissionPackage: true },
   { id: "mcp-git-direct", level: "feature", title: 'the git MCP server is configured with "exposure": "direct" (the code-review, git-archaeology and advisory-diff agents need it)' },
   { id: "web-package", level: "feature", title: "pi-web-access is installed (the research-web and advisory-diff agents need its web tools)" },
+  { id: "ask-package", level: "feature", title: `${ASK_PACKAGE} is installed (agents can ask you a multiple-choice question instead of guessing)` },
   { id: "mcp-gdb-direct", level: "feature", title: 'the gdb MCP server is configured with "exposure": "direct" (the debug and crash-analysis agents need it)' },
   { id: "mcp-ghidra-direct", level: "feature", title: 'the ghidra MCP server is configured with "exposure": "direct" (the re-explain, re-find, re-trace and binary-diff agents need it)' },
   { id: "agent-lanes", level: "feature", title: "every model tier in agentLanes (cheap, medium, expensive) names a provider pi knows (models.json or a login)" },
@@ -349,6 +352,15 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
       level: "feature",
       message: `the ${nameList(webAgents.map((a) => a.name))} ${webAgents.length > 1 ? "agents need" : "agent needs"} ${WEB_PACKAGE} in the packages of ${join(opts.agentDir ?? piAgentDir(env), "settings.json")} (pi install npm:${WEB_PACKAGE}) and a search provider set up for it; without it the agent has no web tools`,
       manual: "installing a pi package and choosing a search provider are yours to do; doctor does not run installs",
+    });
+  }
+  // agents ask the user a question through this package's tool; toriel shows its dialogs, but does not ship it (a pi package is the user's own)
+  if (piPackageListed(opts.agentDir ?? piAgentDir(env), ASK_PACKAGE) === false) {
+    out.push({
+      id: "ask-package",
+      level: "feature",
+      message: `agents cannot ask you a question: ${ASK_PACKAGE} is not in the packages of ${join(opts.agentDir ?? piAgentDir(env), "settings.json")} (pi install npm:${ASK_PACKAGE}); toriel shows the questions as dialogs, and a question nobody answers is dismissed after the deny-after wait if you set one`,
+      manual: "installing a pi package is yours to do; doctor does not run installs",
     });
   }
   // a model tier (agentLanes, ticket 208) that names a provider pi has no config or login for would make every agent on that lane fail at its first request

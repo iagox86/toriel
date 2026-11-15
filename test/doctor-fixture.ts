@@ -40,6 +40,8 @@ export interface Over {
   gitMcp?: string;
   /** Leave pi-web-access out of pi's packages. */
   noWeb?: boolean;
+  /** Leave the ask-the-user package out of pi's packages. */
+  noAsk?: boolean;
   /** Same for the gdb and ghidra servers (the debug and re-* agents). */
   gdbMcp?: string;
   ghidraMcp?: string;
@@ -57,7 +59,7 @@ export function setup(home: string, over: Over = {}) {
   const mcpFile = path.join(base, "mcp.yaml");
   if (!over.noPiDir) {
     mk(path.join(agentDir, "extensions", "pi-permission-system"));
-    fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ packages: [...(over.noPackage ? [] : ["npm:@gotgenes/pi-permission-system"]), ...(over.noWeb ? [] : ["npm:pi-web-access"])] }));
+    fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ packages: [...(over.noPackage ? [] : ["npm:@gotgenes/pi-permission-system"]), ...(over.noWeb ? [] : ["npm:pi-web-access"]), ...(over.noAsk ? [] : ["npm:@juicesharp/rpiv-ask-user-question"])] }));
     if (!over.noPackage) {
       fs.writeFileSync(path.join(agentDir, "extensions", "pi-permission-system", "config.json"), typeof over.config === "string" ? over.config : JSON.stringify(over.config ?? GOOD_CONFIG));
     }
