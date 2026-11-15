@@ -66,6 +66,11 @@ export interface Host {
   /** Undo echoPrompt when the send failed. */
   dropEcho(key: string, text: string): void;
   notify(message: string): void;
+  /**
+   * Ask for a secret (an API key, a token): the chat box shows a dot per character, the text never reaches the history, the transcript or
+   * the daemon. Resolves to what was typed, or undefined when it was cancelled (esc) or left empty.
+   */
+  askSecret(label: string): Promise<string | undefined>;
   /** The "Daemon" block of /doctor: which code the daemon runs and how it compares with this controller. */
   daemonReport(): string;
   /** Put text on the clipboard (and the primary selection); true or an error message. */

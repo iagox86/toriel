@@ -103,6 +103,24 @@ export function setMcpServerKey(file: string, name: string, key: string, value: 
 }
 
 /**
+ * Set headers on one remote server's entry, keeping its other headers (`/mcp token`). Throws when the server is not there or has no url
+ * (a command server has no request to carry them). The file is written owner-only, as for every edit.
+ */
+export function setMcpServerHeaders(file: string, name: string, headers: Record<string, string>): void {
+  const doc = loadDocument(file);
+  if (!doc.hasIn(["servers", name])) {
+    throw new Error(`"${name}" is not in ${file}`);
+  }
+  if (!doc.hasIn(["servers", name, "url"])) {
+    throw new Error(`"${name}" is a command server; headers and tokens are for servers given as a URL (a command server takes its secrets in env:)`);
+  }
+  for (const [key, value] of Object.entries(headers)) {
+    doc.setIn(["servers", name, "headers", key], value);
+  }
+  save(file, doc);
+}
+
+/**
  * The servers of a pi mcp.json, as mcp.yaml entries, for the one-time move (ticket 216). Keys mcp.yaml does not know are listed in
  * `dropped` (as `name.key`) so the move can say what it did not carry over. A file that is missing or not JSON is no servers.
  */

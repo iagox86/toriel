@@ -10,7 +10,8 @@ This session runs under **toriel**, a terminal controller that hosts many pi ses
 ## Commands the user has in a session
 
 Configuration and setup
-- `/mcp` - `list` (servers, state, matching skill), `status [server]` (why one is failing), `add <name> <url | command args>`, `remove <server>`, `reconnect [server]`, `login` / `logout [server]` (OAuth), `explore <server>` (you introspect it and write a skill for it). A new MCP server needs the session reloaded; `add` does that.
+- `/mcp` - `list` (servers, state, matching skill), `status [server]` (why one is failing), `add <name> <url | command args>`, `remove <server>`, `reconnect [server]`, `login` / `logout [server]` (OAuth), `explore <server>` (you introspect it and write a skill for it). A new MCP server needs the session reloaded; `add` does that. `/mcp token <server>` sets a URL server's bearer token (asks for it, masked); `add ... --token` does the same while adding.
+- `/provider` - `list` (pi's model providers from models.json, how each key is held), `add <name> <base-url>` (asks for the API key masked, asks the endpoint what models it serves, writes models.json and reloads; `--key-env VAR`, `--no-key`, `--no-models`, `--api`), `remove <name>`. `/login <provider>` sets a provider's API key (masked prompt). Never ask the user to paste a key into the chat: send them to these.
 - `/model` and `/think` - pick the model or thinking level from a list, or name one.
 - `/reload` - restart pi on this session to pick up new extensions, skills, settings or MCP config. The conversation is kept.
 - `/doctor` - check toriel's setup and say how to fix each problem (`--fix` applies the safe ones). Suggest it when a toriel tool or feature seems missing.
@@ -51,4 +52,4 @@ In the session list (not inside a session) the user also has `/new` (start a ses
 
 ## How to ask
 
-Say what and why in one line, with the exact command: "Run `/mcp add docs https://example.com/mcp`, then `/reload`." If a command needs a value only the user has (a token, a URL), ask for it or give the command with a placeholder. Do not paste secrets into a command suggestion.
+Say what and why in one line, with the exact command: "Run `/mcp add docs https://example.com/mcp`, then `/reload`." If a command needs a value only the user has (a token, a URL), ask for it or give the command with a placeholder. Do not paste secrets into a command suggestion: for a server that needs a bearer token, suggest `/mcp add <name> <url> --token` (or `/mcp token <name>` for one already added), which asks the user for the token with a masked prompt, or `--bearer-env VAR` to read it from an environment variable.

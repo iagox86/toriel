@@ -673,7 +673,7 @@ function requireOnlyCustom(fixes: readonly Fix[]): void {
 }
 
 /** `<file>.bak-<time>`: where the original of a changed file is kept. */
-function backupPath(file: string, now: Date): string {
+export function backupPath(file: string, now: Date): string {
   return `${file}.bak-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
 }
 

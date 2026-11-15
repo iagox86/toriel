@@ -72,6 +72,8 @@ export const FEEDBACK_FILE = process.env.TORIEL_FEEDBACK ?? path.join(DATA_DIR, 
 export const STATE_DIR = PROFILE_DIR ? path.join(PROFILE_DIR, "state") : path.join(process.env.XDG_STATE_HOME ?? path.join(process.env.HOME ?? "", ".local", "state"), "toriel");
 export const LOG = process.env.TORIEL_LOG ?? path.join(STATE_DIR, "daemon.log");
 /** What the daemon learned from the litellm proxy at start (ticket 221): the doctor findings in the controller and /doctor compare it with models.json. */
+/** What the write and edit tools changed, per session (ticket 11): a rewind can put the files back. Copies of the user's files, so owner-only. */
+export const FILE_HISTORY_DIR = process.env.TORIEL_FILE_HISTORY_DIR ?? path.join(STATE_DIR, "file-history");
 export const LITELLM_CACHE_FILE = process.env.TORIEL_LITELLM_CACHE ?? path.join(STATE_DIR, "litellm-routes.json");
 
 /**

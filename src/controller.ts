@@ -40,6 +40,7 @@ import { type ImageBlock, lastLine } from "./format.ts";
 import { RewindPicker } from "./rewind-picker.ts";
 import { CommandAutocomplete } from "./autocomplete.ts";
 import { HistorySearch } from "./history-search.ts";
+import { SecretPrompt } from "./secret-prompt.ts";
 import { loadSettings, settingsMtime } from "./settings.ts";
 import { loadCommands, mergeHistory, recordCommand, trimCommands } from "./history.ts";
 import { rewindTargets } from "./rewind.ts";
@@ -128,6 +129,10 @@ class Controller {
   choicePanel = new ChoicePanel();
   rewindPicker = new RewindPicker();
   historySearch = new HistorySearch();
+  /** The prompt for a secret (askSecret); while it is open it owns every key. */
+  private secretPrompt = new SecretPrompt();
+  private secretDraft = "";
+  private secretDone: ((value: string | undefined) => void) | undefined;
   /** Show full tool blocks instead of one summary line per run. */
   toolsExpanded = false;
   /** Session whose messages currently back the editor's up-arrow history. */
@@ -641,6 +646,9 @@ class Controller {
     if (isKeyRelease(data)) {
       return true;
     }
+    if (this.secretPrompt.isOpen) {
+      return this.secretKeys(data);
+    }
     // a dialog owns the keys (and the screen): panels opened before it, e.g. a /btw answer, wait behind it
     const dialogUp = this.dialogOpen();
     if (this.choicePanel.isOpen && !dialogUp) {
@@ -889,6 +897,38 @@ class Controller {
    * command log; in the switcher, commands only. `force` re-reads even when
    * the context has not changed (after a rewind).
    */
+  askSecret(label: string): Promise<string | undefined> {
+    if (this.secretPrompt.isOpen) {
+      return Promise.resolve(undefined);
+    }
+    this.secretDraft = this.editor.getText();
+    this.secretPrompt.open(label);
+    this.editor.setText("");
+    this.notify(`${label}: type or paste it (enter saves, esc cancels; it is not shown or stored anywhere else)`);
+    this.tui.requestRender();
+    return new Promise((resolve) => {
+      this.secretDone = resolve;
+    });
+  }
+
+  /** Keys while a secret is being typed: they feed the prompt and never reach the chat box. */
+  private secretKeys(data: string): boolean {
+    const label = this.secretPrompt.label;
+    const result = this.secretPrompt.key(data);
+    if (result.kind === "more") {
+      this.editor.setText(this.secretPrompt.masked());
+      this.notify(`${label}: ${this.secretPrompt.length} characters (enter saves, esc cancels)`);
+    } else {
+      this.editor.setText(this.secretDraft);
+      this.secretDraft = "";
+      const done = this.secretDone;
+      this.secretDone = undefined;
+      done?.(result.kind === "done" ? result.value : undefined);
+    }
+    this.tui.requestRender();
+    return true;
+  }
+
   /** Keys while the ctrl-r search line is open; it swallows everything. */
   private searchKeys(data: string): boolean {
     const result = this.historySearch.handleKey(data);

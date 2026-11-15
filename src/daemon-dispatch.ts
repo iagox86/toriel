@@ -31,6 +31,7 @@ import {
   handleCd,
   handleReload,
   handleRestoreClear,
+  handleRestoreCode,
   handleRewind,
   handleThink,
   handleUiResponse,
@@ -126,6 +127,8 @@ export async function dispatch(ctx: DaemonContext, cmd: ClientCommand, socket: n
       return handleRestoreClear(ctx, cmd, socket, res);
     case "rewind":
       return handleRewind(ctx, cmd, res);
+    case "restore_code":
+      return handleRestoreCode(ctx, cmd, res);
     case "ui_response":
       return handleUiResponse(ctx, cmd, res);
     case "list":

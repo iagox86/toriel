@@ -20,11 +20,11 @@ describe("rewind picker", () => {
     assert.equal(p.current()?.entryId, "e0", "clamps at the oldest");
   });
 
-  it("marks the selection and warns that files are not restored", () => {
+  it("marks the selection and says file changes can be undone too (ticket 11)", () => {
     const p = new RewindPicker();
     p.open(targets(3));
     const out = p.render(100).map((l) => strip(l).trim());
-    assert.ok(out.some((l) => /file changes are not undone/.test(l)));
+    assert.ok(out.some((l) => /file changes since can be undone too/.test(l)));
     assert.ok(out.some((l) => l.startsWith("> message 2")));
   });
 

@@ -30,7 +30,7 @@ export function parseMcpStatus(text: string): McpServer[] {
   return servers;
 }
 
-export const MCP_ACTIONS = ["list", "status", "explore", "add", "remove", "reconnect", "login", "logout"] as const;
+export const MCP_ACTIONS = ["list", "status", "explore", "add", "remove", "token", "reconnect", "login", "logout"] as const;
 export type McpAction = (typeof MCP_ACTIONS)[number];
 
 export interface Completion {
@@ -56,7 +56,9 @@ export function mcpCompletions(typed: string, servers: readonly McpServer[]): Co
           : a === "status"
             ? "troubleshoot: state, error, configuration and checks for each server"
           : a === "add"
-            ? "add a server: add <name> <url | command args...>"
+            ? "add a server: add <name> <url | command args...> [--token | --bearer-env VAR | --header NAME=VALUE]"
+            : a === "token"
+              ? "set the bearer token of a URL server (asks for it; or --bearer-env VAR to read it from the environment)"
             : a === "remove"
               ? "remove a server from mcp.yaml (tab completes its name)"
               : a === "explore"
@@ -106,6 +108,7 @@ export interface McpEntry {
   url?: string;
   command?: string;
   args?: string[];
+  headers?: Record<string, string>;
 }
 
 /** An mcp.yaml entry from /mcp add's arguments: a URL means a remote server, anything else is a command to run over stdio. */
@@ -121,6 +124,57 @@ export function mcpEntry(target: readonly string[]): McpEntry {
     return { url: first };
   }
   return rest.length > 0 ? { command: first, args: rest } : { command: first };
+}
+
+/** What /mcp add and /mcp token were given for authentication. */
+export interface McpAuthOptions {
+  /** --token: ask for the bearer token. */
+  token: boolean;
+  /** --bearer-env VAR */
+  bearerEnv?: string;
+  /** --header NAME=VALUE, as typed. */
+  headers: string[];
+}
+
+const ENV_NAME =/^[A-Za-z_][A-Za-z0-9_]*$/;
+const HEADER_NAME = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/;
+
+/** The Authorization header for a bearer token read from the environment variable `name` when the session starts (pi substitutes ${NAME}). */
+export function bearerEnvHeader(name: string): { Authorization: string } {
+  if (!ENV_NAME.test(name)) {
+    throw new Error(`"${name}" is not an environment variable name (letters, digits and _)`);
+  }
+  return { Authorization: `Bearer \${${name}}` };
+}
+
+/** The Authorization header for a bearer token written into mcp.yaml itself (the file is owner-only, like the env: values it already holds). */
+export function bearerTokenHeader(token: string): { Authorization: string } {
+  const t = token.trim();
+  if (t === "" || /\s/.test(t)) {
+    throw new Error("a bearer token is one word with no spaces or line breaks");
+  }
+  return { Authorization: `Bearer ${t}` };
+}
+
+/** One `--header NAME=VALUE`. The value may be ${VAR} (from the environment) or !command (its output), as pi reads them. */
+export function parseHeaderArg(arg: string): [string, string] {
+  const at = arg.indexOf("=");
+  const name = at < 0 ? "" : arg.slice(0, at).trim();
+  if (at < 0 || !HEADER_NAME.test(name) || arg.slice(at + 1) === "") {
+    throw new Error(`--header wants NAME=VALUE (got "${name === "" ? arg.slice(0, 20) : name}")`);
+  }
+  return [name, arg.slice(at + 1)];
+}
+
+/** `entry` with `headers` merged into its own (a remote server only: a command server has no HTTP request to put them on). */
+export function withHeaders(entry: McpEntry, headers: Record<string, string>): McpEntry {
+  if (Object.keys(headers).length === 0) {
+    return entry;
+  }
+  if (entry.url === undefined) {
+    throw new Error("headers and tokens are for a server given as a URL; a command server takes its secrets in env: in mcp.yaml");
+  }
+  return { ...entry, headers: { ...(entry.headers ?? {}), ...headers } };
 }
 
 /** Where the MCP servers are configured: toriel's mcp.yaml (ticket 216). */

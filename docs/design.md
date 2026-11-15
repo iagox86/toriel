@@ -554,13 +554,13 @@ Near-term (post-budget-reset), rough order = dependency + value:
    Limits: cuts by file position, so a session branched in place via pi's
    /tree is only rewound correctly if the chosen message's parent is the
    entry right before it. /restore (undo) is not built; the trash manifest
-   has what it needs. FUTURE (parked): rewind that also restores files.
-   Replaying edits backwards is not viable (write loses the old content,
-   bash is opaque); checkpoint before changes instead: (a) an extension in
-   pi/extensions/ snapshots files before edit/write (check whether tool_call
-   events fire before execution), or (b) a shadow git repo snapshotting the
-   working tree per user message (covers bash, costs disk/time). Restore
-   must warn when a file changed since the checkpoint.
+   has what it needs. REWIND WITH CODE BUILT 2026-11-15 (ticket 11), the
+   (a) option below: replaying edits backwards is not viable (write loses
+   the old content, bash is opaque), so an extension snapshots files before
+   edit/write (the tool_call event fires before execution, and tool_result
+   after, for nested calls from codemode too); a shadow git repo (b) would
+   cover bash but costs disk and time and was not chosen. See "File history"
+   below.
    - esc esc = REMOVE: pi ships a user-message-selector component (the
      same popup as its escape-escape) - reuse it, but wire selection to
      truncate the session file back to before the chosen message and
@@ -1589,3 +1589,17 @@ What it costs, said plainly:
 **Wiring** (nothing started): a `send_now` command in `shared.ts` (PROTOCOL bump) and handler in `daemon-handlers-ops.ts` next to `abort`; a key in `session-commands.ts` like `abort`; the hint in `activity.ts`; fake-pi needs `clear_queue` (it has it) and an `abort` that ends the run (it has it). Tests: the three steps in order, an empty queue is a no-op, a failed abort puts the texts back. Size: small to medium.
 
 **Decided and built (2026-11-15).** The owner chose the interrupt behaviour and a single key, `ctrl-s` (the chord was not wanted). It acts only while messages are queued, and inside ctrl-r history search the key keeps meaning "newer" (that handler runs first). It is done in the controller (`SessionActions.sendQueuedNow`, the same place esc takes the queue back into the editor), not as a new daemon command, so there is no protocol change: `clear_queue` -> `abort` (a request, so the next step waits for the run to stop) -> an ordinary prompt of the texts joined by a blank line. If the abort fails the texts go back in the editor. The queued rows carry the hint `ctrl-s: send now (stops the running step)`. Raw mode turns terminal flow control off, so the key reaches the program. Known limit: images attached to a queued message are not carried (same as esc restoring the queue).
+
+## File history: rewinding the code with the conversation (ticket 11, built 2026-11-15)
+
+Goal: like Claude Code, a rewind can also put back the files the agent changed, and the rewind list shows how much changed ("3 files changed +12 -4").
+
+**Recording.** `pi/extensions/toriel-filehistory.ts` (children only, needs `TORIEL_FILE_HISTORY`, which the daemon sets to `<state>/file-history`) hooks pi's `tool_call` for `write` and `edit`: before the call runs it copies the target file's content to a content-addressed blob (`<session id>/blobs/<sha256>`) and appends a `before` record to `<session id>/journal.jsonl`; on `tool_result` it appends an `after` record with what the file holds now. It sees calls a codemode script makes (pi fires both events for nested calls). The target path is resolved the way the scope guard resolves it (`~`, relative to the session's cwd, symlinks followed). It only observes: it never blocks, never throws. Files over 4 MB are recorded as "too big" and never restored. The directories are 0700 and the files 0600 because the blobs are copies of the user's files.
+
+**What it does not see.** Anything a command does (`sed -i`, a build, `git checkout`, a formatter): bash is opaque, and the shadow-repo alternative that would see it was rejected for its disk and time cost and because it would snapshot the whole tree for every message. The rewind question says so. A subagent has its own session and journal: rewinding the parent does not undo the subagent's edits. A fork starts with no history.
+
+**Planning.** The rewind target is a user message with a timestamp T. For each path with a record at or after T, the state at T is the `before` of its first such record. The plan per file: `same` (already that), `restore`, `changed-since` (the file is not what the agent last wrote: you or a command changed it afterwards, so it is left alone, never overwritten), or `too-big`. The counts are a line diff from the state at T to the file as it is now (Myers; a change too large to compare counts every differing line once each way).
+
+**Doing it.** The picker computes the summary for the highlighted message in the controller (read-only, from the journal). Enter on a message with changes asks: Conversation and code / Conversation only / Code only / Cancel. The daemon does the work: `rewind` with `code: true` cuts the conversation first and then restores (so a failed rewind leaves both as they were), and drops the journal from T on; `restore_code` restores and leaves the conversation and the records (they still describe the conversation that exists). The answer lists the files put back and the ones left alone with why, never their contents.
+
+**Not done.** A journal is never cleaned up when a session is deleted (blobs are deduplicated, so growth is bounded by distinct file versions). The session's own file is not told what was restored.

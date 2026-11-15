@@ -9,9 +9,11 @@ import { detachFromParent, loadLineage } from "./lineage.ts";
 import { relationOf } from "./session-tree.ts";
 import { piAgentDir } from "./pi-dir.ts";
 import { probeEntry, parseStatusDetailed, readConfigs, statusReport } from "./mcp-doctor.ts";
-import { addMcpServer, removeMcpServer } from "./mcp-config.ts";
-import { MCP_ACTIONS, mcpConfigFile, mcpEntry, mcpListLines, mcpServerConnected } from "./mcp.ts";
+import { addMcpServer, readMcpYaml, removeMcpServer, setMcpServerHeaders } from "./mcp-config.ts";
+import { bearerEnvHeader, bearerTokenHeader, MCP_ACTIONS, type McpAuthOptions, type McpEntry, mcpConfigFile, mcpEntry, mcpListLines, mcpServerConnected, parseHeaderArg, withHeaders } from "./mcp.ts";
 import { mcpExplorePrompt } from "./mcp-explore-prompt.ts";
+import { gatewayKind, probeLitellmAsync } from "./litellm-models.ts";
+import { addProvider, apiKeyValue, checkProviderId, DEFAULT_API, fetchModels, listProviders, MAX_MODELS, type NewModel, type ProviderOptions, type ProviderRow, removeProvider, resolveForProbe, setProviderKey } from "./providers.ts";
 import { readHeader } from "./session-file.ts";
 import { mayWake } from "./wake-on-type.ts";
 import { forkName, placeFork } from "./fork-placement.ts";
@@ -130,7 +132,9 @@ export class SessionCommands {
       continue: (c) => this.continueAfterAbort(c.args.join(" ")),
       clear: () => this.clear(),
       compact: (c) => this.compact(c.args.join(" ")),
-      mcp: (c) => this.mcp(c.args[0], c.args[1], c.args.slice(2)),
+      provider: (c) => this.provider(c.args[0], c.args[1], c.args[2], { keyEnv: c.opts.keyEnv as string | undefined, noKey: c.opts.key === false, noModels: c.opts.models === false, api: c.opts.api as string | undefined }),
+      login: (c) => this.login(c.args[0], c.opts.keyEnv as string | undefined),
+      mcp: (c) => this.mcp(c.args[0], c.args[1], c.args.slice(2), { token: c.opts.token === true, bearerEnv: c.opts.bearerEnv as string | undefined, headers: (c.opts.header as string[] | undefined) ?? [] }),
       in: (c) => addSchedule(this.h, "in", "in", c, this.viewedMeta()?.id),
       at: (c) => addSchedule(this.h, "at", "at", c, this.viewedMeta()?.id),
       every: (c) => addSchedule(this.h, "every", "every", c, this.viewedMeta()?.id),
@@ -659,13 +663,17 @@ export class SessionCommands {
   }
 
   /** /mcp: our own list (pi shows its status as a one-line notice); the other actions are pi's, so they go to it. */
-  private async mcp(action = "list", server?: string, target: string[] = []): Promise<void> {
+  private async mcp(action = "list", server?: string, target: string[] = [], auth: McpAuthOptions = { token: false, headers: [] }): Promise<void> {
     if (!(MCP_ACTIONS as readonly string[]).includes(action)) {
       this.h.notify(`/mcp: unknown action "${action}" - use ${MCP_ACTIONS.join(", ")}`);
       return;
     }
     if (action === "add") {
-      await this.mcpAdd(server, target);
+      await this.mcpAdd(server, target, auth);
+      return;
+    }
+    if (action === "token") {
+      await this.mcpToken(server, auth);
       return;
     }
     if (action === "remove") {
@@ -743,19 +751,235 @@ export class SessionCommands {
   }
 
   /** /mcp add: write the server into toriel's mcp.yaml, then reload so the session picks it up. */
-  private async mcpAdd(name: string | undefined, target: string[]): Promise<void> {
+  private async mcpAdd(name: string | undefined, target: string[], auth: McpAuthOptions): Promise<void> {
     if (!name) {
-      this.h.notify("/mcp add <name> <url | command args...>");
+      this.h.notify("/mcp add <name> <url | command args...> [--token | --bearer-env VAR | --header NAME=VALUE]");
       return;
     }
+    let entry: McpEntry;
     try {
-      addMcpServer(mcpConfigFile(), name, mcpEntry(target));
+      entry = mcpEntry(target);
+      // validated before anything is asked or written
+      entry = withHeaders(entry, await this.authHeaders(auth, name, entry, false));
+    } catch (err) {
+      this.h.notify(`/mcp add: ${errText(err)}`);
+      return;
+    }
+    if (auth.token && entry.headers?.Authorization === undefined) {
+      return; // the token prompt was cancelled: nothing is added
+    }
+    try {
+      addMcpServer(mcpConfigFile(), name, entry);
     } catch (err) {
       this.h.notify(`/mcp add: ${errText(err)}`);
       return;
     }
     this.h.editor.setText("");
-    this.h.notify(`added "${name}" to ${mcpConfigFile()}`);
+    this.h.notify(`added "${name}" to ${mcpConfigFile()}${entry.headers ? " with its Authorization header (values hidden)" : ""}`);
+    await this.reload();
+  }
+
+  /**
+   * The headers `--token`, `--bearer-env` and `--header` ask for. `--token` asks for the secret here, so the text never goes through
+   * the chat box, the history or the transcript. An empty or cancelled token prompt gives none (the caller stops).
+   */
+  private async authHeaders(auth: McpAuthOptions, name: string, entry: McpEntry, tokenOnly: boolean): Promise<Record<string, string>> {
+    if (auth.token && auth.bearerEnv !== undefined) {
+      throw new Error("give --token or --bearer-env, not both");
+    }
+    const headers: Record<string, string> = {};
+    if (!tokenOnly) {
+      for (const h of auth.headers) {
+        const [key, value] = parseHeaderArg(h);
+        headers[key] = value;
+      }
+    }
+    if (auth.bearerEnv !== undefined) {
+      Object.assign(headers, bearerEnvHeader(auth.bearerEnv));
+    }
+    if (auth.token) {
+      if (entry.url === undefined) {
+        throw new Error("a token is for a server given as a URL");
+      }
+      const token = await this.h.askSecret(`bearer token for ${name}`);
+      if (token === undefined) {
+        this.h.notify(`no token entered - ${tokenOnly ? "nothing changed" : "the server was not added"}`);
+      } else {
+        Object.assign(headers, bearerTokenHeader(token));
+      }
+    }
+    return headers;
+  }
+
+  /** /mcp token <server>: put a bearer token (asked for here, or --bearer-env VAR) on a URL server already in mcp.yaml, then reload. */
+  private async mcpToken(name: string | undefined, auth: McpAuthOptions): Promise<void> {
+    if (!name) {
+      this.h.notify("/mcp token <server> [--bearer-env VAR] (tab completes the names)");
+      return;
+    }
+    const known = readMcpYaml(mcpConfigFile()).servers[name];
+    if (known === undefined) {
+      this.h.notify(`/mcp token: "${name}" is not in ${mcpConfigFile()} (/mcp add ${name} <url> --token adds it)`);
+      return;
+    }
+    try {
+      const headers = await this.authHeaders({ ...auth, token: auth.bearerEnv === undefined }, name, known, true);
+      if (headers.Authorization === undefined) {
+        return;
+      }
+      setMcpServerHeaders(mcpConfigFile(), name, { Authorization: headers.Authorization });
+    } catch (err) {
+      this.h.notify(`/mcp token: ${errText(err)}`);
+      return;
+    }
+    this.h.editor.setText("");
+    this.h.notify(`"${name}" now sends an Authorization header (value hidden)`);
+    await this.reload();
+  }
+
+  /** /provider [list|add|remove]: pi's model providers (models.json) without editing the file. */
+  private async provider(action = "list", name?: string, baseUrl?: string, opts: ProviderOptions = { noKey: false, noModels: false }): Promise<void> {
+    if (action === "list") {
+      this.providerList();
+    } else if (action === "add") {
+      await this.providerAdd(name, baseUrl, opts);
+    } else if (action === "remove") {
+      this.providerRemove(name);
+    } else {
+      this.h.notify(`/provider: unknown action "${action}" - use list, add or remove`);
+    }
+  }
+
+  private providerList(): void {
+    try {
+      const rows = listProviders(piAgentDir());
+      const keyText = (r: ProviderRow): string => (r.key === "env" ? `key from $${r.keyEnv}` : r.key === "command" ? "key from a command" : r.key === "literal" ? "key stored" : "no key");
+      const lines = rows.length === 0 ? ["No providers are configured in models.json (pi's built-in providers work with an environment variable or /login)."] : rows.map((r) => `${r.id}: ${r.baseUrl ?? "(built-in URL)"} - ${keyText(r)}, ${r.models} model${r.models === 1 ? "" : "s"}${r.api ? `, ${r.api}` : ""}`);
+      this.h.infoPanel.show(["Providers (models.json)", "", ...lines, "", "/provider add <name> <base-url> adds one; /login <name> sets a key; /provider remove <name>"].join("\n"));
+      this.h.tui.requestRender();
+    } catch (err) {
+      this.h.notify(`/provider: ${errText(err)}`);
+    }
+  }
+
+  /** /provider add: asks for the key (masked), asks the endpoint for its models, writes models.json, reloads. */
+  private async providerAdd(name: string | undefined, baseUrl: string | undefined, opts: ProviderOptions): Promise<void> {
+    if (!name || !baseUrl) {
+      this.h.notify("/provider add <name> <base-url> [--key-env VAR | --no-key] [--no-models] [--api <api>]");
+      return;
+    }
+    const dir = piAgentDir();
+    let apiKey: string | undefined;
+    try {
+      checkProviderId(name);
+      if (listProviders(dir).some((p) => p.id === name)) {
+        throw new Error(`provider "${name}" is already in models.json (/login ${name} changes its key; /provider remove ${name} first to replace it)`);
+      }
+      if (opts.keyEnv !== undefined && opts.noKey) {
+        throw new Error("give --key-env or --no-key, not both");
+      }
+      if (opts.keyEnv !== undefined) {
+        apiKey = apiKeyValue({ env: opts.keyEnv });
+      }
+    } catch (err) {
+      this.h.notify(`/provider add: ${errText(err)}`);
+      return;
+    }
+    if (opts.keyEnv === undefined && !opts.noKey) {
+      const key = await this.h.askSecret(`API key for ${name}`);
+      if (key === undefined) {
+        this.h.notify("no key entered - the provider was not added (--no-key for an endpoint without one)");
+        return;
+      }
+      try {
+        apiKey = apiKeyValue({ literal: key });
+      } catch (err) {
+        this.h.notify(`/provider add: ${errText(err)}`);
+        return;
+      }
+    }
+    let models: NewModel[] = [];
+    let modelsNote = "no models asked for";
+    if (!opts.noModels) {
+      this.h.notify(`asking ${baseUrl} what it serves...`);
+      // a litellm or bifrost gateway (by its name) is asked the way /doctor asks it, which also brings the context window, output limit and cost
+      const kind = gatewayKind(name);
+      const asked = kind === undefined ? await fetchModels(baseUrl, resolveForProbe(apiKey)) : await probeLitellmAsync({ baseUrl, apiKey, kind });
+      const got = typeof asked === "string" || Array.isArray(asked) ? asked : Object.entries(asked.routes).map(([id, r]): NewModel => ({ id, ...r }));
+      if (typeof got === "string") {
+        modelsNote = `no models written: ${got}`;
+      } else {
+        models = got;
+        modelsNote = `${Math.min(got.length, MAX_MODELS)} model${got.length === 1 ? "" : "s"}${got.length > MAX_MODELS ? ` (the first ${MAX_MODELS} of ${got.length})` : ""}`;
+      }
+    }
+    try {
+      addProvider(dir, { id: name, baseUrl, api: opts.api ?? DEFAULT_API, apiKey, models });
+    } catch (err) {
+      this.h.notify(`/provider add: ${errText(err)}`);
+      return;
+    }
+    this.h.editor.setText("");
+    this.h.notify(`added provider "${name}" to models.json: ${modelsNote}${gatewayKind(name) !== undefined ? " (/doctor will compare the numbers with the gateway's)" : ""}`);
+    await this.reload();
+  }
+
+  /** /provider remove: after a confirmation, since the key goes with it (the file's original is kept). */
+  private providerRemove(name: string | undefined): void {
+    if (!name) {
+      this.h.notify("/provider remove <name>");
+      return;
+    }
+    try {
+      if (!listProviders(piAgentDir()).some((p) => p.id === name)) {
+        this.h.notify(`/provider remove: "${name}" is not in models.json`);
+        return;
+      }
+    } catch (err) {
+      this.h.notify(`/provider remove: ${errText(err)}`);
+      return;
+    }
+    this.h.choicePanel.open(`Remove provider "${name}" from models.json? (the original is kept as models.json.bak-<time>)`, ["Remove", "Cancel"], undefined, (choice) => {
+      if (choice !== "Remove") {
+        return;
+      }
+      try {
+        removeProvider(piAgentDir(), name);
+      } catch (err) {
+        this.h.notify(`/provider remove: ${errText(err)}`);
+        return;
+      }
+      this.h.notify(`removed provider "${name}"`);
+      void this.reload();
+    });
+  }
+
+  /** /login <provider>: set an API key in models.json (asked for, masked), then reload. */
+  private async login(provider: string | undefined, keyEnv: string | undefined): Promise<void> {
+    if (!provider) {
+      this.providerList();
+      return;
+    }
+    let apiKey: string;
+    try {
+      checkProviderId(provider);
+      if (keyEnv !== undefined) {
+        apiKey = apiKeyValue({ env: keyEnv });
+      } else {
+        const key = await this.h.askSecret(`API key for ${provider}`);
+        if (key === undefined) {
+          this.h.notify("no key entered - nothing changed");
+          return;
+        }
+        apiKey = apiKeyValue({ literal: key });
+      }
+      const { created } = setProviderKey(piAgentDir(), provider, apiKey);
+      this.h.editor.setText("");
+      this.h.notify(`${created ? `"${provider}" was not in models.json: added it with just its key. ` : ""}set the key of "${provider}"${keyEnv !== undefined ? ` to $${keyEnv}` : ""}`);
+    } catch (err) {
+      this.h.notify(`/login: ${errText(err)}`);
+      return;
+    }
     await this.reload();
   }
 
