@@ -143,6 +143,7 @@ export class SessionCommands {
       cron: (c) => addSchedule(this.h, "cron", "cron", c, this.viewedMeta()?.id),
       watch: (c) => addWatch(this.h, c, this.viewedMeta()?.id),
       tasks: () => this.tasks(),
+      plan: (c) => this.plan(c.args.join(" ")),
       schedules: (c) => showSchedules(this.h, c.opts.all === true ? undefined : this.viewedMeta()?.id),
       cancel: (c) => operateSchedule(this.h, "cancel", c, this.viewedMeta()?.id),
       pause: (c) => operateSchedule(this.h, "pause", c, this.viewedMeta()?.id),
@@ -648,6 +649,33 @@ export class SessionCommands {
   }
 
   /** Explain the last thinking block with the summary model; nothing is sent to the session. */
+  /**
+   * /plan [on|off|status] (ticket 229). The daemon announces the change in the transcript (a durable notice). Needs no child: the mode is a
+   * marker file the daemon writes, and a child that wakes finds it; but it needs the session's id, so a brand-new session must have started.
+   */
+  private async plan(text: string): Promise<void> {
+    const meta = this.viewedMeta();
+    if (meta?.id === undefined) {
+      this.h.notify("plan mode needs a session - send a message first");
+      return;
+    }
+    const word = text.trim().toLowerCase();
+    if (word === "status") {
+      this.h.notify(meta.plan ? "plan mode is ON: the agent can only look until you approve its plan (/plan off ends it)" : "plan mode is off (/plan turns it on)");
+      return;
+    }
+    if (word !== "" && word !== "on" && word !== "off") {
+      this.h.notify("/plan takes on, off or status");
+      return;
+    }
+    try {
+      await this.h.request({ type: "plan_mode", session: meta.id, on: word === "" ? undefined : word === "on" }, 5000);
+    } catch (err) {
+      const stale = err instanceof Error && /timed out|unknown command/i.test(err.message);
+      this.h.notify(stale ? "plan mode: no answer from the daemon (is it older than this toriel? restart it: toriel kill-server)" : `plan mode failed: ${errText(err)}`);
+    }
+  }
+
   /** /tasks (ticket 228): the agent's task list as the daemon last had it. Reads the session list only, so it does not wake a sleeping session. */
   private tasks(): void {
     this.h.infoPanel.show(taskListing(this.viewedMeta()?.tasks ?? []).join("\n"));

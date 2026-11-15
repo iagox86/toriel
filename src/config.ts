@@ -74,6 +74,8 @@ export const LOG = process.env.TORIEL_LOG ?? path.join(STATE_DIR, "daemon.log");
 /** What the daemon learned from the litellm proxy at start (ticket 221): the doctor findings in the controller and /doctor compare it with models.json. */
 /** What the write and edit tools changed, per session (ticket 11): a rewind can put the files back. Copies of the user's files, so owner-only. */
 export const FILE_HISTORY_DIR = process.env.TORIEL_FILE_HISTORY_DIR ?? path.join(STATE_DIR, "file-history");
+/** One marker file per session in plan mode (ticket 229): the daemon writes it for /plan, the toriel-plan extension reads and writes it inside the child. */
+export const PLAN_DIR = process.env.TORIEL_PLAN_DIR ?? path.join(STATE_DIR, "plan-mode");
 export const LITELLM_CACHE_FILE = process.env.TORIEL_LITELLM_CACHE ?? path.join(STATE_DIR, "litellm-routes.json");
 
 /**

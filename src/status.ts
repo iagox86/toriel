@@ -155,6 +155,10 @@ function sessionSegments(inp: StatusInputs): Segment[] {
     // right after the name and never dropped: a mode that answers permission prompts must always be visible
     out.push({ text: attention(`AUTO MODE${meta.autoUntil !== undefined ? ` until ${fmtClock(meta.autoUntil, new Date())}` : ""}`), drop: 0 });
   }
+  if (meta?.plan) {
+    // like auto mode: a mode that changes what the agent may do is always visible
+    out.push({ text: attention("PLAN MODE"), drop: 0 });
+  }
   const modelId = meta?.model && meta.model !== "loading" ? (meta.model.split("/").pop() as string) : undefined;
   if (modelId) {
     const provider = meta?.provider ? dim(` (${meta.provider})`) : "";

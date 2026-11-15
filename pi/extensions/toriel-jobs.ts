@@ -11,6 +11,7 @@ import { appendFileSync, closeSync, existsSync, fstatSync, mkdtempSync, openSync
 import { constants as osConstants, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { createBashToolDefinition, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { PLAN_DIR_ENV, planOn, planWrap } from "./lib/plan-mode.ts";
 import { makeWrap, readSandbox, type Spawnable, sandboxNote } from "./lib/sandbox.ts";
 
 export const CUSTOM_TYPE = "toriel-job";
@@ -139,7 +140,7 @@ export class JobRegistry {
     child.stderr?.on("data", log);
     child.on("error", (spawnError) => {
       // a sandbox that cannot start must say so: the command did not run, and was not run unsandboxed
-      const err = this.opts.wrap ? new Error(`sandbox: could not start ${spec.file} (${spawnError.message}); the command was not run. Install bubblewrap, or set "sandbox": "off" in the toriel settings.`) : spawnError;
+      const err = spec.failure ? new Error(`${spec.failure} (${spawnError.message})`) : this.opts.wrap && spec.file !== "bash" ? new Error(`sandbox: could not start ${spec.file} (${spawnError.message}); the command was not run. Install bubblewrap, or set "sandbox": "off" in the toriel settings.`) : spawnError;
       appendFileSync(logPath, `${err.message}\n`);
       this.finish(job, "exited", 127, null, err);
     });
@@ -484,9 +485,11 @@ export default function (pi: Pi) {
   let ui: Ctx["ui"] | undefined;
   // the per-command sandbox (board 190): off unless the daemon set TORIEL_SANDBOX for this scoped child
   const sandbox = readSandbox(process.env);
+  const sandboxWrap = makeWrap(sandbox);
   const registry: JobRegistry = new JobRegistry({
     dir,
-    wrap: makeWrap(sandbox),
+    // in plan mode (ticket 229) every command runs with the whole filesystem read-only, whatever the sandbox setting; the marker is read at each launch
+    wrap: (command, cwd) => (planOn(process.env[PLAN_DIR_ENV], process.env.TORIEL_SESSION_ID) ? planWrap(command, cwd, process.env.TORIEL_SOCK) : sandboxWrap ? sandboxWrap(command, cwd) : { file: "bash", args: ["-c", command] }),
     onChange: () => {
       const n = registry.runningCount();
       ui?.setStatus(STATUS_KEY, JSON.stringify({ v: 1, running: n }));

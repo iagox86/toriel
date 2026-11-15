@@ -69,6 +69,8 @@ export interface DaemonSession {
   denyTimer?: NodeJS.Timeout;
   /** The agent's task list (ticket 228), as its toriel-tasks extension last reported it; in memory only, the session file is the record. */
   tasks?: Todo[];
+  /** Plan mode (ticket 229), as the daemon last set it or the toriel-plan extension reported it; the marker file is the truth. */
+  plan?: boolean;
 }
 
 /** Whether auto mode is on for `s` now. */

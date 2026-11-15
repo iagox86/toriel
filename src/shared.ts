@@ -35,7 +35,7 @@ export const AUTO_DENIED_NOTICE = "denied automatically";
 /** The notice for a question nobody answered in time (deny-after), dismissed as if cancelled. */
 export const AUTO_DISMISSED_NOTICE = "dismissed automatically";
 
-export const PROTOCOL = 11; // 11: the deny_after command (deny a permission prompt nobody answers in time, ticket 88); 10: the auto_mode command and SessionMeta.auto/autoUntil (a session that allows its permission prompts except the sketchy ones, ticket 213); 9: watch_add's optional `by` ("agent": a file trigger an agent made through toriel_watch_create, held to the agent limits); 8: permission_check's optional `probe` (answer from the grants without remembering a suggestion for a dialog; the reply says `expiresAt`), for the toriel_permission_check tool; 7: spawn's optional `wake` (start a sleeping session because the user typed a command into it; answers `woke: false` with a reason instead of starting a file another pi may have open); 6: 6: rename and adopt answer with the applied `name` and `nameVerified` (the daemon makes names unique); 5: file-path prompts carry grant rows, and permission_add's `dialog` (4: the watch_add command (file-trigger schedules); 3: agent_spawn's optional cwd; 2: the `cd` command and adopt's `keepPermissions`)
+export const PROTOCOL = 12; // 12: the plan_mode command and SessionMeta.plan/tasks (a read-only session until the user approves a plan, ticket 229; the agent's task list, ticket 228); 11: the deny_after command (deny a permission prompt nobody answers in time, ticket 88); 10: the auto_mode command and SessionMeta.auto/autoUntil (a session that allows its permission prompts except the sketchy ones, ticket 213); 9: watch_add's optional `by` ("agent": a file trigger an agent made through toriel_watch_create, held to the agent limits); 8: permission_check's optional `probe` (answer from the grants without remembering a suggestion for a dialog; the reply says `expiresAt`), for the toriel_permission_check tool; 7: spawn's optional `wake` (start a sleeping session because the user typed a command into it; answers `woke: false` with a reason instead of starting a file another pi may have open); 6: 6: rename and adopt answer with the applied `name` and `nameVerified` (the daemon makes names unique); 5: file-path prompts carry grant rows, and permission_add's `dialog` (4: the watch_add command (file-trigger schedules); 3: agent_spawn's optional cwd; 2: the `cd` command and adopt's `keepPermissions`)
 
 /** Which toriel code a process runs (build-id.ts). */
 export interface BuildInfo {
@@ -122,6 +122,8 @@ export interface SessionMeta {
   scheduleLines?: string[];
   /** The agent's task list (ticket 228), drawn above the editor and listed by /tasks; undefined when it has none. */
   tasks?: Todo[];
+  /** Plan mode is on (ticket 229): the session can only look. */
+  plan?: boolean;
   /** Active permission grants in this session, the soonest expiry among the timed ones (epoch ms), and saved grants waiting for /permissions restore. */
   grants?: number;
   /** Auto mode is on (ticket 213), and when it ends by itself (epoch ms; undefined = it does not). */
@@ -192,6 +194,11 @@ type ClientCommandBody =
    */
   | { type: "auto_mode"; session: number; on?: boolean; for?: string }
   | { type: "deny_after"; session: number; after: string }
+  /**
+   * Plan mode (ticket 229): a session that can only look until the user approves a plan. `on` omitted toggles. The state is a marker
+   * file per session (PLAN_DIR), so it outlives the child and the daemon. Answers `{ on }`.
+   */
+  | { type: "plan_mode"; session: number; on?: boolean }
   /** Drop queued steering/follow-up messages; the response carries their text. */
   | { type: "clear_queue"; session: number }
   /** The text pi's /mcp prints (servers and their states), for listing and completion. */

@@ -4,7 +4,7 @@ import { RpcClient } from "@earendil-works/pi-coding-agent";
 import { childEnv, sandboxWritableRoots } from "./child-env.ts";
 import { mcpYamlFile } from "./config-dir.ts";
 import { scopeForSession } from "./scope-root.ts";
-import { DIALOG_METHODS, FILE_HISTORY_DIR, SANDBOX_TMP_DIR, SHARED_DIR, SOCK } from "./config.ts";
+import { DIALOG_METHODS, FILE_HISTORY_DIR, PLAN_DIR, SANDBOX_TMP_DIR, SHARED_DIR, SOCK } from "./config.ts";
 import { answerablePrompt, touchesProtected } from "./daemon-permissions.ts";
 import { type GrantStore, ruleFor, withSuggestion } from "./permissions.ts";
 import { type BridgeTracker, INJECT_COMMAND, injectedId, mergedQueueTexts, parseBridgeReport } from "./daemon-bridge.ts";
@@ -27,6 +27,7 @@ import { type ChildConfig, loadSettings, resolveChildConfig, settingsMtime } fro
 import { fmtDuration, parseDurationText } from "./when.ts";
 import { errText } from "./util.ts";
 import { parseReport as parseTasksReport, STATUS_KEY as TASKS_KEY } from "../pi/extensions/lib/tasks.ts";
+import { STATUS_KEY as PLAN_KEY } from "../pi/extensions/lib/plan-mode.ts";
 
 export interface SlashCommand {
   name: string;
@@ -137,7 +138,7 @@ export class ChildManager {
       cliPath: cfg.piCli,
       cwd: s.cwd,
       args,
-      env: { ...childEnv(s, SOCK, process.env, scope, { sharedDir: SHARED_DIR, tmpDir: SANDBOX_TMP_DIR, sandboxWritable: sandbox, mcpFile: profileHasMcp(s.agent) ? mcpYamlFile() : undefined, fileHistoryDir: FILE_HISTORY_DIR }), ...this.delegationEnv(s) },
+      env: { ...childEnv(s, SOCK, process.env, scope, { sharedDir: SHARED_DIR, tmpDir: SANDBOX_TMP_DIR, sandboxWritable: sandbox, mcpFile: profileHasMcp(s.agent) ? mcpYamlFile() : undefined, fileHistoryDir: FILE_HISTORY_DIR, planDir: PLAN_DIR }), ...this.delegationEnv(s) },
     });
     client.onEvent((event) => this.onEvent(s, event as Record<string, unknown>));
     this.launching.add(client);
@@ -514,6 +515,26 @@ export class ChildManager {
     return true;
   }
 
+  /** Keep plan mode's state from a "toriel-plan" status record (ticket 229): the agent entered or left it, or a session started; true if it was one. */
+  private takePlanReport(s: DaemonSession, event: Record<string, unknown>): boolean {
+    if (event.method !== "setStatus" || event.statusKey !== PLAN_KEY) {
+      return false;
+    }
+    try {
+      const report = JSON.parse(String(event.statusText)) as { v?: number; on?: unknown };
+      if (report?.v === 1 && typeof report.on === "boolean") {
+        if (s.plan !== report.on) {
+          s.plan = report.on;
+          this.hub.broadcast({ type: "notice", session: s.id, text: report.on ? "plan mode ON: the agent asked to plan first; it can only look until you approve its plan" : "plan mode OFF: you approved the plan, the agent can change things again", durable: true });
+        }
+        this.hub.broadcastSessions();
+      }
+    } catch {
+      log(`session ${s.id}: ignored a malformed toriel-plan record`);
+    }
+    return true;
+  }
+
   /** pi settles a dialog with a `timeout` by itself and says nothing, so the record is dropped then too. */
   private expireDialog(s: DaemonSession, dialog: Record<string, unknown>): void {
     const timeout = Number(dialog.timeout);
@@ -627,7 +648,7 @@ export class ChildManager {
     const type = event.type as string;
     this.onActivity?.(s);
     if (type === "extension_ui_request") {
-      if (this.takeUsageReport(event) || this.takeBridgeReport(s, event) || this.takeTasksReport(s, event)) {
+      if (this.takeUsageReport(event) || this.takeBridgeReport(s, event) || this.takeTasksReport(s, event) || this.takePlanReport(s, event)) {
         return; // for the daemon, not for controllers
       }
       const tap = this.noticeTaps.get(s.id);

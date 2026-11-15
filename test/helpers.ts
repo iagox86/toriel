@@ -59,6 +59,7 @@ export async function startDaemon(extraEnv: Record<string, string> = {}): Promis
     TORIEL_PERMISSIONS: path.join(dir, "permissions.json"),
     // where the write/edit tools journal what they change (ticket 11): not the real state directory
     TORIEL_FILE_HISTORY_DIR: path.join(dir, "file-history"),
+    TORIEL_PLAN_DIR: path.join(dir, "plan-mode"),
     // settings come from XDG_CONFIG_HOME, so pin it too: a test daemon must not read the user's real settings file
     XDG_CONFIG_HOME: path.join(dir, "config"),
     // a test daemon must not take real logind sleep locks

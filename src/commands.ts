@@ -386,6 +386,15 @@ export const SESSION_COMMANDS = [
     },
   },
   {
+    name: "plan",
+    description: "plan mode: the agent can only look until you approve its plan",
+    help: "Switches plan mode for this session. While it is on the agent can read, search and run read-only commands, but it cannot write or edit files, and any tool that might change something is refused; commands run with the whole filesystem read-only (needs bubblewrap, which the sandbox uses). It explores, then shows you a plan: you approve it (plan mode ends and it starts), ask for changes, or reject it. The agent may also ask for plan mode itself before a large change.\n\nIt is a guardrail for an agent that follows instructions, not a boundary against one that does not: your permission rules and the sandbox are the boundaries. MCP tools are refused unless the server is marked `readOnly: true` in mcp.yaml. The status line shows PLAN MODE while it is on, and it survives a restart.\n\nWith no argument it toggles.\n\nExamples:\n  /plan            toggle\n  /plan on         look and plan first\n  /plan off        end it without a plan\n  /plan status     say whether it is on",
+    complete: async (typed) => matching(["on", "off", "status"], typed),
+    build: (cmd) => {
+      cmd.argument("[on|off|status]", "on, off or status; nothing toggles");
+    },
+  },
+  {
     name: "deny-after",
     description: "deny a permission prompt nobody answers within a time (off by default)",
     help: "Makes this session deny a permission prompt that has waited that long with no answer, instead of waiting for ever. The agent is told the action was refused, and a note under the tool call says it was automatic and how long it waited. Meant for sessions nobody is watching (a long run you walk away from, scheduled prompts); it is off unless you set it, so a prompt you are slow to answer is never lost by default.\n\nThe permissionDenyAfter setting turns it on for every session; this command overrides it for one (the answer is kept until the daemon restarts). Between 10 seconds and 24 hours.\n\nExamples:\n  /deny-after 10m   deny prompts that wait 10 minutes\n  /deny-after off   wait for ever, whatever the setting says\n  /deny-after default   follow the setting again\n  /deny-after status",
