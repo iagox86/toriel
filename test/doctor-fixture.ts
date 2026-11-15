@@ -36,13 +36,17 @@ export interface Over {
   noResources?: boolean;
   noCli?: boolean;
   noInhibit?: boolean;
-  /** The git MCP server in mcp.json: "direct" (default, healthy), another exposure, or "none" for no mcp.json at all. */
+  /** The git MCP server in mcp.yaml: "direct" (default, healthy), another exposure, or "none" for no mcp.yaml at all. */
   gitMcp?: string;
   /** Leave pi-web-access out of pi's packages. */
   noWeb?: boolean;
   /** Same for the gdb and ghidra servers (the debug and re-* agents). */
   gdbMcp?: string;
   ghidraMcp?: string;
+  /** Extra servers for mcp.yaml (name -> entry), or raw text to append (a broken entry). */
+  mcpExtra?: Record<string, unknown>;
+  /** What pi's own mcp.json holds (the file toriel no longer reads: the doctor offers to move it). */
+  piMcpJson?: unknown;
   /** Place a fake installed pi-permission-system package beside piCli: "absent" (unpatched) or "present" (carries the scope-patch marker). */
   scopePatch?: "absent" | "present";
 }
@@ -50,6 +54,7 @@ export interface Over {
 export function setup(home: string, over: Over = {}) {
   const base = fs.mkdtempSync(path.join(home, "s-"));
   const agentDir = path.join(base, "agent");
+  const mcpFile = path.join(base, "mcp.yaml");
   if (!over.noPiDir) {
     mk(path.join(agentDir, "extensions", "pi-permission-system"));
     fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ packages: [...(over.noPackage ? [] : ["npm:@gotgenes/pi-permission-system"]), ...(over.noWeb ? [] : ["npm:pi-web-access"])] }));
@@ -70,7 +75,12 @@ export function setup(home: string, over: Over = {}) {
         mcpServers[name] = server(exposure);
       }
     }
-    fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers }));
+    Object.assign(mcpServers, over.mcpExtra ?? {});
+    fs.writeFileSync(mcpFile, JSON.stringify({ servers: mcpServers }));
+  }
+  if (over.piMcpJson !== undefined && !over.noPiDir) {
+    mk(agentDir);
+    fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify(over.piMcpJson));
   }
   const root = path.join(base, "pi");
   if (!over.noResources) {
@@ -100,6 +110,6 @@ export function setup(home: string, over: Over = {}) {
     fs.writeFileSync(settingsFile, renderSettings());
   }
   const grantsFile = path.join(home, ".local", "share", "toriel", "permissions.json");
-  const opts: DoctorOptions = { agentDir, root, grantsFile, settingsFile, piCli, pathDirs: [bin], platform: "linux", startup: [], env: { TORIEL_NODE: "/nonexistent-node" } };
-  return { agentDir, opts, config: path.join(agentDir, "extensions", "pi-permission-system", "config.json"), grantsFile };
+  const opts: DoctorOptions = { agentDir, mcpFile, root, grantsFile, settingsFile, piCli, pathDirs: [bin], platform: "linux", startup: [], env: { TORIEL_NODE: "/nonexistent-node" } };
+  return { agentDir, mcpFile, opts, config: path.join(agentDir, "extensions", "pi-permission-system", "config.json"), grantsFile };
 }

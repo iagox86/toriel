@@ -10,7 +10,7 @@ import { SOCK, TRASH_DIR } from "./config.ts";
 import { type Cmd, type DaemonContext, requireNotInPi, type Responder } from "./daemon-context.ts";
 import { deliverToSession } from "./daemon-handlers-bridge.ts";
 import { sendHistory } from "./daemon-history.ts";
-import { type DaemonSession, type HeldPrompt, requireIdle } from "./daemon-session.ts";
+import { autoOn, type DaemonSession, type HeldPrompt, requireIdle } from "./daemon-session.ts";
 import { formatLocalCommand, type LocalResult, runLocal } from "./local-command.ts";
 import { log } from "./log.ts";
 import { matchModel, modelName } from "./model-match.ts";
@@ -18,6 +18,10 @@ import { matchThinkingLevel } from "./think-match.ts";
 import { clearFile, latestClearBackup, restoreClear, rewindFile } from "./rewind.ts";
 import { setSessionFileCwd } from "./session-header.ts";
 import { encodeLine } from "./shared.ts";
+import { fmtClock, fmtDuration, parseDurationText } from "./when.ts";
+
+/** The longest one stretch of timed auto mode (a forgotten one should not outlive the day). */
+const MAX_AUTO_MS = 24 * 3_600_000;
 
 export async function handleAbort(
   ctx: DaemonContext,
@@ -74,13 +78,76 @@ export const BACKGROUND_COMMAND = "toriel-background";
  * model as text.
  */
 export async function handleBackground(ctx: DaemonContext, cmd: Cmd<"background">, res: Responder): Promise<void> {
-  const child = ctx.registry.live(cmd.session).child;
+  const s = ctx.registry.live(cmd.session);
+  // a subagent the agent is waiting for moves first (ticket 212); one ctrl-b does one kind of thing, the next press moves a command too
+  const agents = s.sessionId ? ctx.subagents.backgroundForeground(s.sessionId) : [];
+  if (agents.length > 0) {
+    ctx.hub.broadcast({ type: "notice", session: s.id, text: `moved to the background: ${agents.map((r) => `subagent #${r.handle} (${r.agent})`).join(", ")}; the result arrives as a message`, durable: true });
+    res(true);
+    return;
+  }
+  const child = s.child;
   const commands = await child.getCommands();
   if (!commands.some((c) => c.name === BACKGROUND_COMMAND)) {
     throw new Error("this session's pi does not have the background-jobs extension; restart the session");
   }
   await child.prompt(`/${BACKGROUND_COMMAND}`);
   res(true);
+}
+
+/**
+ * Switch auto mode for a session (ticket 213; see auto-mode.ts for what it answers and the floor it never does). A sleeping
+ * session may have it set: the flag is the daemon's, not the child's. Says so in the transcript either way, since a mode that
+ * answers prompts must never be ambiguous.
+ */
+export function handleAutoMode(ctx: DaemonContext, cmd: Cmd<"auto_mode">, res: Responder): void {
+  const s = ctx.registry.get(cmd.session);
+  if (!s) {
+    throw new Error(`no session #${cmd.session}`);
+  }
+  const on = cmd.on ?? !autoOn(s);
+  let ms: number | undefined;
+  if (on && cmd.for !== undefined) {
+    const d = parseDurationText(cmd.for);
+    if (!d.ok) {
+      throw new Error(d.error);
+    }
+    if (d.ms > MAX_AUTO_MS) {
+      throw new Error(`auto mode can last at most ${fmtDuration(MAX_AUTO_MS)} at a time`);
+    }
+    ms = d.ms;
+  }
+  clearTimeout(s.autoTimer);
+  s.autoTimer = undefined;
+  if (!on) {
+    s.autoUntil = undefined;
+  } else {
+    s.autoUntil = ms === undefined ? null : Date.now() + ms;
+    if (ms !== undefined) {
+      s.autoTimer = setTimeout(() => endAuto(ctx, s), ms);
+      s.autoTimer.unref();
+    }
+  }
+  const until = typeof s.autoUntil === "number" ? s.autoUntil : undefined;
+  log(`auto mode ${on ? "on" : "off"} for session ${s.id}${until !== undefined ? ` until ${new Date(until).toISOString()}` : ""}`);
+  ctx.hub.broadcast({
+    type: "notice",
+    session: s.id,
+    text: on
+      ? `auto mode ON${until !== undefined ? ` until ${fmtClock(until, new Date())}` : ""}: permission prompts are allowed without asking, except the ones that always ask (credentials, destructive commands, pushes, writes outside the directory); /auto off or shift+tab ends it`
+      : "auto mode OFF: permission prompts ask again",
+    durable: true,
+  });
+  ctx.hub.broadcastSessions();
+  res(true, undefined, { on, until });
+}
+
+/** A timed auto mode ran out. */
+function endAuto(ctx: DaemonContext, s: DaemonSession): void {
+  s.autoTimer = undefined;
+  s.autoUntil = undefined;
+  ctx.hub.broadcast({ type: "notice", session: s.id, text: "auto mode ended (its time ran out): permission prompts ask again", durable: true });
+  ctx.hub.broadcastSessions();
 }
 
 export async function handleClearQueue(

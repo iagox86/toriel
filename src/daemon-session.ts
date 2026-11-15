@@ -58,6 +58,15 @@ export interface DaemonSession {
   agent?: AgentProfile;
   /** Whether the current model takes images (from pi's model entry); undefined = unknown. */
   acceptsImages?: boolean;
+  /** Auto mode (ticket 213): undefined = off, null = on until switched off, a number = on until then (epoch ms). In memory only, never stored. */
+  autoUntil?: number | null;
+  /** Ends a timed auto mode. */
+  autoTimer?: NodeJS.Timeout;
+}
+
+/** Whether auto mode is on for `s` now. */
+export function autoOn(s: Pick<DaemonSession, "autoUntil">, now = Date.now()): boolean {
+  return s.autoUntil !== undefined && (s.autoUntil === null || s.autoUntil > now);
 }
 
 /** A message sent while a compaction ran, with whatever images came along. */

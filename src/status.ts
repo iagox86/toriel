@@ -6,7 +6,7 @@ import { displayName, type LocalSession } from "./session-list.ts";
 import type { SessionMeta, UsageReport } from "./shared.ts";
 import { budgetNearCap, budgetText } from "./subagent-budget.ts";
 import { accent, attention, dim, gauge, streaming } from "./theme.ts";
-import { fmtNext } from "./when.ts";
+import { fmtClock, fmtNext } from "./when.ts";
 
 export interface FleetStats {
   running: number;
@@ -151,6 +151,10 @@ export function usageText(usage: UsageReport | undefined, now = Date.now()): str
 function sessionSegments(inp: StatusInputs): Segment[] {
   const { meta } = inp;
   const out: Segment[] = [{ text: displayName(meta, inp.info), drop: 0 }];
+  if (meta?.auto) {
+    // right after the name and never dropped: a mode that answers permission prompts must always be visible
+    out.push({ text: attention(`AUTO MODE${meta.autoUntil !== undefined ? ` until ${fmtClock(meta.autoUntil, new Date())}` : ""}`), drop: 0 });
+  }
   const modelId = meta?.model && meta.model !== "loading" ? (meta.model.split("/").pop() as string) : undefined;
   if (modelId) {
     const provider = meta?.provider ? dim(` (${meta.provider})`) : "";

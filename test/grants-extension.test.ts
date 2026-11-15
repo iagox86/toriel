@@ -49,6 +49,84 @@ describe("describeAsk", () => {
   });
 });
 
+describe("askRule (ticket 213): is this ask from a rule the owner wrote, or only the default", () => {
+  const query = (result: Record<string, unknown> | Error) => ({
+    checkPermission: () => {
+      if (result instanceof Error) {
+        throw result;
+      }
+      return result;
+    },
+  });
+  const ask = { command: "git status", surface: "bash", sessionApproval: { grants: [{ surface: "bash", pattern: "git status" }] } };
+
+  it("calls a rule the owner wrote explicit, whichever config scope it came from", () => {
+    for (const origin of ["global", "project", "agent", "project-agent"]) {
+      assert.deepEqual(ext.askRule(query({ state: "ask", matchedPattern: "git *", origin }), ask), { explicit: true, pattern: "git *", origin }, origin);
+    }
+  });
+
+  it("calls the catch-all default, a bare `*` rule and a builtin origin not explicit", () => {
+    assert.equal(ext.askRule(query({ state: "ask", matchedPattern: "*", origin: "global" }), ask)?.explicit, false, "bash: ask is the surface's default");
+    assert.equal(ext.askRule(query({ state: "ask", origin: "builtin" }), ask)?.explicit, false, "no pattern at all");
+    assert.equal(ext.askRule(query({ state: "ask", matchedPattern: "git *", origin: "builtin" }), ask)?.explicit, false, "a built-in rule is not the owner's");
+  });
+
+  it("counts a package safety floor and a fail-closed scope as explicit", () => {
+    assert.equal(ext.askRule(query({ state: "ask", origin: "builtin", floor: "wrapper" }), ask)?.explicit, true);
+    assert.equal(ext.askRule(query({ state: "ask", origin: "fail-closed" }), ask)?.explicit, true);
+  });
+
+  it("is undefined, not a yes, when it cannot tell: the policy does not say ask here, or there is no way to read it", () => {
+    assert.equal(ext.askRule(query({ state: "allow", matchedPattern: "git *", origin: "global" }), ask), undefined, "the gate asked but the query does not: they disagree");
+    assert.equal(ext.askRule(undefined, ask), undefined, "no query");
+    assert.equal(ext.askRule({}, ask), undefined, "a query without checkPermission");
+    assert.equal(ext.askRule(query(new Error("boom")), ask), undefined, "a throw");
+    assert.equal(ext.askRule(query({ state: "ask" }), { command: "x" }), undefined, "no surface to ask about");
+  });
+
+  it("asks about the access's own surface and value, and the agent's name", () => {
+    const seen: unknown[][] = [];
+    const recording = {
+      checkPermission: (...a: unknown[]) => {
+        seen.push(a);
+        return { state: "ask" };
+      },
+    };
+    ext.askRule(recording as never, { accessIntent: { surface: "path_write" }, path: "/p/a", payload: { request: { value: "/p/a" } } }, "worker");
+    assert.deepEqual(seen, [["path_write", "/p/a", "worker"]]);
+  });
+});
+
+describe("authorize reports why pi asks (ticket 213)", () => {
+  const asked = { command: "git status", surface: "bash", sessionApproval: { grants: [{ surface: "bash", pattern: "git status" }] }, payload: { request: { value: "git status" } } };
+  const query = { checkPermission: () => ({ state: "ask", matchedPattern: "git *", origin: "global" }) };
+
+  it("sends the rule with the check, and still defers when no grant covers it", async () => {
+    const d = await fakeDaemon(() => ({ ok: true, data: { allow: false } }));
+    try {
+      assert.deepEqual(await ext.authorize(sock, "u", asked, undefined, undefined, query), { kind: "defer" });
+      assert.deepEqual(d.seen[0]?.rule, { explicit: true, pattern: "git *", origin: "global" });
+    } finally {
+      d.close();
+    }
+  });
+
+  it("sends the rule even for an ask with no grant to suggest, and nothing when there is neither", async () => {
+    const d = await fakeDaemon(() => ({ ok: true, data: { allow: false } }));
+    try {
+      const noGrants = { command: "git status", surface: "bash", payload: { request: { value: "git status" } } };
+      await ext.authorize(sock, "u", noGrants, undefined, undefined, query);
+      assert.equal(d.seen.length, 1);
+      assert.deepEqual(d.seen[0]?.grants, []);
+      await ext.authorize(sock, "u", noGrants);
+      assert.equal(d.seen.length, 1, "no grants and no way to read the rule: nothing to say");
+    } finally {
+      d.close();
+    }
+  });
+});
+
 describe("authorize", () => {
   it("allows when the daemon says a grant covers the ask, sending its own session id", async () => {
     const d = await fakeDaemon(() => ({ ok: true, data: { allow: true, grants: [1] } }));

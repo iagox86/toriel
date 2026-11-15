@@ -59,6 +59,14 @@ describe("the TORIEL_SCOPE_ROOT / TORIEL_SCOPE_MODE seam", () => {
   });
 });
 
+describe("the MCP file variable (tickets 209, 216)", () => {
+  it("carries the path of mcp.yaml, never its contents, only when given, and never from the daemon's own environment", () => {
+    assert.equal(childEnv({}, "/sock", {}, undefined, { mcpFile: "/c/toriel/mcp.yaml" }).TORIEL_MCP_FILE, "/c/toriel/mcp.yaml");
+    assert.equal(childEnv({}, "/sock", {}).TORIEL_MCP_FILE, undefined);
+    assert.equal(childEnv({}, "/sock", { TORIEL_MCP_FILE: "/leak.yaml" }).TORIEL_MCP_FILE, undefined, "a daemon started inside a session must not hand its own on");
+  });
+});
+
 describe("the sandbox and shared-directory variables (board 190)", () => {
   it("always gives the shared directory, and the sandbox pair only for a scoped child that asks", () => {
     const plain = childEnv({}, "/sock", {}, undefined, { sharedDir: "/shared" });

@@ -3,7 +3,7 @@ import { after, describe, it } from "node:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { addMcpServer, explainMcpFailure, mcpCompletions, mcpEntry, mcpListLines, mcpServerConnected, parseMcpStatus, removeMcpServer, skillForServer } from "../src/mcp.ts";
+import { explainMcpFailure, mcpCompletions, mcpEntry, mcpListLines, mcpServerConnected, parseMcpStatus, skillForServer } from "../src/mcp.ts";
 
 describe("explainMcpFailure", () => {
   it("says a proxy page is probably answering when the sign-in got HTML instead of JSON, and keeps pi's text", () => {
@@ -98,74 +98,6 @@ describe("mcpEntry", () => {
   });
 });
 
-describe("addMcpServer", () => {
-  function tmpFile(content?: string): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-mcp-"));
-    const file = path.join(dir, "mcp.json");
-    if (content !== undefined) {
-      fs.writeFileSync(file, content);
-    }
-    return file;
-  }
-
-  it("creates the file when there is none", () => {
-    const file = tmpFile();
-    addMcpServer(file, "a", { url: "http://x/mcp" });
-    assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { mcpServers: { a: { url: "http://x/mcp" } } });
-  });
-
-  it("keeps existing servers and other keys", () => {
-    const file = tmpFile(JSON.stringify({ settings: { t: 1 }, mcpServers: { old: { command: "o" } } }));
-    addMcpServer(file, "new", { command: "n" });
-    assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), {
-      settings: { t: 1 },
-      mcpServers: { old: { command: "o" }, new: { command: "n" } },
-    });
-  });
-
-  it("refuses to replace a server or to rewrite a file that is not JSON", () => {
-    const file = tmpFile(JSON.stringify({ mcpServers: { a: { command: "o" } } }));
-    assert.throws(() => addMcpServer(file, "a", { command: "n" }), /already exists/);
-    const bad = tmpFile("{ nope");
-    assert.throws(() => addMcpServer(bad, "a", { command: "n" }), /not valid JSON/);
-    assert.equal(fs.readFileSync(bad, "utf8"), "{ nope");
-  });
-});
-
-describe("removeMcpServer", () => {
-  function tmpFile(content: string): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-mcp-"));
-    const file = path.join(dir, "mcp.json");
-    fs.writeFileSync(file, content);
-    return file;
-  }
-
-  it("removes one server and keeps the others and every other key", () => {
-    const file = tmpFile(JSON.stringify({ settings: { t: 1 }, mcpServers: { a: { command: "a" }, b: { url: "http://b/mcp" } } }));
-    removeMcpServer(file, "a");
-    assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { settings: { t: 1 }, mcpServers: { b: { url: "http://b/mcp" } } });
-  });
-
-  it("says where a server is defined when it is not in this file", () => {
-    const user = tmpFile(JSON.stringify({ mcpServers: { a: { command: "a" } } }));
-    const project = tmpFile(JSON.stringify({ mcpServers: { proj: { command: "p" } } }));
-    assert.throws(() => removeMcpServer(user, "proj", [project]), new RegExp(`defined in ${project.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
-    assert.throws(() => removeMcpServer(user, "ghost", [project]), /not in .*extension cannot be removed/);
-    assert.throws(() => removeMcpServer(path.join(os.tmpdir(), "no-such-toriel-mcp.json"), "a"), /is not in/);
-  });
-
-  it("leaves a file that is not valid JSON alone", () => {
-    const file = tmpFile("{ nope");
-    assert.throws(() => removeMcpServer(file, "a"), /not valid JSON/);
-    assert.equal(fs.readFileSync(file, "utf8"), "{ nope");
-  });
-
-  it("offers server names after remove, with their state", () => {
-    const out = mcpCompletions("remove me", [{ name: "mealie", detail: "connected, 12 tools (direct)" }, { name: "other", detail: "x" }]);
-    assert.deepEqual(out, [{ value: "remove mealie", description: "connected, 12 tools (direct)" }]);
-  });
-});
-
 describe("skillForServer", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-skills-"));
   after(() => {
@@ -242,9 +174,9 @@ describe("mcpListLines", () => {
     ]);
   });
 
-  it("passes the none-configured message through untouched", () => {
+  it("replaces pi's none-configured message, which points at a file toriel does not use (ticket 216)", () => {
     const none = "No MCP servers configured. Add them to /x/mcp.json or .pi/mcp.json.";
-    assert.deepEqual(mcpListLines(none, [dir]), [none]);
+    assert.match(mcpListLines(none, [dir])[0] ?? "", /^No MCP servers are configured\. \/mcp add <name> <url \| command args\.\.\.> adds one to .*mcp\.yaml\.$/);
   });
 });
 

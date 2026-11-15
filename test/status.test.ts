@@ -69,6 +69,14 @@ describe("buildStatusLine", () => {
     assert.equal(line, "alpha | glm-5.3-flash (zai-coding-cn) | idle | ctx 45.2k/200.0k 23% | think high | $1.23");
   });
 
+  it("says AUTO MODE up front, with when it ends, and never drops it on a narrow terminal (ticket 213)", () => {
+    const at = new Date(2026, 10, 14, 15, 30).getTime();
+    assert.match(plain(buildStatusLine({ ...base, meta: meta({ auto: true, sessionName: "alpha" }) })), /alpha \| AUTO MODE \| model-x/);
+    assert.match(plain(buildStatusLine({ ...base, meta: meta({ auto: true, autoUntil: at }) })), /AUTO MODE until /);
+    assert.doesNotMatch(plain(buildStatusLine({ ...base, meta: meta() })), /AUTO/);
+    assert.match(plain(buildStatusLine({ ...base, width: 24, meta: meta({ auto: true, model: "prov/model-x", thinkingLevel: "high", cost: 1.2, ctxMax: 200_000, ctxTokens: 1000 }) })), /AUTO MODE/, "the other segments go first");
+  });
+
   it("shows a subagent's budget next to its parent, as a warning near the cap", () => {
     const sub = (tokens: number) => meta({ subagent: { state: "running", delivered: false, parent: "p", tokens, budget: 150_000, turns: 3, maxTurns: 25 } });
     const line = (tokens: number) => buildStatusLine({ ...base, relation: { kind: "subagent", parentName: "Boss" }, meta: sub(tokens) });

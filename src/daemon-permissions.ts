@@ -3,6 +3,7 @@
 // link in each child asks `permission_check` before pi's dialog opens.
 import * as os from "node:os";
 import { PERMISSIONS_FILE } from "./config.ts";
+import { mcpYamlFile } from "./config-dir.ts";
 import type { Cmd, DaemonContext, Responder } from "./daemon-context.ts";
 import { scopeOf } from "./daemon-schedule.ts";
 import { log } from "./log.ts";
@@ -54,14 +55,15 @@ export function handlePermissionCheck(ctx: DaemonContext, cmd: Cmd<"permission_c
   const s = typeof cmd.uuid === "string" ? ctx.registry.all().find((x) => x.sessionId === cmd.uuid) : undefined;
   if (s) {
     // file-path asks too: their grant rows are made from the prompt itself (see handlePermissionAdd)
-    s.suggestion = asked.length > 0 ? { grants: asked, value: typeof cmd.value === "string" ? cmd.value : undefined, at: Date.now() } : undefined;
+    // the reason for the ask (ticket 213) is kept even when there is no grant to suggest
+    s.suggestion = asked.length > 0 || cmd.rule !== undefined ? { grants: asked, value: typeof cmd.value === "string" ? cmd.value : undefined, at: Date.now(), rule: cmd.rule } : undefined;
   }
   res(true, undefined, { allow: false });
 }
 
-/** Files a grant must never answer for: the grants themselves and pi's own configuration. Such an ask always reaches the user. */
+/** Files a grant must never answer for: the grants themselves, pi's own configuration and toriel's mcp.yaml (an entry there is a command the next session runs). Such an ask always reaches the user. */
 export function protectedPaths(): string[] {
-  return [PERMISSIONS_FILE, piAgentDir()];
+  return [PERMISSIONS_FILE, piAgentDir(), mcpYamlFile()];
 }
 
 /**

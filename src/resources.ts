@@ -69,6 +69,7 @@ export const RESOURCES: readonly Resource[] = [
   { kind: "extension", path: "extensions/toriel-grants.ts", why: "permission grants (/permissions) have no effect: every ask opens its dialog" },
   { kind: "extension", path: "extensions/toriel-usage.ts", why: "the toriel_usage tool and usage reporting are missing", tools: ["toriel_usage"] },
   { kind: "extension", path: "extensions/toriel-jobs.ts", why: "agents cannot start background commands (bash run_in_background and the toriel_job tool are missing)", tools: ["toriel_job"] },
+  { kind: "extension", path: "extensions/toriel-mcp.ts", why: "no MCP server of toriel's mcp.yaml is registered into pi (agents have no MCP tools), and /mcp-up is missing" },
   { kind: "extension", path: "extensions/toriel-cache-warn.ts", why: "no warning before a prompt hits an expired prompt cache" },
   { kind: "skill", path: "skills/messaging", why: "agents are not told how to use toriel_message" },
   { kind: "skill", path: "skills/scheduling", why: "agents are not told how to use toriel_schedule_create" },

@@ -150,8 +150,8 @@ export function activityLines(state: ActivityState, width: number, now: number):
   if (state.activity) {
     const { ms, waiting } = runElapsed(state, state.activity, now);
     const label = waiting ? "waiting on you" : state.activity.label;
-    // a shell command the agent waits for can be moved to the background: say how
-    let hint = !waiting && state.activity.label === "running bash" ? dim("  ctrl-b: run in background") : "";
+    // a shell command or a subagent the agent waits for can be moved to the background: say how
+    let hint = !waiting && (state.activity.label === "running bash" || state.activity.label === "running toriel_agent") ? dim("  ctrl-b: run in background") : "";
     const silent = state.activity.inference ? now - state.activity.inference.last : 0;
     if (!waiting && silent >= SLOW_AFTER_MS) {
       hint = dim(`  slower than usual - ${formatElapsed(silent)}`);

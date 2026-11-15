@@ -2,15 +2,16 @@
 import * as fs from "node:fs";
 import { RpcClient } from "@earendil-works/pi-coding-agent";
 import { childEnv, sandboxWritableRoots } from "./child-env.ts";
+import { mcpYamlFile } from "./config-dir.ts";
 import { scopeForSession } from "./scope-root.ts";
 import { DIALOG_METHODS, SANDBOX_TMP_DIR, SHARED_DIR, SOCK } from "./config.ts";
 import { answerablePrompt, touchesProtected } from "./daemon-permissions.ts";
-import { type GrantStore, withSuggestion } from "./permissions.ts";
+import { type GrantStore, ruleFor, withSuggestion } from "./permissions.ts";
 import { type BridgeTracker, INJECT_COMMAND, injectedId, mergedQueueTexts, parseBridgeReport } from "./daemon-bridge.ts";
 import type { ClientHub } from "./daemon-hub.ts";
-import type { DaemonSession } from "./daemon-session.ts";
+import { autoOn, type DaemonSession } from "./daemon-session.ts";
 import { randomUUID } from "node:crypto";
-import { type AgentProfile, loadAgents, profileArgs, withResolvedModel } from "./agents.ts";
+import { type AgentProfile, loadAgents, profileArgs, profileHasMcp, withResolvedModel } from "./agents.ts";
 import { recordHandled } from "./handled-files.ts";
 import { exitNote, stderrTail } from "./subagent-exit.ts";
 import { historyLength } from "./daemon-history.ts";
@@ -20,7 +21,8 @@ import { sessionIdOfFile } from "./session-file.ts";
 import { mayDelegate, type SubagentLimits } from "./subagents.ts";
 import { profileOfSession, saveSessionAgent } from "./session-agents.ts";
 import { log } from "./log.ts";
-import { encodeLine, GRANT_ANSWERED_NOTICE, type UsageReport } from "./shared.ts";
+import { type AskRule, AUTO_ANSWERED_NOTICE, encodeLine, GRANT_ANSWERED_NOTICE, type UsageReport } from "./shared.ts";
+import { floorReason, isPermissionPrompt, promptSubject } from "./auto-mode.ts";
 import { type ChildConfig, loadSettings, resolveChildConfig, settingsMtime } from "./settings.ts";
 import { errText } from "./util.ts";
 
@@ -133,7 +135,7 @@ export class ChildManager {
       cliPath: cfg.piCli,
       cwd: s.cwd,
       args,
-      env: { ...childEnv(s, SOCK, process.env, scope, { sharedDir: SHARED_DIR, tmpDir: SANDBOX_TMP_DIR, sandboxWritable: sandbox }), ...this.delegationEnv(s) },
+      env: { ...childEnv(s, SOCK, process.env, scope, { sharedDir: SHARED_DIR, tmpDir: SANDBOX_TMP_DIR, sandboxWritable: sandbox, mcpFile: profileHasMcp(s.agent) ? mcpYamlFile() : undefined }), ...this.delegationEnv(s) },
     });
     client.onEvent((event) => this.onEvent(s, event as Record<string, unknown>));
     this.launching.add(client);
@@ -526,6 +528,35 @@ export class ChildManager {
     return true;
   }
 
+  /**
+   * Auto mode (ticket 213): a permission prompt in a session with auto mode on is answered "Yes" here, before any controller sees
+   * it, unless it is in the always-ask floor (auto-mode.ts), which is shown as usual with a flash saying why. Runs after
+   * `answerCovered`, so a grant wins first. Says so in the log and in a notice that reads under the tool call it allowed.
+   * False when the prompt must be shown.
+   */
+  private answerAuto(s: DaemonSession, request: Record<string, unknown>, value: string | undefined, rule: AskRule | undefined): boolean {
+    if (!autoOn(s) || !isPermissionPrompt(request)) {
+      return false;
+    }
+    const title = typeof request.title === "string" ? request.title : "";
+    const surfaces = (request.toriel as { grants?: Array<{ surface: string }> } | undefined)?.grants;
+    const why = floorReason({ title, value, surfaces, rule });
+    if (why) {
+      log(`auto mode asks about a prompt for session ${s.sessionId}: ${why}`);
+      this.hub.broadcast({ type: "notice", session: s.id, text: `auto mode still asks about this one: ${why}` });
+      return false;
+    }
+    const stdin = (s.child as unknown as { process?: { stdin?: { write(text: string): void } } } | undefined)?.process?.stdin;
+    if (!stdin) {
+      return false;
+    }
+    stdin.write(encodeLine({ type: "extension_ui_response", id: request.id, value: "Yes" }));
+    const what = promptSubject(title, value).slice(0, 160) || "a prompt";
+    log(`prompt answered by auto mode for session ${s.sessionId}: ${what}`);
+    this.hub.broadcast({ type: "notice", session: s.id, text: `${AUTO_ANSWERED_NOTICE}: ${what}`, durable: true });
+    return true;
+  }
+
   private clearDialog(s: DaemonSession): void {
     if (s.pendingDialog) {
       s.pendingDialog = false;
@@ -552,12 +583,17 @@ export class ChildManager {
       // an ask about the grants file or pi's config is always asked: say so instead of offering rows that could only be refused
       const request = event.method === "select" && touchesProtected(typeof event.title === "string" ? event.title : "") ? { ...suggested, toriel: { protectedAsk: true } } : suggested;
       if (DIALOG_METHODS.has(event.method as string)) {
+        // the reason for the ask (ticket 213) is read before the suggestion is used up below: most asks carry a grant to suggest, so it is cleared for them
+        const rule = ruleFor(event, s.suggestion, Date.now());
         // only the dialog that took the suggestion uses it up: an unrelated one arriving first must not lose it
-        if (suggested !== event) {
+        if (suggested !== event || rule !== undefined) {
           s.suggestion = undefined;
         }
         if (this.answerCovered(s, request, asked)) {
           return; // answered from a grant: nobody is asked
+        }
+        if (this.answerAuto(s, request, asked, rule)) {
+          return; // answered by auto mode
         }
         s.pendingDialog = true;
         s.lastDialog = request;

@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import { agentCompletions, agentListing } from "../src/agents-completion.ts";
-import { findAgent, loadAgents, mcpWarnings, mergeMcpServers, parseAgent, profileArgs, readMcpServers, resolveModel, withResolvedModel } from "../src/agents.ts";
+import { findAgent, loadAgents, mcpWarnings, mergeMcpServers, parseAgent, profileArgs, profileHasMcp, readMcpServers, resolveModel, withResolvedModel } from "../src/agents.ts";
 
 const FILE = [
   "---",
@@ -61,6 +61,16 @@ describe("parseAgent", () => {
   });
 });
 
+describe("profileHasMcp (ticket 209)", () => {
+  it("is true for a plain session and a profile that keeps MCP, false when --no-mcp or --no-extensions would remove it", () => {
+    assert.equal(profileHasMcp(undefined), true);
+    assert.equal(profileHasMcp(parse("---\nname: a\ndescription: d\n---\nhi")), true, "no tools list: pi's defaults, MCP included");
+    assert.equal(profileHasMcp(parse("---\nname: a\ndescription: d\ntools: read, mcp__git__*\n---\nhi")), true);
+    assert.equal(profileHasMcp(parse("---\nname: a\ndescription: d\ntools: read, grep\n---\nhi")), false, "profileArgs adds --no-mcp");
+    assert.equal(profileHasMcp(parse("---\nname: a\ndescription: d\nextensions: false\n---\nhi")), false, "profileArgs adds --no-extensions");
+  });
+});
+
 describe("profileArgs", () => {
   it("limits tools and drops MCP unless the profile names an MCP tool", () => {
     const plain = parse("---\nname: a\ndescription: d\ntools: read, grep\n---\nhi");
@@ -94,7 +104,7 @@ describe("profileArgs", () => {
 describe("mcpWarnings", () => {
   it("warns about MCP servers the config lacks, ignoring - versus _", () => {
     const a = parse(FILE);
-    assert.deepEqual(mcpWarnings(a, { mealie: { exposure: "direct" } }), ['explore: MCP server "ghidra" is not configured in mcp.json']);
+    assert.deepEqual(mcpWarnings(a, { mealie: { exposure: "direct" } }), ['explore: MCP server "ghidra" is not configured in mcp.yaml']);
     assert.deepEqual(mcpWarnings(a, { ghidra: { exposure: "direct" } }), []);
     const dashed = parse("---\nname: a\ndescription: d\ntools: mcp__my_srv__*\n---\n");
     assert.deepEqual(mcpWarnings(dashed, { "my-srv": { exposure: "direct" } }), []);
@@ -102,28 +112,29 @@ describe("mcpWarnings", () => {
 
   it("warns when the server is not exposed directly, because pi then never declares its tools to the agent", () => {
     const a = parse(FILE);
-    assert.match(mcpWarnings(a, { ghidra: {} })[0] ?? "", /exposure codemode \(the default\) in mcp\.json, so the agent is never given its tools: set "exposure": "direct"/);
+    assert.match(mcpWarnings(a, { ghidra: {} })[0] ?? "", /exposure codemode \(the default\) in mcp\.yaml, so the agent is never given its tools: set "exposure": "direct"/);
     assert.match(mcpWarnings(a, { ghidra: { exposure: "deferred" } })[0] ?? "", /exposure deferred/);
   });
 });
 
-describe("mcp.json reading", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-mcpjson-"));
-  const write = (name: string, data: unknown) => {
+describe("mcp.yaml reading", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-mcpyaml-"));
+  const write = (name: string, text: string) => {
     const file = path.join(dir, name);
-    fs.writeFileSync(file, JSON.stringify(data));
+    fs.writeFileSync(file, text);
     return file;
   };
 
   it("reads each server's exposure, and nothing for a file that is missing or broken", () => {
-    const file = write("a.json", { mcpServers: { git: { command: "node", exposure: "direct" }, other: { url: "http://x" } } });
+    const file = write("a.yaml", "servers:\n  git: { command: node, exposure: direct }\n  other: { url: http://x/mcp }\n");
     assert.deepEqual(readMcpServers(file), { git: { exposure: "direct" }, other: { exposure: undefined } });
-    assert.deepEqual(readMcpServers(path.join(dir, "missing.json")), {});
+    assert.deepEqual(readMcpServers(path.join(dir, "missing.yaml")), {});
+    assert.deepEqual(readMcpServers(write("bad.yaml", "servers: [\n")), {});
   });
 
   it("lets a later file override a server's exposure while keeping the rest", () => {
-    const user = write("u.json", { mcpServers: { git: { command: "node", exposure: "codemode" }, mealie: { command: "x", exposure: "direct" } } });
-    const project = write("p.json", { mcpServers: { git: { exposure: "direct" } } });
+    const user = write("u.yaml", "servers:\n  git: { command: node, exposure: codemode }\n  mealie: { command: x, exposure: direct }\n");
+    const project = write("p.yaml", "servers:\n  git: { command: node, exposure: direct }\n");
     assert.deepEqual(mergeMcpServers([user, project]), { git: { exposure: "direct" }, mealie: { exposure: "direct" } });
     assert.deepEqual(mergeMcpServers([project, user]).git, { exposure: "codemode" });
   });

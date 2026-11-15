@@ -52,6 +52,10 @@ export class SubagentManager {
   private readonly settling = new Map<number, () => void>();
   /** Handles being stopped, so two stops (a limit and a cancel) do not both abort. */
   private readonly stopping = new Set<number>();
+  /** What lets go of the foreground toriel_agent call waiting for a subagent, by handle (ticket 212). */
+  private readonly releasers = new Map<number, () => void>();
+  /** Handles whose ctrl-b came while the subagent was still starting, before its call was waiting: released the moment it waits. */
+  private readonly early = new Set<number>();
   /** The outcome a stop asked for, by handle: it wins over the settle the abort causes. */
   private readonly forced = new Map<number, { state: SubagentState; note: string }>();
 
@@ -110,6 +114,47 @@ export class SubagentManager {
     if (swept) {
       ctx.hub.broadcastSessions();
     }
+  }
+
+  /** A foreground call is waiting for `rec`: `release` lets it answer at once (ctrl-b) while the subagent runs on. */
+  holdCall(rec: SubagentRecord, release: () => void): void {
+    // keyed by handle: one foreground call waits on a record, so a second holder would replace the first's release (not reachable today)
+    if (this.early.delete(rec.handle)) {
+      release();
+      return;
+    }
+    this.releasers.set(rec.handle, release);
+  }
+
+  /** The foreground call is done waiting (answered, or the caller went away). */
+  dropCall(rec: SubagentRecord): void {
+    this.releasers.delete(rec.handle);
+    this.early.delete(rec.handle);
+  }
+
+  /**
+   * ctrl-b: every foreground subagent `parent` is waiting for becomes a background one (its call answers at once; the result
+   * arrives later as a message). They then count toward the background time limit. Returns the ones moved.
+   */
+  backgroundForeground(parent: string): SubagentRecord[] {
+    const moved: SubagentRecord[] = [];
+    for (const rec of this.book.ofParent(parent)) {
+      if (rec.state === "running" && !rec.background) {
+        const release = this.releasers.get(rec.handle);
+        rec.background = true;
+        this.releasers.delete(rec.handle);
+        if (release) {
+          release();
+        } else {
+          this.early.add(rec.handle);
+        }
+        moved.push(rec);
+      }
+    }
+    if (moved.length > 0) {
+      this.ctx().hub.broadcastSessions();
+    }
+    return moved;
   }
 
   /** Resolves when the record is no longer running. */
@@ -433,8 +478,26 @@ export async function handleAgentSpawn(ctx: DaemonContext, cmd: Cmd<"agent_spawn
   if (cancelled) {
     cancel();
   }
-  await ctx.subagents.whenEnded(rec);
+  // ctrl-b can let go of this call while the subagent runs on (ticket 212)
+  let moved = false;
+  const released = new Promise<void>((resolve) =>
+    ctx.subagents.holdCall(rec as SubagentRecord, () => {
+      moved = true;
+      resolve();
+    }),
+  );
+  await Promise.race([ctx.subagents.whenEnded(rec), released]);
+  ctx.subagents.dropCall(rec);
   socket.off("close", cancel);
+  if (moved) {
+    void ctx.subagents.whenEnded(rec).then(() => ctx.subagents.deliver(rec as SubagentRecord));
+    res(true, undefined, {
+      handle: rec.handle,
+      state: rec.state,
+      text: `The user moved subagent #${rec.handle} (${rec.agent}) to the background, so you are not waiting for it. Carry on with other work; its result arrives later as a message, and toriel_agents can list, wait for or stop it.`,
+    });
+    return;
+  }
   res(true, undefined, { handle: rec.handle, state: rec.state, text: resultText(rec) });
   ctx.subagents.markDelivered(rec);
 }

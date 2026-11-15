@@ -32,9 +32,21 @@ interface AskDetails {
   payload?: { request?: { value?: unknown } };
 }
 
+/** The slice of the package's `PermissionQuery` (handed to a link at authorize time) this file uses. */
+interface Query {
+  checkPermission?(surface: string, value?: string, agentName?: string): { state?: string; matchedPattern?: string; origin?: unknown; floor?: string };
+}
+
+/** Why pi asks, as the daemon wants it (see AskRule in src/shared.ts). */
+export interface AskRuleReport {
+  explicit: boolean;
+  pattern?: string;
+  origin?: string;
+}
+
 interface Service {
   checkPermission?(surface: string, value?: string): { state?: string; reason?: string; matchedPattern?: string; origin?: unknown };
-  registerAuthorizer?(name: string, authorize: (details: AskDetails) => Promise<Verdict>): () => void;
+  registerAuthorizer?(name: string, authorize: (details: AskDetails, query?: Query) => Promise<Verdict>): () => void;
 }
 
 interface Pi {
@@ -49,6 +61,36 @@ export function describeAsk(details: AskDetails): { grants: Array<{ surface: str
   const requested = details.payload?.request?.value;
   const value = typeof requested === "string" ? requested : (details.command ?? details.path ?? details.target);
   return { grants, value };
+}
+
+/** Config scopes whose rules are the owner's own; "fail-closed" is the package flooring allows to asks because a scope's config is invalid. */
+const OWNER_ORIGINS = new Set(["global", "project", "agent", "project-agent", "fail-closed"]);
+
+/**
+ * Whether this ask comes from a rule the owner wrote (or a package safety floor) or only from the catch-all default (ticket 213:
+ * auto mode answers the second kind and leaves the first to the user). Read from the package's own policy at gate parity, through the
+ * query it hands a link; undefined when it cannot tell (no query, a surface it does not know, a throw), which the daemon treats as
+ * "ask the user". A rule with the bare pattern "*" is the surface's catch-all, not something written about this action.
+ */
+export function askRule(query: Query | undefined, details: AskDetails, agentName?: string | null): AskRuleReport | undefined {
+  try {
+    const surface = typeof details.accessIntent?.surface === "string" ? details.accessIntent.surface : typeof details.surface === "string" ? details.surface : undefined;
+    if (!query?.checkPermission || surface === undefined) {
+      return undefined;
+    }
+    const { value } = describeAsk(details);
+    const r = query.checkPermission(surface, value, agentName ?? undefined);
+    if (r.state !== "ask") {
+      // the gate asked but this query does not: the two disagree (a surface name it reads differently, say), so the reason is unknown, and unknown is never a yes
+      return undefined;
+    }
+    const origin = typeof r.origin === "string" ? r.origin : undefined;
+    const pattern = typeof r.matchedPattern === "string" ? r.matchedPattern : undefined;
+    const explicit = r.floor !== undefined || origin === "fail-closed" || (origin !== undefined && OWNER_ORIGINS.has(origin) && pattern !== undefined && pattern !== "*");
+    return { explicit, pattern, origin };
+  } catch {
+    return undefined;
+  }
 }
 
 /** The write-shaped surfaces this guard decides on (settled by the step 0 probe; bare `write`/`bash`/`read` are in-W by construction and defer). */
@@ -102,7 +144,7 @@ export function scopeVerdict(scope: Scope, details: AskDetails): Verdict {
 }
 
 /** The scope half denies (deny mode) or defers (ask mode) first (never reaching the daemon on a deny), then allow when the daemon holds a grant that covers the ask; defer on anything else, including every error. */
-export async function authorize(sock: string, uuid: string | undefined, details: AskDetails, send: Asker = ask, scope: Scope = { kind: "off" }): Promise<Verdict> {
+export async function authorize(sock: string, uuid: string | undefined, details: AskDetails, send: Asker = ask, scope: Scope = { kind: "off" }, query?: Query, agentName?: string | null): Promise<Verdict> {
   const sv = scopeVerdict(scope, details);
   if (sv.kind === "deny") {
     return sv;
@@ -112,10 +154,12 @@ export async function authorize(sock: string, uuid: string | undefined, details:
       return { kind: "defer" };
     }
     const { grants, value } = describeAsk(details);
-    if (grants.length === 0) {
+    // the reason for the ask rides along (ticket 213), so the daemon can tell a rule the owner wrote from the default
+    const rule = askRule(query, details, agentName);
+    if (grants.length === 0 && rule === undefined) {
       return { kind: "defer" };
     }
-    const reply = await send(sock, { type: "permission_check", uuid, grants, value }, CHECK_TIMEOUT_MS);
+    const reply = await send(sock, { type: "permission_check", uuid, grants, value, ...(rule !== undefined ? { rule } : {}) }, CHECK_TIMEOUT_MS);
     return reply.allow === true ? { kind: "allow" } : { kind: "defer" };
   } catch {
     return { kind: "defer" };
@@ -216,7 +260,7 @@ export default function (pi: Pi) {
     try {
       const services = (globalThis as Record<symbol, unknown>)[SERVICES] as Map<string, Service> | undefined;
       service = services?.get(sessionId);
-      dispose = services?.get(sessionId)?.registerAuthorizer?.(LINK_NAME, (details) => authorize(sock, process.env.TORIEL_SESSION_ID ?? sessionId, details, ask, scope));
+      dispose = services?.get(sessionId)?.registerAuthorizer?.(LINK_NAME, (details, query) => authorize(sock, process.env.TORIEL_SESSION_ID ?? sessionId, details, ask, scope, query, (details as { agentName?: string | null }).agentName));
     } catch {
       // the package is older than the authorizer seam, or the link already exists: asks keep their dialogs
     }

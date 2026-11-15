@@ -106,4 +106,11 @@ describe("activity timer while a dialog is open", () => {
     reduceActivity(s, { type: "tool_execution_start", toolName: "read" }, 7000);
     assert.doesNotMatch(strip(s, 8000), /ctrl-b/);
   });
+
+  it("says the same for a subagent the agent is waiting for (ticket 212)", () => {
+    const s = fresh();
+    reduceActivity(s, { type: "agent_start" }, 0);
+    reduceActivity(s, { type: "tool_execution_start", toolName: "toriel_agent" }, 1000);
+    assert.match(strip(s, 5000), /running toriel_agent 5s\s+ctrl-b: run in background/);
+  });
 });

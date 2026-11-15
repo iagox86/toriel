@@ -279,6 +279,119 @@ describe("daemon: permission grants", () => {
     });
   });
 
+  describe("auto mode (ticket 213)", () => {
+    const wantsAnswer = (c: Client) => c.waitFor((m) => m.type === "notice" && /allowed by auto mode/.test(m.text));
+    const asked = (c: Client) => c.messages.some((m) => m.type === "ui_request" && m.request?.id === "ask-select-1");
+
+    /** What the grants link reports for an ask before its dialog: why pi asks (a rule the owner wrote, or the default). */
+    const reportAsk = async (h: Harness, uuid: string, value: string, rule?: { explicit: boolean; pattern?: string; origin?: string }, grants: Array<{ surface: string; pattern: string }> = []) => {
+      const link = await h.connect();
+      await link.request({ type: "permission_check", uuid, grants, value, ...(rule ? { rule } : {}) });
+    };
+
+    it("answers an ordinary prompt itself and says so, durably, with what it allowed", async () => {
+      const h = await start({ FAKE_PI_ASK_COMMAND: "npm test" });
+      const { c, session, uuid } = await savedSession(h);
+      const on = await c.request({ type: "auto_mode", session, on: true });
+      assert.equal(on.on, true);
+      await reportAsk(h, uuid, "npm test", { explicit: false, pattern: "*", origin: "builtin" });
+      await c.request({ type: "prompt", session, message: "/ask-select" });
+      const notice = await wantsAnswer(c);
+      assert.match(notice.text, /^allowed by auto mode: npm test/);
+      assert.equal(notice.durable, true);
+      assert.equal(asked(c), false, "no controller was asked");
+    });
+
+    it("answers the common ask too: the one pi suggests a grant for, whose suggestion the dialog uses up before auto mode looks", async () => {
+      const h = await start({ FAKE_PI_ASK_COMMAND: "npm test" });
+      const { c, session, uuid } = await savedSession(h);
+      await c.request({ type: "auto_mode", session, on: true });
+      await reportAsk(h, uuid, "npm test", { explicit: false, pattern: "*", origin: "builtin" }, [{ surface: "bash", pattern: "npm test" }]);
+      await c.request({ type: "prompt", session, message: "/ask-select" });
+      const notice = await wantsAnswer(c);
+      assert.match(notice.text, /^allowed by auto mode: npm test/);
+      assert.equal(asked(c), false);
+    });
+
+    it("still asks about an explicit rule when the ask carries a grant to suggest, and the prompt still offers the grant", async () => {
+      const h = await start({ FAKE_PI_ASK_COMMAND: "npm test" });
+      const { c, session, uuid } = await savedSession(h);
+      await c.request({ type: "auto_mode", session, on: true });
+      await reportAsk(h, uuid, "npm test", { explicit: true, pattern: "npm *", origin: "global" }, [{ surface: "bash", pattern: "npm test" }]);
+      await c.request({ type: "prompt", session, message: "/ask-select" });
+      const dialog = await c.waitFor((m) => m.type === "ui_request" && m.request?.id === "ask-select-1");
+      assert.deepEqual(dialog.request.toriel, { grants: [{ surface: "bash", pattern: "npm test" }] });
+      await c.waitFor((m) => m.type === "notice" && /your permission config asks about this one \(rule "npm \*"\)/.test(m.text));
+    });
+
+    it("still asks about what the owner's own config asks about, and says which rule", async () => {
+      const h = await start({ FAKE_PI_ASK_COMMAND: "npm test" });
+      const { c, session, uuid } = await savedSession(h);
+      await c.request({ type: "auto_mode", session, on: true });
+      await reportAsk(h, uuid, "npm test", { explicit: true, pattern: "npm *", origin: "global" });
+      await c.request({ type: "prompt", session, message: "/ask-select" });
+      await c.waitFor((m) => m.type === "ui_request" && m.request?.id === "ask-select-1");
+      await c.waitFor((m) => m.type === "notice" && /auto mode still asks about this one: your permission config asks about this one \(rule "npm \*"\)/.test(m.text));
+      assert.equal(c.messages.some((m) => m.type === "notice" && /allowed by auto mode/.test(m.text)), false);
+    });
+
+    it("asks when the link reported nothing about why (an older link, or a surface it cannot read): not a yes", async () => {
+      const h = await start({ FAKE_PI_ASK_COMMAND: "npm test" });
+      const { c, session } = await savedSession(h);
+      await c.request({ type: "auto_mode", session, on: true });
+      await c.request({ type: "prompt", session, message: "/ask-select" });
+      await c.waitFor((m) => m.type === "ui_request" && m.request?.id === "ask-select-1");
+      await c.waitFor((m) => m.type === "notice" && /auto mode still asks about this one: auto mode cannot tell whether your permission config asks/.test(m.text));
+    });
+
+    it("still asks about what is in the floor, and says why", async () => {
+      const h = await start({ FAKE_PI_ASK_COMMAND: "git push origin main" });
+      const { c, session } = await savedSession(h);
+      await c.request({ type: "auto_mode", session, on: true });
+      await c.request({ type: "prompt", session, message: "/ask-select" });
+      await c.waitFor((m) => m.type === "ui_request" && m.request?.id === "ask-select-1");
+      const why = await c.waitFor((m) => m.type === "notice" && /auto mode still asks about this one: .*pushes or publishes/.test(m.text));
+      assert.equal(why.durable, undefined, "a flash, not a transcript row");
+      assert.equal(c.messages.some((m) => m.type === "notice" && /allowed by auto mode/.test(m.text)), false);
+    });
+
+    it("asks as usual after it is switched off", async () => {
+      const h = await start({ FAKE_PI_ASK_COMMAND: "npm test" });
+      const { c, session } = await savedSession(h);
+      await c.request({ type: "auto_mode", session, on: true });
+      await c.request({ type: "auto_mode", session, on: false });
+      await c.request({ type: "prompt", session, message: "/ask-select" });
+      await c.waitFor((m) => m.type === "ui_request" && m.request?.id === "ask-select-1");
+      assert.equal(c.messages.some((m) => m.type === "notice" && /allowed by auto mode/.test(m.text)), false);
+    });
+
+    it("toggles with no `on`, shows in the session's meta, and refuses a bad or over-long duration", async () => {
+      const h = await start();
+      const { c, session } = await savedSession(h);
+      const meta = () => c.sessions().find((s) => s.id === session);
+      assert.equal((await c.request({ type: "auto_mode", session })).on, true);
+      await c.waitFor(() => meta()?.auto === true);
+      assert.equal(meta()?.autoUntil, undefined, "no end");
+      assert.equal((await c.request({ type: "auto_mode", session })).on, false);
+      await c.waitFor(() => meta()?.auto === undefined);
+      await assert.rejects(c.request({ type: "auto_mode", session, on: true, for: "soon" }), /cannot read "soon" as a duration/);
+      await assert.rejects(c.request({ type: "auto_mode", session, on: true, for: "3d" }), /at most 1d/);
+      const timed = await c.request({ type: "auto_mode", session, on: true, for: "2h" });
+      assert.ok(timed.until > Date.now() + 119 * 60_000 && timed.until < Date.now() + 121 * 60_000);
+      await c.waitFor(() => meta()?.autoUntil === timed.until);
+      await assert.rejects(c.request({ type: "auto_mode", session: 9999, on: true }), /no session/);
+    });
+
+    it("ends a timed auto mode by itself, with a notice", async () => {
+      const h = await start();
+      const { c, session } = await savedSession(h);
+      await c.request({ type: "auto_mode", session, on: true, for: "1s" });
+      const ended = await c.waitFor((m) => m.type === "notice" && /auto mode ended/.test(m.text));
+      assert.equal(ended.durable, true);
+      await c.waitFor(() => c.sessions().find((s) => s.id === session)?.auto === undefined);
+    });
+  });
+
   it("removes a deleted session's grants", async () => {
     const h = await start();
     const { c, session, uuid } = await savedSession(h);

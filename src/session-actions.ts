@@ -106,6 +106,17 @@ export class SessionActions {
       }
       return false;
     }
+    // shift+tab = toggle auto mode, like Claude Code's mode key (ticket 213); a completion popup keeps the key
+    if (matchesKey(data, Key.shift("tab")) && !this.h.editor.isShowingAutocomplete()) {
+      const meta = this.h.viewing ? this.h.metaForPath(this.h.viewing) : undefined;
+      const open = this.h.viewing ? this.h.views.get(this.h.viewing)?.dialog : undefined;
+      // not while a prompt is open: it is already showing, and the key should not change what answers the next one by accident
+      if (meta?.id !== undefined && !open) {
+        void this.commands.auto();
+        return true;
+      }
+      return false;
+    }
     if (matchesKey(data, Key.up) && this.h.editor.getText().length === 0) {
       const meta = this.h.viewing ? this.h.metaForPath(this.h.viewing) : undefined;
       const view = this.h.viewing ? this.h.views.get(this.h.viewing) : undefined;

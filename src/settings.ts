@@ -9,6 +9,7 @@ import * as path from "node:path";
 import { parseDocument } from "yaml";
 import { type AgentLanes, isModelTier, MODEL_TIERS } from "./agents.ts";
 import { DEFAULT_PI_CLI } from "./config.ts";
+import { configDir, yamlSettingsFile } from "./config-dir.ts";
 import { errText } from "./util.ts";
 import { parseDurationText } from "./when.ts";
 
@@ -83,14 +84,7 @@ export interface LoadedSettings {
   problems: string[];
 }
 
-function configDir(env: NodeJS.ProcessEnv): string {
-  return path.join(env.XDG_CONFIG_HOME ?? path.join(env.HOME ?? "", ".config"), "toriel");
-}
-
-/** Where the settings file lives (settings.yaml), whether or not it exists yet. TORIEL_SETTINGS names a file of any name. */
-export function yamlSettingsFile(env: NodeJS.ProcessEnv = process.env): string {
-  return env.TORIEL_SETTINGS || path.join(configDir(env), "settings.yaml");
-}
+export { yamlSettingsFile };
 
 /** The settings.json of before the YAML switch; undefined when TORIEL_SETTINGS names the file (nothing to convert). */
 export function legacySettingsFile(env: NodeJS.ProcessEnv = process.env): string | undefined {

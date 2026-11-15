@@ -9,7 +9,8 @@ import { detachFromParent, loadLineage } from "./lineage.ts";
 import { relationOf } from "./session-tree.ts";
 import { piAgentDir } from "./pi-dir.ts";
 import { probeEntry, parseStatusDetailed, readConfigs, statusReport } from "./mcp-doctor.ts";
-import { addMcpServer, MCP_ACTIONS, mcpConfigFile, mcpEntry, mcpListLines, mcpServerConnected, removeMcpServer } from "./mcp.ts";
+import { addMcpServer, removeMcpServer } from "./mcp-config.ts";
+import { MCP_ACTIONS, mcpConfigFile, mcpEntry, mcpListLines, mcpServerConnected } from "./mcp.ts";
 import { mcpExplorePrompt } from "./mcp-explore-prompt.ts";
 import { readHeader } from "./session-file.ts";
 import { mayWake } from "./wake-on-type.ts";
@@ -32,6 +33,7 @@ import { renameNotice } from "./session-id.ts";
 import { runPermissions } from "./permission-commands.ts";
 import { addSchedule, addWatch, operateSchedule, showSchedules } from "./schedule-commands.ts";
 import { errText } from "./util.ts";
+import { fmtClock } from "./when.ts";
 import { log } from "./log.ts";
 
 const COMPACT_TIMEOUT_MS = 10 * 60_000;
@@ -110,6 +112,7 @@ export class SessionCommands {
         this.h.tui.requestRender();
       },
       abort: () => this.abort(),
+      auto: (c) => this.auto(c.args.join(" ")),
       background: () => this.background(),
       parent: () => this.parent(),
       detach: () => this.detach(),
@@ -301,6 +304,41 @@ export class SessionCommands {
       const stale = err instanceof Error && /timed out/.test(err.message);
       this.h.notify(stale ? "background: no answer from the daemon (is it older than this toriel? restart it: toriel kill-server)" : `background failed: ${errText(err)}`);
     });
+  }
+
+  /**
+   * /auto and shift+tab (ticket 213): switch auto mode for the viewed session. The daemon says what happened in the transcript
+   * (a durable notice), so nothing is announced here on success. Needs no child: it is a flag the daemon keeps.
+   */
+  async auto(text = ""): Promise<void> {
+    const meta = this.viewedMeta();
+    if (meta?.id === undefined) {
+      this.h.notify("auto mode needs a session - send a message first");
+      return;
+    }
+    const words = text.trim().split(/\s+/).filter(Boolean);
+    const head = words[0]?.toLowerCase();
+    if (head === "status") {
+      this.h.notify(meta.auto ? `auto mode is ON${meta.autoUntil !== undefined ? ` until ${fmtClock(meta.autoUntil, new Date())}` : ""} (/auto off)` : "auto mode is off (/auto, or shift+tab, turns it on)");
+      return;
+    }
+    let on: boolean | undefined;
+    let duration: string | undefined;
+    if (head === "on") {
+      on = true;
+      duration = words.slice(1).join(" ") || undefined;
+    } else if (head === "off") {
+      on = false;
+    } else if (head) {
+      on = true;
+      duration = words.join(" ");
+    }
+    try {
+      await this.h.request({ type: "auto_mode", session: meta.id, on, for: duration }, 5000);
+    } catch (err) {
+      const stale = err instanceof Error && /timed out/.test(err.message);
+      this.h.notify(stale ? "auto mode: no answer from the daemon (is it older than this toriel? restart it: toriel kill-server)" : `auto mode failed: ${errText(err)}`);
+    }
   }
 
   private abort(): void {
@@ -685,7 +723,7 @@ export class SessionCommands {
     await this.h.session.prompt(continuePrompt(extra));
   }
 
-  /** /mcp add: write the server into pi's mcp.json, then reload so the session picks it up. */
+  /** /mcp add: write the server into toriel's mcp.yaml, then reload so the session picks it up. */
   private async mcpAdd(name: string | undefined, target: string[]): Promise<void> {
     if (!name) {
       this.h.notify("/mcp add <name> <url | command args...>");
@@ -712,7 +750,7 @@ export class SessionCommands {
       this.h.notify("checking the MCP servers...");
       const r = (await this.h.request({ type: "mcp_status", session: meta.id }, 60_000)) as { text: string };
       const parsed = parseStatusDetailed(r.text);
-      const configs = readConfigs([mcpConfigFile(), path.join(meta.cwd, ".pi", "mcp.json")]);
+      const configs = readConfigs([mcpConfigFile()]);
       // probe only what needs it: the named server, or every one that is not connected
       const findings = new Map<string, string[]>();
       await Promise.all(
@@ -733,7 +771,7 @@ export class SessionCommands {
     }
   }
 
-  /** /mcp explore <server>: the agent introspects the server and writes a skill for it. Needs a live child (liveMeta); refuses with a notice if the server is not a configured mcp.json server or not connected, then an ordinary prompt. */
+  /** /mcp explore <server>: the agent introspects the server and writes a skill for it. Needs a live child (liveMeta); refuses with a notice if the server is not a configured mcp.yaml server or not connected, then an ordinary prompt. */
   private async mcpExplore(server: string | undefined): Promise<void> {
     if (!server) {
       this.h.notify("/mcp explore <server> (tab completes the names)");
@@ -743,9 +781,9 @@ export class SessionCommands {
     if (!meta) {
       return;
     }
-    const configs = readConfigs([mcpConfigFile(), path.join(meta.cwd, ".pi", "mcp.json")]);
+    const configs = readConfigs([mcpConfigFile()]);
     if (!configs.has(server)) {
-      this.h.notify(`"${server}" is not a configured mcp.json server - /mcp status shows what is available`);
+      this.h.notify(`"${server}" is not a configured mcp.yaml server - /mcp status shows what is available`);
       return;
     }
     try {
@@ -762,15 +800,14 @@ export class SessionCommands {
     await this.h.session.prompt(mcpExplorePrompt(server));
   }
 
-  /** /mcp remove: take the server out of pi's mcp.json and reload this session so it disconnects. */
+  /** /mcp remove: take the server out of toriel's mcp.yaml and reload this session so it disconnects. */
   private async mcpRemove(name: string | undefined): Promise<void> {
     if (!name) {
       this.h.notify("/mcp remove <server> (tab completes the names)");
       return;
     }
-    const cwd = this.viewedMeta()?.cwd ?? (this.h.viewing ? this.h.local.get(this.h.viewing)?.cwd : undefined) ?? process.cwd();
     try {
-      removeMcpServer(mcpConfigFile(), name, [path.join(cwd, ".pi", "mcp.json")]);
+      removeMcpServer(mcpConfigFile(), name);
     } catch (err) {
       this.h.notify(`/mcp remove: ${errText(err)}`);
       return;

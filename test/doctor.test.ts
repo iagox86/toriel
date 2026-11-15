@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { ANSI_STYLE, applyFixes, CATALOG, collectFindings, type DoctorOptions, exitCode, KITTY_SHIFT_ENTER, lineDiff, plannedFixes, previewFixes, readKittyConfig, renderDoctor, runDoctor } from "../src/doctor.ts";
+import { readMcpYaml } from "../src/mcp-config.ts";
 import { loadSettings } from "../src/settings.ts";
 import { renderSettings } from "../src/settings-file.ts";
 import { GRANTS_RULE, setup as setupIn, tempHome } from "./doctor-fixture.ts";
@@ -124,6 +125,8 @@ describe("doctor checks", () => {
       { ...setup({ settings: '{"sandbox":"bwrap"}' }).opts, probeBwrap: () => "bwrap is not installed (the bubblewrap package)" },
       setup({ scopePatch: "absent" }).opts,
       lanesScenario(),
+      setup({ mcpExtra: { broken: { exposure: "direct" } } }).opts,
+      setup({ piMcpJson: { mcpServers: { freecad: { url: "http://127.0.0.1:39280/mcp" } } } }).opts,
       setup({ scopePatch: "absent", config: { authorizerChain: ["toriel-grants"], permission: { "*": "allow", external_directory_write: { "/tmp/*": "allow" }, path: { "*": "ask", [GRANTS_RULE]: "ask" } } }, settings: JSON.stringify({ scopeGuardAcceptedAllows: [{ surface: "external_directory_write", pattern: "/tmp/*" }, { surface: "*", pattern: "*" }] }) }).opts,
     ];
     const seen = new Set<string>();
@@ -231,6 +234,45 @@ describe("doctor checks", () => {
     assert.deepEqual(finding("xterm-kitty", "RGB", inTmux, false), [], "not a real terminal");
   });
 
+  it("mcp-yaml: an entry of mcp.yaml that cannot be used is named, with why (ticket 216)", () => {
+    const found = collectFindings({ ...setup({ mcpExtra: { broken: { exposure: "direct" }, odd: { command: "x", lifecycle: "lazy" } } }).opts, startup: [] }).filter((f) => f.id === "mcp-yaml");
+    assert.equal(found.length, 2);
+    assert.match(found.map((f) => f.message).join("\n"), /"broken": give exactly one of url[\s\S]*"odd": unknown key "lifecycle"/);
+    assert.ok(found.every((f) => f.manual && !f.fix));
+    assert.deepEqual(collectFindings({ ...setup({}).opts, startup: [] }).filter((f) => f.id === "mcp-yaml"), []);
+  });
+
+  it("mcp-json: servers still in pi's mcp.json are moved into mcp.yaml, and the old file is set aside (ticket 216)", () => {
+    const s = setup({ piMcpJson: { mcpServers: { freecad: { url: "http://127.0.0.1:39280/mcp" }, gdb: { command: "other" }, odd: { command: "x", lifecycle: "lazy" } } } });
+    const found = collectFindings({ ...s.opts, startup: [] }).filter((f) => f.id === "mcp-json");
+    assert.equal(found.length, 1);
+    assert.match(found[0]?.message ?? "", /still lists freecad, gdb and odd.*mcp\.yaml.*2 to add.*odd\.lifecycle cannot be carried over/);
+    const fix = found[0]?.fix;
+    assert.ok(fix?.custom);
+    const piJson = path.join(s.agentDir, "mcp.json");
+    const before = fs.readFileSync(s.mcpFile, "utf8");
+    assert.match(fix?.custom?.preview() ?? "", /mcp\.yaml would gain:[\s\S]*freecad[\s\S]*odd[\s\S]*mcp\.json would be renamed/);
+    // a secret in the old file must not be printed by the preview (review finding)
+    fs.writeFileSync(piJson, JSON.stringify({ mcpServers: { secretive: { command: "x", env: { API_KEY: "sk-very-secret" }, headers: { Authorization: "Bearer s3cret" } }, remote: { url: "https://user:p4ss@h.example/mcp?token=tok" } } }));
+    const secretive = collectFindings({ ...s.opts, startup: [] }).find((f) => f.id === "mcp-json");
+    const shown = secretive?.fix?.custom?.preview() ?? "";
+    assert.match(shown, /secretive/);
+    assert.match(shown, /API_KEY: "?\*\*\*/);
+    assert.doesNotMatch(shown, /sk-very-secret|s3cret|p4ss|tok\b/);
+    assert.doesNotMatch(secretive?.message ?? "", /sk-very-secret|s3cret|p4ss/);
+    fs.writeFileSync(piJson, JSON.stringify({ mcpServers: { freecad: { url: "http://127.0.0.1:39280/mcp" }, gdb: { command: "other" }, odd: { command: "x", lifecycle: "lazy" } } }));
+    assert.equal(fs.readFileSync(s.mcpFile, "utf8"), before, "previewing writes nothing");
+    const backup = fix?.custom?.apply(new Date(2026, 10, 14, 12, 0, 0));
+    assert.match(backup ?? "", /mcp\.json\.bak-20261114-120000$/);
+    assert.ok(fs.existsSync(backup as string) && !fs.existsSync(piJson), "pi's file is set aside, not deleted");
+    const now = JSON.parse(JSON.stringify(readMcpYaml(s.mcpFile).servers));
+    assert.deepEqual(now.freecad, { url: "http://127.0.0.1:39280/mcp" });
+    assert.deepEqual(now.odd, { command: "x" });
+    assert.deepEqual(now.gdb, { command: "node", args: ["x"], exposure: "direct" }, "a server already in mcp.yaml is not overwritten");
+    assert.deepEqual(collectFindings({ ...s.opts, startup: [] }).filter((f) => f.id === "mcp-json"), []);
+    assert.deepEqual(collectFindings({ ...setup({}).opts, startup: [] }).filter((f) => f.id === "mcp-json"), [], "an empty or missing mcp.json is fine");
+  });
+
   it("kitty-shift-enter: under tmux in kitty, unless kitty.conf maps shift+enter (ticket 142)", () => {
     const inTmux = { TMUX: "/tmp/tmux-1000/default,1,0" };
     const finding = (clientTerm: string | undefined, kittyConfig: string, env: NodeJS.ProcessEnv = inTmux, tty = true) =>
@@ -279,7 +321,7 @@ describe("doctor checks", () => {
       assert.equal(f?.level, "feature", bad);
       assert.match(f?.message ?? "", /advisory-diff, code-review and git-archaeology agents need the "git" MCP server.*"exposure": "direct"/, bad);
     }
-    assert.match(grade("none")[0]?.message ?? "", /the "git" MCP server is missing from .*mcp\.json/);
+    assert.match(grade("none")[0]?.message ?? "", /the "git" MCP server is missing from .*mcp\.yaml/);
   });
 
   it("asks for pi-web-access when it is missing from pi's packages, since the research-web agent has no web tools without it", () => {
@@ -299,7 +341,7 @@ describe("doctor checks", () => {
     assert.match(gdb?.message ?? "", /crash-analysis and debug agents need the "gdb" MCP server.*"exposure": "direct"/);
     assert.match(gdb?.fix?.summary ?? "", /set "exposure": "direct" on the "gdb" entry/, "the entry exists, only its exposure is wrong: fixable");
     const [missing] = grade("mcp-ghidra-direct", { ghidraMcp: "none" });
-    assert.match(missing?.message ?? "", /^the "ghidra" MCP server is missing from .*mcp\.json: the binary-diff, re-explain, re-find and re-trace agents need it/);
+    assert.match(missing?.message ?? "", /^the "ghidra" MCP server is missing from .*mcp\.yaml: the binary-diff, re-explain, re-find and re-trace agents need it/);
     assert.equal(missing?.fix, undefined, "a missing entry needs the user's own command and args: no automatic fix");
     assert.deepEqual(grade("mcp-git-direct", { gdbMcp: "codemode", ghidraMcp: "none" }), [], "one server's problem is not another's");
   });
@@ -368,7 +410,7 @@ describe("doctor report", () => {
   it("leaves the passing checks out of the compact report and counts them", () => {
     const text = renderDoctor(runDoctor(setup({ config: {} }).opts), { compact: true });
     assert.match(text, /Required: all 5 ok/);
-    assert.match(text, /Recommended: all 3 ok/);
+    assert.match(text, /Recommended: all 5 ok/);
     assert.doesNotMatch(text, / ok {7}/);
     assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(13 ok\)/);
   });
@@ -448,21 +490,19 @@ describe("doctor fixes", () => {
     assert.deepEqual(fs.readdirSync(path.dirname(s.config)), ["config.json"], "no backup for a failed fix");
   });
 
-  it("sets \"exposure\": \"direct\" on a mis-exposed mcp.json entry, leaving its siblings alone", () => {
+  it("sets exposure: direct on a mis-exposed mcp.yaml entry, leaving its siblings alone and keeping a backup", () => {
     const s = setup({ gdbMcp: "codemode" });
-    const mcp = path.join(s.agentDir, "mcp.json");
-    const original = fs.readFileSync(mcp, "utf8");
+    const original = fs.readFileSync(s.mcpFile, "utf8");
     const [group] = plannedFixes(runDoctor(s.opts));
-    assert.equal(group?.file, mcp);
+    assert.equal(group?.file, s.mcpFile);
     assert.equal(group?.fixes.length, 1);
-    const diff = previewFixes(mcp, group?.fixes ?? []);
-    assert.match(diff, /\+ {7}"exposure": "direct"/);
-    assert.match(diff, /- {7}"exposure": "codemode"/);
-    assert.equal(fs.readFileSync(mcp, "utf8"), original, "previewing writes nothing");
-    applyFixes(mcp, group?.fixes ?? []);
-    const now = JSON.parse(fs.readFileSync(mcp, "utf8"));
-    assert.deepEqual(now.mcpServers.gdb, { command: "node", args: ["x"], exposure: "direct" });
-    assert.deepEqual(now.mcpServers.git, { command: "node", args: ["x"], exposure: "direct" }, "the healthy sibling is untouched");
+    assert.match(previewFixes(s.mcpFile, group?.fixes ?? []), /the "gdb" entry would get exposure: direct/);
+    assert.equal(fs.readFileSync(s.mcpFile, "utf8"), original, "previewing writes nothing");
+    const backup = applyFixes(s.mcpFile, group?.fixes ?? []);
+    assert.equal(fs.readFileSync(backup as string, "utf8"), original, "the original is kept");
+    const { servers } = readMcpYaml(s.mcpFile);
+    assert.deepEqual(servers.gdb, { command: "node", args: ["x"], exposure: "direct" });
+    assert.deepEqual(servers.git, { command: "node", args: ["x"], exposure: "direct" }, "the healthy sibling is untouched");
     assert.deepEqual(collectFindings(s.opts), [], "and the setup is healthy again");
   });
 

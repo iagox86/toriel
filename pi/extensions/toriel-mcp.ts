@@ -1,0 +1,120 @@
+// toriel MCP (tickets 209 and 216): toriel owns the MCP config. The servers live in toriel's mcp.yaml (the daemon passes its path in
+// TORIEL_MCP_FILE) and this extension registers them into pi with pi.registerMcpServer at session start; pi's own mcp.json is not
+// used. pi then connects, declares and reports them like any other server (/mcp, exposure, sign-in all work).
+//
+// A server marked `whenUp: true` (an app's bridge that exists only while the app runs) is registered only when something listens at
+// its URL at that moment, so a server that is down on purpose costs a few milliseconds and no warning. `/mcp-up` looks again, for
+// the app that was started after the session was.
+import * as fs from "node:fs";
+import { MCP_FILE_ENV, type McpServerConfig, parseMcpYaml, piConfig, probeUrl, redactUrl } from "./lib/mcp-config.ts";
+
+// Only the slice of pi's extension API this file uses (see toriel-usage.ts).
+interface Ctx {
+  ui?: { notify?(message: string, type?: "info" | "warning" | "error"): void };
+}
+interface Pi {
+  on(event: "session_start", handler: (event: unknown, ctx: Ctx) => unknown): unknown;
+  registerMcpServer?(name: string, config: Record<string, unknown>): void;
+  getMcpServers?(): Array<{ name: string }>;
+  registerCommand?(name: string, options: { description: string; handler: (args: string, ctx: Ctx) => Promise<void> | void }): void;
+}
+
+/** Name of the command that looks again. */
+export const UP_COMMAND = "mcp-up";
+
+/** What one pass did, per server: registered now, already registered, not reachable, or switched off. */
+export type Outcome = "registered" | "already" | "down" | "failed";
+
+/** The servers of the file, with the problems it had; a missing or unreadable file is no servers (the doctor reports it). */
+export function loadServers(file: string | undefined): { servers: Record<string, McpServerConfig>; problems: string[] } {
+  if (!file) {
+    return { servers: {}, problems: [] };
+  }
+  try {
+    return parseMcpYaml(fs.readFileSync(file, "utf8"));
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "ENOENT" ? { servers: {}, problems: [] } : { servers: {}, problems: [`${file} could not be read: ${(err as Error).message}`] };
+  }
+}
+
+/**
+ * Register each server that is not registered yet: plain servers always, `whenUp` ones only when they answer at their URL. `probe` is
+ * injected for tests. Never throws: a failure to register counts as failed, so a broken entry cannot stop a session from starting.
+ * `only` limits the pass to one server.
+ */
+export async function reconcile(
+  pi: Pick<Pi, "registerMcpServer" | "getMcpServers">,
+  servers: Record<string, McpServerConfig>,
+  probe: (url: string) => Promise<boolean> = probeUrl,
+  only?: string,
+): Promise<Record<string, Outcome>> {
+  const have = new Set((pi.getMcpServers?.() ?? []).map((s) => s.name));
+  const names = Object.keys(servers).filter((n) => only === undefined || n === only);
+  const outcomes = await Promise.all(
+    names.map(async (name): Promise<[string, Outcome]> => {
+      const entry = servers[name] as McpServerConfig;
+      if (have.has(name)) {
+        return [name, "already"];
+      }
+      if (entry.whenUp === true && entry.enabled !== false && !(await probe(entry.url as string))) {
+        return [name, "down"];
+      }
+      try {
+        pi.registerMcpServer?.(name, piConfig(entry));
+        return [name, "registered"];
+      } catch {
+        return [name, "failed"];
+      }
+    }),
+  );
+  return Object.fromEntries(outcomes);
+}
+
+/** The words `/mcp-up` answers with, for the servers marked whenUp. */
+export function describeOutcomes(outcomes: Record<string, Outcome>, servers: Record<string, McpServerConfig>): string {
+  const lines = Object.entries(outcomes).map(([name, outcome]) => {
+    switch (outcome) {
+      case "registered":
+        return `${name}: up, connecting (${redactUrl(servers[name]?.url)})`;
+      case "already":
+        return `${name}: already registered`;
+      case "failed":
+        return `${name}: pi refused the entry (check it with /doctor)`;
+      default:
+        return `${name}: nothing is listening at ${redactUrl(servers[name]?.url)} (start it, then /${UP_COMMAND})`;
+    }
+  });
+  return lines.length > 0 ? lines.join("\n") : "no server is marked whenUp in mcp.yaml";
+}
+
+export default function (pi: Pi): void {
+  const file = process.env[MCP_FILE_ENV];
+  if (!file) {
+    return;
+  }
+  pi.on("session_start", async (_event, ctx) => {
+    try {
+      const { servers, problems } = loadServers(file);
+      if (problems.length > 0) {
+        ctx.ui?.notify?.(`mcp.yaml (${file}):\n${problems.map((p) => `  ${p}`).join("\n")}`, "warning");
+      }
+      await reconcile(pi, servers);
+    } catch {
+      // startup must never fail because of this
+    }
+  });
+  pi.registerCommand?.(UP_COMMAND, {
+    description: "toriel: connect the mcp.yaml servers marked whenUp that are running now (name one to check only it)",
+    handler: async (args, ctx) => {
+      const all = loadServers(file).servers;
+      const waiting = Object.fromEntries(Object.entries(all).filter(([, s]) => s.whenUp === true));
+      const only = args.trim() || undefined;
+      if (only !== undefined && !(only in waiting)) {
+        ctx.ui?.notify?.(`${only} is not a whenUp server in mcp.yaml (those are: ${Object.keys(waiting).join(", ") || "none"})`, "warning");
+        return;
+      }
+      const outcomes = await reconcile(pi, waiting, probeUrl, only);
+      ctx.ui?.notify?.(describeOutcomes(outcomes, waiting), Object.values(outcomes).some((o) => o !== "registered" && o !== "already") ? "warning" : "info");
+    },
+  });
+}

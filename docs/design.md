@@ -1436,9 +1436,13 @@ permission `select` dialog itself ("Yes") in `ChildManager.onEvent` (`src/daemon
 before any controller sees it. Ticket 194 built that, narrowly: only for grants the user made by
 answering the file-path prompt (with an editable pattern), never for the grants file or pi's own
 config, with a notice naming the grant each time. docs/permissions.md "File-path grants" is the
-current description. What was parked and stays parked is the wide form, a session-wide `*` write
+current description. What was parked is the wide form, a session-wide `*` write
 grant ("auto mode"): it circumvents a deliberate cap of the package, and a sandbox that confines the
-child (board 166, `docs/sandbox-spike.md`) makes it unnecessary. The broader question, layer on the
+child (board 166, `docs/sandbox-spike.md`) makes it unnecessary. **Built later as ticket 213 (2026-11-14),
+in a different shape**: not a grant (nothing is stored, no pattern, no cap circumvented in the file) but a
+per-session, in-memory mode in which the daemon answers the prompt dialogs itself, behind an always-ask floor
+of credentials, destructive commands, pushes and writes outside the directory (docs/reference.md "Auto mode").
+The sandbox is still the real boundary; the floor is a lexical convenience on top of it. The broader question, layer on the
 package or own the gate through pi's `tool_call` hook, is board 189.
 
 ## Scoped-session guard: phase 1 probes (board 148)
@@ -1525,3 +1529,33 @@ and the dimming/fold contracts the ticket lists, for a saving of under half a se
 of a typical session, so none was built. Revisit if a file past ~100 MB turns up, with the same breakdown
 (`probes`-style script: time `messagesFromFile`, `itemsFromMessages`, one `render(120)` per item) before
 choosing between truncation, lazy building and virtualization.
+
+## MCP servers that are not always up (ticket 209, 2026-11-14)
+
+The case: `freecad` in pi's `mcp.json` is an HTTP server (`http://127.0.0.1:39280/mcp`) that exists only while the FreeCAD GUI runs. Every session start fails to connect it and says so.
+
+What pi 1.4.0 actually does (read from `dist/extensions/mcp/index.js` and `dist/core/mcp-servers.js`, not guessed):
+
+- **Eager, in the background.** At session start `startConnection` runs for every enabled server; the first prompt waits only for servers whose tools are declared to the model (`exposure: "direct"`), and not indefinitely. There is no lazy-launch option.
+- **One warning.** Failed and needs-sign-in servers are reported once, after startup: `MCP servers need attention: freecad: failed: ...  Run /mcp to fix.` (`reportProblems`). That is the noise in every session.
+- **Reconnect on next call only after a connection existed.** A server that connected and later dropped shows `disconnected, reconnects on next call`; one that never connected stays `failed` until `/mcp reconnect` (or the manager's Reconnect).
+- **No `optional` flag.** The per-server keys pi validates are `type`, `exposure`, `enabled`, `timeout`, `toolExposure` and `description`.
+- **`enabled` is the nearest thing**, and it is stronger than it looks: a disabled server is never started and never warned about, `/mcp`'s manager enables and disables it and saves the change to the `mcp.json` that defines it, and a project's `.pi/mcp.json` entry with no `command`/`url` overrides only `enabled`, `exposure` and `toolExposure` of the global entry (`OVERRIDE_KEYS` in `extensions/mcp/config.js`).
+- **The popup that loses the error on the second look is pi's**: the manager's detail line calls `describeState(server, false)` for the state text. Not toriel's to change.
+
+The options of the ticket, judged:
+
+1. **Lazy startup**: needs pi (the built-in extension has no such mode), and the owner does not want to request things upstream. The extension below does the equivalent for URL servers.
+2. **An optional flag**: does not exist. `enabled: false` is the config-only substitute, and the extension below is the real one.
+3. **A doctor finding for "configured but not reachable"**: rejected. The doctor reports things that are broken; an intentionally intermittent server would be a permanent PROBLEM line there, which is the same noise moved to another screen. (A feature-level hint that only appears for a server that is disabled AND was just asked for would need state toriel does not have.)
+4. **An always-up shim**: rejected, as the ticket's own note predicted: a process to babysit, stale-connection handling, and tools that look present when what is behind them is not.
+
+What was built, in two steps. First ticket 209's `mcpWhenUp` setting plus an extension (the owner will not ask upstream, and was open to an extension of our own, as toriel has several). That left MCP servers in two places, pi's `mcp.json` and a toriel setting, which the owner did not want to maintain, so ticket 216 went further: **toriel owns the MCP config**. A one-file alternative was tried against real pi and does not work: a `whenUp` marker in `mcp.json` on an entry set `enabled: false`, with the extension registering the same name when reachable, is silently masked, because the disabled file entry wins and pi never connects the registered one (observed: no connection reached a listening server). A different name for the registered copy would change the tool names.
+
+- **`~/.config/toriel/mcp.yaml`** holds every server (YAML: comments, flexibility); the `toriel-mcp` extension registers them into pi with `pi.registerMcpServer` at `session_start`. Checked with real pi: a stdio server registered this way connects and declares its tools (`mcp__<name>__<tool>`) with `exposure: direct`; a bad entry is reported and skipped; a `whenUp` server that is down is not registered and prints nothing; `/mcp-up` answers. pi's own `mcp.json` is not used.
+- **The path, not the contents, goes to the child** (`TORIEL_MCP_FILE`): an entry's `env` may hold a secret, and a child's environment is readable by the agent's own commands. The extension reads the file itself (it imports the `yaml` package from the toriel checkout, which resolves under pi's loader).
+- **One definition** of what an entry may hold and how a file parses (`pi/extensions/lib/mcp-config.ts`) is shared by the extension and the daemon side (`src/mcp-config.ts`: `/mcp add`, `/mcp remove`, the doctor's `exposure: direct` fix and the move from `mcp.json`), so they cannot drift. Edits go through the yaml Document, so a person's comments survive.
+- **Everything that read `mcp.json` moved:** `/mcp add|remove|status|explore`, the doctor's exposure checks and their fix (now a custom fix with a backup), the agent-profile warnings (`mcpWarnings`), and pi's none-configured text, which points at the old file and is replaced in `/mcp list`.
+- **Migration** is one `toriel doctor --fix` (finding `mcp-json`): missing servers are added to `mcp.yaml`, the old file is renamed to a backup. A real `mcp.json` with nine servers (stdio and URL, headers, env, exposure, timeouts) imports with nothing dropped.
+- **Protected path.** `mcp.yaml` joins the grants file and pi's agent dir in `protectedPaths`: an entry is a command the next session runs, so an ask about it always reaches the user and auto mode never answers it.
+- **Limits, stated.** One decision per session start (plus `/mcp-up`); a session started while an app was down has no tools of its `whenUp` server until `/mcp-up`; URL servers only for `whenUp`; pi's own `/mcp` panel changes to a registered server last for the session only; a project's `.pi/mcp.json` no longer applies.

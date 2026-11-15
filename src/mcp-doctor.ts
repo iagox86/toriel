@@ -1,11 +1,12 @@
 // /mcp status: why is an MCP server not working? Joins what pi reports for a
 // server (its state and the error text under it) with what is configured for it
-// in mcp.json and a few cheap local checks (is the command installed, does the
+// in mcp.yaml and a few cheap local checks (is the command installed, does the
 // URL's host answer), and says what to try. Secrets never appear: env and header
 // values are shown as names only, and arguments that follow a token-like flag are masked.
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
+import { parseMcpYaml } from "../pi/extensions/lib/mcp-config.ts";
 import { onPath } from "./clipboard.ts";
 
 export interface McpConfigEntry {
@@ -158,7 +159,7 @@ export function adviceFor(status: ServerStatus, entry: McpConfigEntry | undefine
     out.push(`sign in: /mcp login ${status.name}`);
   }
   if (/disabled/i.test(status.detail) || entry?.enabled === false) {
-    out.push('it is switched off: set "enabled": true in mcp.json (or enable it in pi\'s own /mcp panel), then /reload');
+    out.push('it is switched off: set "enabled": true in mcp.yaml (or enable it in pi\'s own /mcp panel for this session), then /reload');
   }
   if (/ENOENT|not found|no such file/i.test(text)) {
     out.push("the program to start could not be run: check the command and that its dependencies are installed");
@@ -176,7 +177,7 @@ export function adviceFor(status: ServerStatus, entry: McpConfigEntry | undefine
     out.push(`read the error above, fix the cause, then /mcp reconnect ${status.name}`);
   }
   if (/failed|error|disconnected/i.test(status.detail) && !out.some((o) => o.includes("reconnect"))) {
-    out.push(`when fixed: /mcp reconnect ${status.name} (or /reload for a changed mcp.json)`);
+    out.push(`when fixed: /mcp reconnect ${status.name} (or /reload for a changed mcp.yaml)`);
   }
   return out;
 }
@@ -202,7 +203,7 @@ export function statusReport(
         lines.push(`      ${d}`);
       }
     } else {
-      lines.push("    not in any mcp.json (registered by an extension)");
+      lines.push("    not in mcp.yaml (registered by another extension, or removed from the file since this session started)");
     }
     for (const f of findings.get(s.name) ?? []) {
       lines.push(`    check: ${f}`);
@@ -221,17 +222,16 @@ export function statusReport(
   return `${summary}${head}${blocks.join("\n\n")}${errors}`.trim() || "No MCP servers are configured. /mcp add <name> <url | command> adds one.";
 }
 
-/** Server entries from the given mcp.json files; a later file wins, like pi's project-over-user rule. */
+/** Server entries from the given mcp.yaml files; a later file wins. A missing or broken file contributes nothing (the doctor and the extension report problems). */
 export function readConfigs(files: readonly string[]): Map<string, { entry: McpConfigEntry; file: string }> {
   const map = new Map<string, { entry: McpConfigEntry; file: string }>();
   for (const file of files) {
     try {
-      const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as { mcpServers?: Record<string, McpConfigEntry> };
-      for (const [name, entry] of Object.entries(parsed.mcpServers ?? {})) {
+      for (const [name, entry] of Object.entries(parseMcpYaml(fs.readFileSync(file, "utf8")).servers)) {
         map.set(name, { entry, file: path.resolve(file) });
       }
     } catch {
-      // a missing or broken file simply contributes nothing; pi reports config errors itself
+      // a missing file simply contributes nothing
     }
   }
   return map;

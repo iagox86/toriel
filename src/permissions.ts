@@ -8,6 +8,7 @@
 // that can write it could otherwise self-grant across a restart. A dormant grant does
 // nothing until the user restores it (`restore`); grants made in the running daemon are
 // active at once.
+import type { AskRule } from "./shared.ts";
 import { readJsonOr, writeJsonAtomic } from "./util.ts";
 
 export interface Grant {
@@ -75,6 +76,8 @@ export interface Suggestion {
   /** The command or target the ask is about; the dialog's title names it. */
   value?: string;
   at: number;
+  /** Why the ask is an ask (ticket 213): a rule the user wrote, or the catch-all; absent when the link could not tell. */
+  rule?: AskRule;
 }
 
 /** A suggestion older than this does not belong to the dialog that just arrived. */
@@ -95,6 +98,15 @@ export function withSuggestion(dialog: Record<string, unknown>, suggestion: Sugg
     return dialog;
   }
   return { ...dialog, toriel: { grants: suggestion.grants } };
+}
+
+/** The reason for the ask that a dialog is about, from the remembered suggestion: fresh, and the title names the same value. Undefined when it does not belong to this dialog or was not reported. */
+export function ruleFor(dialog: Record<string, unknown>, suggestion: Suggestion | undefined, now: number): AskRule | undefined {
+  if (!suggestion?.rule || !suggestion.value || dialog.method !== "select" || now - suggestion.at > SUGGESTION_TTL_MS) {
+    return undefined;
+  }
+  const squash = (t: string) => t.replace(/\s+/g, "");
+  return typeof dialog.title === "string" && squash(dialog.title).includes(squash(suggestion.value)) ? suggestion.rule : undefined;
 }
 
 export class GrantStore {

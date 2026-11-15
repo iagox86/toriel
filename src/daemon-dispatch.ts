@@ -18,6 +18,7 @@ import {
 import {
   handleAbort,
   handleAbortBash,
+  handleAutoMode,
   handleBackground,
   handleBash,
   handleClear,
@@ -72,6 +73,8 @@ export async function dispatch(ctx: DaemonContext, cmd: ClientCommand, socket: n
       return handleAbortBash(ctx, cmd, res);
     case "background":
       return handleBackground(ctx, cmd, res);
+    case "auto_mode":
+      return handleAutoMode(ctx, cmd, res);
     case "clear_queue":
       return handleClearQueue(ctx, cmd, res);
     case "commands":

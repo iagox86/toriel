@@ -17,7 +17,9 @@ import { piAgentDir } from "./pi-dir.ts";
 import { startupProblems } from "./preflight.ts";
 import { type AuditOptions, auditFindings, type Finding, type Fix, type Level, PI_RESOURCES_DIR, piPackageListed, resolution } from "./resources.ts";
 import { legacySettingsFile, loadSettings, resolveChildConfig, settingsFile, yamlSettingsFile } from "./settings.ts";
+import { addMcpServer, importMcpJson, readMcpYaml, redactEntry, renderMcpYaml, setMcpServerKey } from "./mcp-config.ts";
 import { convertLegacySettings, renderSettings } from "./settings-file.ts";
+import { mcpYamlFile } from "./config-dir.ts";
 import { onPathDirs as onPath, writeFileAtomic } from "./util.ts";
 
 const WEB_PACKAGE = "pi-web-access";
@@ -60,6 +62,8 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: "mcp-gdb-direct", level: "feature", title: 'the gdb MCP server is configured with "exposure": "direct" (the debug and crash-analysis agents need it)' },
   { id: "mcp-ghidra-direct", level: "feature", title: 'the ghidra MCP server is configured with "exposure": "direct" (the re-explain, re-find, re-trace and binary-diff agents need it)' },
   { id: "agent-lanes", level: "feature", title: "every model tier in agentLanes (cheap, medium, expensive) names a provider pi knows (models.json or a login)" },
+  { id: "mcp-yaml", level: "recommended", title: "toriel's mcp.yaml (the MCP servers) is valid" },
+  { id: "mcp-json", level: "recommended", title: "pi's own mcp.json holds no servers (toriel keeps them in mcp.yaml and pi would start the old ones itself)" },
   { id: "sandbox-bwrap", level: "feature", title: 'bubblewrap works (needed only when the "sandbox" setting is "bwrap": scoped sessions run each bash command sandboxed)' },
   { id: "sleep-lock", level: "feature", title: "the machine is kept awake for scheduled runs (systemd-inhibit)" },
   { id: "clipboard", level: "feature", title: "clipboard tools for paste and copy (wl-clipboard on Wayland, xclip on X11)" },
@@ -99,6 +103,8 @@ export interface DoctorOptions extends AuditOptions {
   probeBwrap?: () => string | undefined;
   /** What tmux says about keys (default: asks the server this process runs under; tests inject). */
   probeTmux?: () => TmuxKeys;
+  /** toriel's mcp.yaml (default: beside the settings file; tests inject). */
+  mcpFile?: string;
   /** The text of kitty's config, including what it includes (default: read from kitty's config directory; tests inject). */
   kittyConfig?: string;
 }
@@ -286,7 +292,7 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
   }
   // shipped agents that name mcp__<server>__* tools: pi gives an agent an MCP tool only when its server is exposed directly
   const shipped = loadAgents(process.cwd(), env).agents.filter((a) => a.source === "built-in");
-  const mcpFile = join(opts.agentDir ?? piAgentDir(env), "mcp.json");
+  const mcpFile = opts.mcpFile ?? mcpYamlFile(env);
   const servers = mergeMcpServers([mcpFile]);
   for (const server of MCP_AGENT_SERVERS) {
     const users = shipped.filter((a) => (a.tools ?? []).some((t) => t.startsWith(`mcp__${server.name}__`)));
@@ -301,22 +307,26 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
         level: "feature",
         message:
           info === undefined
-            ? `the "${server.name}" MCP server is missing from ${mcpFile}: the ${nameList(users.map((a) => a.name))} ${users.length > 1 ? "agents need" : "agent needs"} it (${server.hint}) with "exposure": "direct"; without it ${users.length > 1 ? "they have" : "it has"} no ${server.name} tool`
-            : `the ${nameList(users.map((a) => a.name))} ${users.length > 1 ? "agents need" : "agent needs"} the "${server.name}" MCP server (${server.hint}) with "exposure": "direct" in ${mcpFile}; without it ${users.length > 1 ? "they have" : "it has"} no ${server.name} tool (${problems[0]})`,
+            ? `the "${server.name}" MCP server is missing from ${mcpFile}: the ${nameList(users.map((a) => a.name))} ${users.length > 1 ? "agents need" : "agent needs"} it (${server.hint}) with exposure: direct; without it ${users.length > 1 ? "they have" : "it has"} no ${server.name} tool`
+            : `the ${nameList(users.map((a) => a.name))} ${users.length > 1 ? "agents need" : "agent needs"} the "${server.name}" MCP server (${server.hint}) with exposure: direct in ${mcpFile}; without it ${users.length > 1 ? "they have" : "it has"} no ${server.name} tool (${problems[0]})`,
         ...resolution(
           info !== undefined && info.exposure !== "direct"
             ? {
                 file: mcpFile,
                 summary: `set "exposure": "direct" on the "${server.name}" entry`,
-                edit: (c) => {
-                  const entries = isJsonObject(c.mcpServers) ? c.mcpServers : {};
-                  const raw = entries[server.name];
-                  const entry = isJsonObject(raw) ? raw : {};
-                  return { ...c, mcpServers: { ...entries, [server.name]: { ...entry, exposure: "direct" } } };
+                edit: (c) => c,
+                custom: {
+                  preview: () => `${mcpFile}: the "${server.name}" entry would get exposure: direct (the original is kept as a backup).`,
+                  apply: (now) => {
+                    const backup = backupPath(mcpFile, now);
+                    copyFileSync(mcpFile, backup);
+                    setMcpServerKey(mcpFile, server.name, "exposure", "direct");
+                    return backup;
+                  },
                 },
               }
             : undefined,
-          `there is no "${server.name}" entry to fix, and its command depends on where the server is installed on this machine, so add it by hand (${server.hint}) with "exposure": "direct"`,
+          `there is no "${server.name}" entry to fix, and its command depends on where the server is installed on this machine, so add it with /mcp add or by hand (${server.hint}) with exposure: direct`,
         ),
       });
     }
@@ -346,6 +356,40 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
         });
       }
     }
+  }
+  // toriel's MCP config (tickets 209, 216): a bad entry is left out of the session, so say which and why
+  for (const problem of readMcpYaml(mcpFile).problems) {
+    out.push({ id: "mcp-yaml", level: "recommended", message: `${mcpFile}: ${problem}`, manual: "the file is yours; doctor will not guess what an entry should be" });
+  }
+  // pi's own mcp.json still holding servers (ticket 216): toriel reads mcp.yaml, and pi would start these itself as well
+  const piJson = join(opts.agentDir ?? piAgentDir(env), "mcp.json");
+  const old = importMcpJson(piJson);
+  const oldNames = [...Object.keys(old.servers), ...old.skipped];
+  if (oldNames.length > 0) {
+    const have = readMcpYaml(mcpFile).servers;
+    const moving = Object.entries(old.servers).filter(([name]) => !(name in have));
+    out.push({
+      id: "mcp-json",
+      level: "recommended",
+      message: `pi's ${piJson} still lists ${nameList(oldNames)}: toriel now keeps its MCP servers in ${mcpFile} (YAML, comments allowed), and pi would also start the old entries itself; move them over (${moving.length} to add${old.dropped.length > 0 ? `; ${nameList(old.dropped)} cannot be carried over` : ""}${old.skipped.length > 0 ? `; ${nameList(old.skipped)} are not usable entries and stay behind in the backup` : ""})`,
+      fix: {
+        file: mcpFile,
+        summary: `add ${moving.length > 0 ? nameList(moving.map(([n]) => n)) : "nothing new"} to ${mcpFile} and set ${piJson} aside`,
+        edit: (c) => c,
+        custom: {
+          // env and header values can be secrets: the preview shows the names only, like /mcp status does
+          preview: () => `${mcpFile} would gain:\n${moving.length > 0 ? asAddition(renderMcpYaml(Object.fromEntries(moving.map(([name, entry]) => [name, redactEntry(entry)]))).split("\n").filter((l) => !l.startsWith("#")).join("\n")) : "+ (nothing: every server is already there)"}\n${piJson} would be renamed (kept as a backup).`,
+          apply: (now) => {
+            for (const [name, entry] of moving) {
+              addMcpServer(mcpFile, name, entry);
+            }
+            const backup = backupPath(piJson, now);
+            renameSync(piJson, backup);
+            return backup;
+          },
+        },
+      },
+    });
   }
   // the per-command sandbox (board 190) refuses to run a command rather than run it unsandboxed, so a setting that asks for bwrap without a working bwrap would stop every scoped session's bash
   if (loaded.settings.sandbox === "bwrap") {
@@ -508,10 +552,6 @@ function readConfig(file: string): Record<string, unknown> {
   return json as Record<string, unknown>;
 }
 
-/** A JSON object value; the exposure fix spreads only entries it can spread and rebuilds anything else. */
-function isJsonObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
-}
 
 function edited(file: string, fixes: readonly Fix[]): { before: string; after: string } {
   const config = readConfig(file);

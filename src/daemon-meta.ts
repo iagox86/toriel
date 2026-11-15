@@ -1,6 +1,6 @@
 // The session list as one controller should see it.
 import type * as net from "node:net";
-import type { DaemonSession, SessionRegistry } from "./daemon-session.ts";
+import { autoOn, type DaemonSession, type SessionRegistry } from "./daemon-session.ts";
 import type { GrantStore } from "./permissions.ts";
 import type { Presence } from "./presence.ts";
 import { scheduleStripLines } from "./schedule-format.ts";
@@ -44,6 +44,8 @@ function metaFor(s: DaemonSession, socket: net.Socket, presence: Presence, usage
     schedules: active.length > 0 ? active.length : undefined,
     scheduleLines: active.length > 0 && scheduler ? scheduleStripLines(active, new Date(), (id) => scheduler.heldReason(id) ?? watchProblem?.(id)) : undefined,
     nextFire: s.sessionId && scheduler ? scheduler.soonest(s.sessionId) : undefined,
+    auto: autoOn(s) ? true : undefined,
+    autoUntil: autoOn(s) && typeof s.autoUntil === "number" ? s.autoUntil : undefined,
     grants: granted > 0 ? granted : undefined,
     nextGrantExpiry: s.sessionId && grants ? grants.soonestExpiry(s.sessionId) : undefined,
     grantsSaved: saved > 0 ? saved : undefined,

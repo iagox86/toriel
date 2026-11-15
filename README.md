@@ -50,7 +50,7 @@ the whole checklist, graded: what toriel cannot work without, what is
 recommended (the permission package and its config), optional features
 (permission grants, the sleep lock, clipboard tools, a truecolor terminal) and hardening, each with its fix;
 `toriel doctor --fix` applies the safe ones (edits to the permission package's
-`config.json` and one-key edits to pi's `mcp.json`, after showing a diff,
+`config.json` and one-key edits to toriel's `mcp.yaml`, after showing a diff,
 keeping a backup). The notice line only shows what matters most and counts the
 rest.
 
@@ -91,7 +91,8 @@ begin a new session, or use the keys below.
 | left / right on a parent session | switcher | fold / unfold its subagents (left on a subagent jumps up to the parent) |
 | left on an empty editor | session | back to the switcher |
 | esc | session | abort the running agent |
-| ctrl-b | session | while the agent waits for a shell command: move it to the background (`/background`) |
+| shift+tab | session | toggle auto mode (`/auto`): permission prompts are allowed without asking, except credentials, destructive commands, pushes and the like |
+| ctrl-b | session | while the agent waits for a subagent or a shell command: move it to the background (`/background`) |
 | esc esc | session | rewind to an earlier message |
 | ctrl-o, ctrl-t | session | expand tool output, show thinking |
 | ctrl-r | session | search prompt history |
@@ -103,7 +104,7 @@ Type `/` for commands; tab completes them and their arguments, `/help` lists the
 - Switcher: `/new [-n name] [-a agent] [-C dir]`, `/init`, `/agents`, `/permissions` (every session's permission grants), `/doctor`, `/cd <dir>` (where `/new`, `/init` and a typed first message start, for this window), `/detach`, `/stop`, `/delete [-y]`, `/rename`, `/group`, `/ungroup`, `/park [-u]`,
   `/filter [-r]`, `/external [show|hide]` (sessions toriel never ran - plain pi, other instances - are hidden unless grouped; this shows them), `/comment [-c] [text]`, `/summarize`, `/restore`, `/adopt <file>`, `/feedback`, `/mouse [on|off|toggle]`, `/schedules` (every session's timed prompts), `/cancel /pause /resume <id|name>` and `/fire <schedule>` (manage a timed prompt), `/kill-daemon`, `/help`, `/exit`
 - In a session: `/help`, `/name` (show or rename; same as `/rename`), `/in`, `/at`, `/every`, `/loop`, `/cron` (timed prompts), `/watch <path> <prompt>` (a prompt when a file or directory changes; `/schedules` lists them, `/cancel /pause /resume <id|name>` and `/fire <schedule>` manage one), `/permissions` (list, add and revoke "allow for 1 hour" grants), `/doctor`, `/btw`, `/performance`, `/comment`, `/model`, `/think`, `/compact`, `/clear`, `/fork [-n name] [--keep-permissions]` (works while the session is running; the copy gets everything up to its last finished step), `/cd <dir>` (move this session to another directory), `/park`, `/rename`, `/reload`,
-  `/mcp` (`list`, `status`, `explore`, `add`, `remove`, `reconnect`, `login`, `logout`), `/init`, `/why`, `/abort`, `/background`,
+  `/mcp` (`list`, `status`, `explore`, `add`, `remove`, `reconnect`, `login`, `logout`), `/init`, `/why`, `/abort`, `/background`, `/auto` (auto mode, shift+tab),
   `/feedback`, `/parent` (jump to the agent that started this subagent), `/detach` (cut that link), `/continue [text]` (carry on after an accidental esc), `/mouse [on|off|toggle]`, `/quit` (back to the switcher), `/exit`
 
 `/comment <text>` keeps a longer note to yourself about a session (why it exists, where it stands). It is not drawn in the list, but `/filter` and `ctrl-f` search it. With no text the switcher puts the current comment in the box to edit; `-c` removes it.

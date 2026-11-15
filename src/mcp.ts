@@ -1,9 +1,7 @@
 // pi's /mcp command prints its status as plain text; this reads it back into
 // records toriel can list and complete from.
 import * as fs from "node:fs";
-import * as path from "node:path";
-import { piAgentDir } from "./pi-dir.ts";
-import { errText, readJsonOr, writeJsonAtomic } from "./util.ts";
+import { mcpYamlFile } from "./config-dir.ts";
 
 export interface McpServer {
   name: string;
@@ -60,7 +58,7 @@ export function mcpCompletions(typed: string, servers: readonly McpServer[]): Co
           : a === "add"
             ? "add a server: add <name> <url | command args...>"
             : a === "remove"
-              ? "remove a server from mcp.json (tab completes its name)"
+              ? "remove a server from mcp.yaml (tab completes its name)"
               : a === "explore"
                 ? "have the agent introspect a server and write a skill for it (tab completes its name)"
                 : `${a} a server (tab completes its name)`,
@@ -90,13 +88,13 @@ export function explainMcpFailure(text: string): string | undefined {
   if (/Unexpected token '?<|<!DOCTYPE|<html|is not valid JSON/i.test(reason)) {
     return wrap("the server answered with a web page where it should have sent JSON.", [
       "a reverse proxy or a single-sign-on page in front of the server is probably answering instead of it",
-      "or the URL in mcp.json is a website's front page rather than the MCP endpoint",
+      "or the URL in mcp.yaml is a website's front page rather than the MCP endpoint",
       "sign-in asks the server for /.well-known/oauth-* documents: the proxy has to pass those through unchanged",
       "/mcp status <server> shows what the URL answers",
     ]);
   }
   if (/fetch failed|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNRESET/i.test(reason)) {
-    return wrap("the server could not be reached.", ["the URL in mcp.json, and that the server is up", "/mcp status <server> checks whether the URL answers"]);
+    return wrap("the server could not be reached.", ["the URL in mcp.yaml, and that the server is up", "/mcp status <server> checks whether the URL answers"]);
   }
   if (/certificate|self[- ]signed|CERT_|UNABLE_TO_VERIFY/i.test(reason)) {
     return wrap("the server's TLS certificate was not accepted.", ["a self-signed or expired certificate, or one for another host name", "node uses its own CA list: NODE_EXTRA_CA_CERTS adds yours"]);
@@ -110,7 +108,7 @@ export interface McpEntry {
   args?: string[];
 }
 
-/** pi's mcp.json: a URL means a remote server, anything else is a command to run over stdio. */
+/** An mcp.yaml entry from /mcp add's arguments: a URL means a remote server, anything else is a command to run over stdio. */
 export function mcpEntry(target: readonly string[]): McpEntry {
   const [first, ...rest] = target;
   if (!first) {
@@ -125,9 +123,9 @@ export function mcpEntry(target: readonly string[]): McpEntry {
   return rest.length > 0 ? { command: first, args: rest } : { command: first };
 }
 
-/** Where pi reads its MCP servers from. */
+/** Where the MCP servers are configured: toriel's mcp.yaml (ticket 216). */
 export function mcpConfigFile(): string {
-  return path.join(piAgentDir(), "mcp.json");
+  return mcpYamlFile();
 }
 
 /**
@@ -171,6 +169,10 @@ function skillInDir(dir: string, name: string): string | undefined {
  * the none-configured message) pass through unchanged.
  */
 export function mcpListLines(text: string, skillsDirs: string[]): string[] {
+  // pi's own none-configured text sends people to its mcp.json, which toriel does not use (ticket 216)
+  if (/^No MCP servers configured\./.test(text.trim())) {
+    return [`No MCP servers are configured. /mcp add <name> <url | command args...> adds one to ${mcpConfigFile()}.`];
+  }
   return text.split("\n").map((line) => {
     const m = SERVER_LINE.exec(line);
     if (!m || NOT_SERVERS.has(m[1] as string)) {
@@ -185,59 +187,4 @@ export function mcpListLines(text: string, skillsDirs: string[]): string[] {
 export function mcpServerConnected(text: string, name: string): boolean {
   const server = parseMcpStatus(text).find((s) => s.name === name);
   return server !== undefined && /^connected/i.test(server.detail);
-}
-
-/**
- * Add `name` to the mcp.json at `file`, keeping every other key as it was.
- * Refuses to replace an existing server or to touch a file that is not valid JSON.
- */
-export function addMcpServer(file: string, name: string, entry: McpEntry): void {
-  let config: { mcpServers?: Record<string, unknown> } = {};
-  if (fs.existsSync(file)) {
-    try {
-      config = JSON.parse(fs.readFileSync(file, "utf8"));
-    } catch (err) {
-      throw new Error(`${file} is not valid JSON (${errText(err)}); fix it by hand first`);
-    }
-  }
-  const servers = config.mcpServers ?? {};
-  if (Object.hasOwn(servers, name)) {
-    throw new Error(`server "${name}" already exists in ${file}`);
-  }
-  config.mcpServers = { ...servers, [name]: entry };
-  writeJsonAtomic(file, config, 0o600);
-}
-
-/**
- * Remove `name` from the mcp.json at `file`, keeping every other key. Throws a
- * message that says where the server is defined when it is not in this file
- * (`elsewhere` lists other config files to look in).
- */
-export function removeMcpServer(file: string, name: string, elsewhere: readonly string[] = []): void {
-  let config: { mcpServers?: Record<string, unknown> };
-  try {
-    config = JSON.parse(fs.readFileSync(file, "utf8"));
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      config = {};
-    } else {
-      throw new Error(`${file} is not valid JSON (${errText(err)}); fix it by hand first`);
-    }
-  }
-  const servers = config.mcpServers ?? {};
-  if (!Object.hasOwn(servers, name)) {
-    const where = elsewhere.filter((f) => configuredMcpNames(f).includes(name));
-    throw new Error(
-      where.length > 0
-        ? `"${name}" is not in ${file}; it is defined in ${where.join(", ")} - remove it there`
-        : `"${name}" is not in ${file} (a server registered by an extension cannot be removed here)`,
-    );
-  }
-  const { [name]: _gone, ...rest } = servers;
-  config.mcpServers = rest;
-  writeJsonAtomic(file, config, 0o600);
-}
-
-function configuredMcpNames(file: string): string[] {
-  return Object.keys(readJsonOr<{ mcpServers?: Record<string, unknown> }>(file, {}).mcpServers ?? {});
 }

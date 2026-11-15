@@ -14,8 +14,23 @@
  */
 /** How the durable notice for a prompt a grant answered begins; a controller attaches such a notice to the tool call it allowed (ticket 205). */
 export const GRANT_ANSWERED_NOTICE = "allowed by permission grant";
+/**
+ * Why pi is asking, as the grants link read it from the package's own policy (ticket 213): `explicit` when a rule the user wrote
+ * (or a package safety floor) asks about this, not the catch-all default. Auto mode leaves an explicit ask to the user; an ask
+ * with no report at all is left to the user too, so an older link fails closed.
+ */
+export interface AskRule {
+  explicit: boolean;
+  /** The pattern of the rule that asks (`git *`), when there is one. */
+  pattern?: string;
+  /** Which config scope or mechanism contributed it ("global", "project", "agent", "fail-closed", "builtin", ...). */
+  origin?: string;
+}
 
-export const PROTOCOL = 9; // 9: watch_add's optional `by` ("agent": a file trigger an agent made through toriel_watch_create, held to the agent limits); 8: permission_check's optional `probe` (answer from the grants without remembering a suggestion for a dialog; the reply says `expiresAt`), for the toriel_permission_check tool; 7: spawn's optional `wake` (start a sleeping session because the user typed a command into it; answers `woke: false` with a reason instead of starting a file another pi may have open); 6: 6: rename and adopt answer with the applied `name` and `nameVerified` (the daemon makes names unique); 5: file-path prompts carry grant rows, and permission_add's `dialog` (4: the watch_add command (file-trigger schedules); 3: agent_spawn's optional cwd; 2: the `cd` command and adopt's `keepPermissions`)
+/** The same for a prompt auto mode answered (ticket 213). */
+export const AUTO_ANSWERED_NOTICE = "allowed by auto mode";
+
+export const PROTOCOL = 10; // 10: the auto_mode command and SessionMeta.auto/autoUntil (a session that allows its permission prompts except the sketchy ones, ticket 213); 9: watch_add's optional `by` ("agent": a file trigger an agent made through toriel_watch_create, held to the agent limits); 8: permission_check's optional `probe` (answer from the grants without remembering a suggestion for a dialog; the reply says `expiresAt`), for the toriel_permission_check tool; 7: spawn's optional `wake` (start a sleeping session because the user typed a command into it; answers `woke: false` with a reason instead of starting a file another pi may have open); 6: 6: rename and adopt answer with the applied `name` and `nameVerified` (the daemon makes names unique); 5: file-path prompts carry grant rows, and permission_add's `dialog` (4: the watch_add command (file-trigger schedules); 3: agent_spawn's optional cwd; 2: the `cd` command and adopt's `keepPermissions`)
 
 /** Which toriel code a process runs (build-id.ts). */
 export interface BuildInfo {
@@ -102,6 +117,9 @@ export interface SessionMeta {
   scheduleLines?: string[];
   /** Active permission grants in this session, the soonest expiry among the timed ones (epoch ms), and saved grants waiting for /permissions restore. */
   grants?: number;
+  /** Auto mode is on (ticket 213), and when it ends by itself (epoch ms; undefined = it does not). */
+  auto?: boolean;
+  autoUntil?: number;
   nextGrantExpiry?: number;
   grantsSaved?: number;
   /** A subagent this daemon run started: how it stands, and whether its parent has the result (the row greys out when it ended and was delivered). */
@@ -160,6 +178,12 @@ type ClientCommandBody =
   | { type: "abort_bash"; session: number }
   /** Move the bash command(s) the agent is waiting for in this session to the background (they become jobs). The child answers with a notice. */
   | { type: "background"; session: number }
+  /**
+   * Switch auto mode for a session (ticket 213): its permission prompts are answered "Yes" by the daemon, except the ones in the
+   * always-ask floor (auto-mode.ts). `on` omitted toggles; `for` (a duration such as "2h") makes it end by itself. Answers `{ on, until }`.
+   * Kept in the daemon's memory only: never stored, so a daemon restart ends it.
+   */
+  | { type: "auto_mode"; session: number; on?: boolean; for?: string }
   /** Drop queued steering/follow-up messages; the response carries their text. */
   | { type: "clear_queue"; session: number }
   /** The text pi's /mcp prints (servers and their states), for listing and completion. */
@@ -230,7 +254,7 @@ type ClientCommandBody =
   /** Act on schedules: `ref` is "#3", "3" or a name (within the session when one is given); `all` takes every schedule in scope. */
   | { type: "schedule_op"; id?: string; op: "pause" | "resume" | "fire" | "cancel"; ref?: string; all?: boolean; session?: number; uuid?: string }
   /** From a child's toriel-grants link (docs/permissions.md): is this ask covered by a grant? `grants` is pi's suggested session grant for it, `value` the command or target asked about. The response is {allow, grants?}; when not covered the daemon remembers the suggestion for the dialog that follows. With `probe` it only looks: nothing is remembered, and a covered answer also carries `expiresAt` (epoch ms of the soonest-ending grant used, null = until revoked) for the toriel_permission_check tool. */
-  | { type: "permission_check"; id?: string; uuid: string; grants: PermissionGrantSpec[]; value?: string; probe?: boolean }
+  | { type: "permission_check"; id?: string; uuid: string; grants: PermissionGrantSpec[]; value?: string; probe?: boolean; rule?: AskRule }
   /** Permission grants of one session, or of all when neither `session` nor `uuid` is given. The response is {grants: GrantView[]}. */
   | { type: "permission_list"; id?: string; session?: number; uuid?: string }
   /** Grant a surface/pattern in a session. `for` is a duration ("1h"), or "session"/"never" for no expiry (the default). `dialog` is the id of the file-path prompt being answered: required, and checked against the prompt the daemon holds, for a file-path surface (those grants come only from a prompt). */

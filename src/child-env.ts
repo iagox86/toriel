@@ -3,13 +3,14 @@
 // are); a `!command` runs in the daemon, not in pi, so it must be given the same
 // ones or it would see the daemon's environment instead (#100).
 import { delimiter, join } from "node:path";
+import { MCP_FILE_ENV } from "../pi/extensions/lib/mcp-config.ts";
 import { SCOPE_ENV, SCOPE_MODE_ENV } from "../pi/extensions/lib/scope-root.ts";
 import { piAgentDir } from "./pi-dir.ts";
 import type { ScopeAssignment } from "./scope-root.ts";
 import { DEFAULT_SANDBOX_WRITABLE, type TorielSettings } from "./settings.ts";
 
 /** The daemon-owned variables that must never come from the daemon's own environment. */
-const OWNED_KEYS = [SCOPE_ENV, SCOPE_MODE_ENV, "TORIEL_SANDBOX", "TORIEL_SANDBOX_RW", "TORIEL_SHARED_DIR", "TORIEL_SANDBOX_TMP"];
+const OWNED_KEYS = [SCOPE_ENV, SCOPE_MODE_ENV, "TORIEL_SANDBOX", "TORIEL_SANDBOX_RW", "TORIEL_SHARED_DIR", "TORIEL_SANDBOX_TMP", MCP_FILE_ENV];
 
 /** What a child gets beyond its scope: the shared directory, and (only when set) the sandbox switch with its extra writable roots. */
 export interface ChildExtras {
@@ -18,6 +19,8 @@ export interface ChildExtras {
   tmpDir?: string;
   /** Present = run the child's bash commands in the sandbox; the list is the extra writable roots (caches). */
   sandboxWritable?: string[];
+  /** Where mcp.yaml is, for the toriel-mcp extension to read (a path, not the contents: an entry's env may hold a secret); only for a session that has MCP support (tickets 209, 216). */
+  mcpFile?: string;
 }
 
 /**
@@ -63,6 +66,9 @@ export function childEnv(s: EnvSession, sock: string, base: NodeJS.ProcessEnv = 
   }
   if (extras.sharedDir !== undefined) {
     env.TORIEL_SHARED_DIR = extras.sharedDir;
+  }
+  if (extras.mcpFile !== undefined) {
+    env[MCP_FILE_ENV] = extras.mcpFile;
   }
   if (scope !== undefined && extras.sandboxWritable !== undefined) {
     env.TORIEL_SANDBOX = "bwrap";

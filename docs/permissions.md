@@ -130,7 +130,7 @@ matching); a project config overlay (above).
     toriel row is refused up front rather than storing a grant that would never fire. "Names
     a protected file" (`touchesProtected` in `src/daemon-permissions.ts`) means the absolute
     path, the `~` form, or the path's last two segments (`.pi/agent`, `toriel/permissions.json`),
-    so `../.pi/agent/mcp.json` and a repo-local `.pi/agent` count, and the text is also tried
+    so `../.pi/agent/mcp.json` and a repo-local `.pi/agent` count (toriel's own `mcp.yaml` is protected the same way: an entry there is a command the next session runs), and the text is also tried
     with `..`, `.` and doubled `/` collapsed. Whitespace is ignored (pi wraps long commands).
     It errs toward matching: the cost of a false positive is one more prompt, never a grant.
     Not covered: a path built at run time (`$HOME/...`, a symlink, a command that computes
@@ -438,6 +438,18 @@ Items not covered are marked.
 - **The grant half is a probe.** The extension sends `permission_check` with `probe: true` (PROTOCOL 8). The daemon answers from the grants as usual but remembers no suggestion for a dialog (a probe is not an ask, and must not take the place of a real one) and adds `expiresAt` (soonest-ending grant used; null = until revoked). It only ever reads the asking session's own grants (the UUID in the payload, the same trust as the link; see the threat model).
 - **What it cannot say.** `ask` does not mean anyone is present or would approve; the tool's answer says so, and for an unattended run tells the agent to pick an allowed route or end with exactly what needs approval. Answers go stale (timed grants, rule edits). Failure of any part (no permission system, a daemon that does not answer, a throwing service) reports what is known or "cannot tell, assume a prompt", never an error that stops the run.
 - A prompt-injected agent learns which commands are unguarded; a shell-capable agent could find that out by trial, so this adds little.
+
+## Auto mode (ticket 213)
+
+`/auto` or shift+tab makes the daemon answer a session's permission prompts "Yes" itself, except an always-ask floor. User-facing description and the floor's list: docs/reference.md "Auto mode". Why it is built this way:
+
+- **Where.** `ChildManager.answerAuto`, next to the file-path answer (`answerCovered`) and after it: the daemon sees every dialog first, so one place covers every surface, including the file-path ones the chain cannot allow (their `allow` is capped to `defer`). A link-side version would have needed a second mechanism for those.
+- **It is a mode, not a grant.** Nothing goes into `permissions.json`, so nothing is restored, listed or stored (the stored-"yes" risk of ticket 55 does not apply): it lives in `DaemonSession.autoUntil`, in memory, and a daemon restart ends it. `/auto 2h` makes it end by itself (24h at most). It is per session and a subagent does not inherit it.
+- **Your own ask rules win too.** The link reports `rule` (explicit or the default) with every ask, read from the package's `PermissionQuery` at gate parity; auto mode answers only default asks, and an ask with no report is left to the user (fail closed). Deny rules never reach it: a denied action is never a prompt. Checked against the real pi-permission-system service (not only fakes), with `bash: {"*": ask, "git *": ask, "ls *": allow, "sudo *": deny}` and `*: ask` in the global config: `git status` is an ask from the pattern `git *` (explicit), `npm test` an ask from the bare `*` (not), a file write and an outside-directory write asks from `*` (not; the surfaces `path_write` and `external_directory_write` are understood), an MCP call and a skill asks with no pattern (not), `ls -la` is allowed and `sudo -V` is denied (neither prompts).
+- **Grants win first; the floor wins last.** A grant answers before auto mode is asked; the floor is checked before auto mode answers. Prompts pi denies never exist as prompts.
+- **The floor is lexical.** `floorReason` reads the prompt's text and the grants link's report (surface, command): the protected files, credential-file names, the `external_directory_write` surface, and a small shell reader (`shellCommands`: split on `&& || ; | & newline ( ) $(` and backticks, skip assignments and wrapper words) for destructive, publishing and privilege-escalating commands. It errs toward asking, and it can be fooled by a command that hides what it does; the sandbox is the boundary. pi wraps a long command across lines mid-word, so with no unwrapped value both the wrapped and the joined readings are checked.
+- **Visible.** A durable notice on every switch and every answer (the answer notice attaches to its tool call, ticket 205), a flash when the floor asks, and `AUTO MODE` in the status line, never dropped.
+- **Related.** #88 (auto-deny after a timeout) is the mirror image and could share `isPermissionPrompt`; nothing else is shared yet.
 
 ## Later, not now
 

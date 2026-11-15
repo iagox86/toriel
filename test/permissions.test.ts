@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { answerablePrompt, touchesProtected } from "../src/daemon-permissions.ts";
+import { answerablePrompt, protectedPaths, touchesProtected } from "../src/daemon-permissions.ts";
 import { cappedReason, GrantStore, isCappedSurface } from "../src/permissions.ts";
 
 const HOUR = 3_600_000;
@@ -342,6 +342,24 @@ describe("touchesProtected: every spelling of a protected file", () => {
     assert.equal(touches("write /home/me/.pi/agent/settings.json"), true);
     assert.equal(touches("cat ~/.pi/agent/mcp.json"), true);
     assert.equal(touches("cat /home/me/.pi/ag\nent/mcp.json"), true);
+  });
+
+  it("protects toriel's mcp.yaml by default: an entry there is a command the next session runs (ticket 216)", () => {
+    const saved = process.env.TORIEL_MCP;
+    process.env.TORIEL_MCP = "/home/me/.config/toriel/mcp.yaml";
+    try {
+      assert.ok(protectedPaths().includes("/home/me/.config/toriel/mcp.yaml"));
+      assert.equal(touchesProtected("write /home/me/.config/toriel/mcp.yaml"), true);
+      assert.equal(touchesProtected("cat ~/.config/toriel/mcp.yaml"), true);
+      assert.equal(touchesProtected("cat ../toriel/mcp.yaml"), true, "the last two segments, as for pi's own directory");
+      assert.equal(touchesProtected("cat ~/.config/toriel/settings.yaml"), false, "the rest of the config dir is not covered");
+    } finally {
+      if (saved === undefined) {
+        delete process.env.TORIEL_MCP;
+      } else {
+        process.env.TORIEL_MCP = saved;
+      }
+    }
   });
 
   it("sees relative spellings, which still contain the tail of the path", () => {

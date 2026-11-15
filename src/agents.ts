@@ -15,8 +15,9 @@
 // the three agent directories.
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { piAgentDir } from "./pi-dir.ts";
-import { errText, readJsonOr } from "./util.ts";
+import { parseMcpYaml } from "../pi/extensions/lib/mcp-config.ts";
+import { mcpYamlFile } from "./config-dir.ts";
+import { errText } from "./util.ts";
 
 /** The model tiers a profile may name instead of a provider/id; the settings' `agentLanes` say which model each one is (ticket 208). */
 export const MODEL_TIERS = ["cheap", "medium", "expensive"] as const;
@@ -213,6 +214,11 @@ export function parseAgent(text: string, source: string, file: string): AgentPro
   };
 }
 
+/** Whether a session launched as `profile` has pi's MCP support at all (none = a plain session, which does). Matches `profileArgs`: --no-extensions and --no-mcp take it away. */
+export function profileHasMcp(profile: AgentProfile | undefined): boolean {
+  return profile === undefined || (profile.extensions && (profile.tools === undefined || profile.tools.some((t) => t.startsWith("mcp__"))));
+}
+
 /** The pi arguments that launch a session as `profile`. Model and thinking are for new sessions only (see `profileArgs`). */
 export function profileArgs(profile: AgentProfile, opts: { isNew: boolean }): string[] {
   const args: string[] = [];
@@ -255,17 +261,17 @@ export function mcpServersOf(tools: readonly string[]): string[] {
   return [...servers];
 }
 
-/** One warning per MCP server the profile names that mcp.json does not configure. */
+/** One warning per MCP server the profile names that mcp.yaml does not configure. */
 export function mcpWarnings(profile: AgentProfile, servers: Readonly<Record<string, McpServerInfo>>): string[] {
   const byName = new Map(Object.entries(servers).map(([name, info]) => [name.replace(/-/g, "_"), info]));
   return mcpServersOf(profile.tools ?? []).flatMap((server) => {
     const info = byName.get(server.replace(/-/g, "_"));
     if (!info) {
-      return [`${profile.name}: MCP server "${server}" is not configured in mcp.json`];
+      return [`${profile.name}: MCP server "${server}" is not configured in mcp.yaml`];
     }
     if (info.exposure !== "direct") {
       // pi's default (codemode) never declares the tools to the model, so an agent limited to them has none
-      return [`${profile.name}: MCP server "${server}" has exposure ${info.exposure ?? "codemode (the default)"} in mcp.json, so the agent is never given its tools: set "exposure": "direct"`];
+      return [`${profile.name}: MCP server "${server}" has exposure ${info.exposure ?? "codemode (the default)"} in mcp.yaml, so the agent is never given its tools: set "exposure": "direct"`];
     }
     return [];
   });
@@ -277,13 +283,18 @@ export interface McpServerInfo {
   exposure?: string;
 }
 
-/** The servers of one mcp.json (`mcpServers` object); empty when unreadable. */
+/** The servers of toriel's mcp.yaml; empty when it is missing or unreadable (the doctor reports that). An entry with a problem is left out. */
 export function readMcpServers(file: string): Record<string, McpServerInfo> {
-  const raw = readJsonOr<{ mcpServers?: Record<string, { exposure?: unknown } | null> }>(file, {}).mcpServers ?? {};
-  return Object.fromEntries(Object.entries(raw).map(([name, entry]) => [name, { exposure: typeof entry?.exposure === "string" ? entry.exposure : undefined }]));
+  let text = "";
+  try {
+    text = fs.readFileSync(file, "utf8");
+  } catch {
+    return {};
+  }
+  return Object.fromEntries(Object.entries(parseMcpYaml(text).servers).map(([name, entry]) => [name, { exposure: entry.exposure }]));
 }
 
-/** Several mcp.json files, lowest priority first: a later entry of the same name overrides the keys it sets (pi lets a project entry override only `exposure`). */
+/** Several mcp.yaml files, lowest priority first (there is one now; the list stays so a caller need not change): a later entry of the same name overrides the keys it sets. */
 export function mergeMcpServers(files: readonly string[]): Record<string, McpServerInfo> {
   const out: Record<string, McpServerInfo> = {};
   for (const file of files) {
@@ -335,9 +346,9 @@ export function loadAgents(cwd: string, env: NodeJS.ProcessEnv = process.env): L
   return { agents: [...byName.values()].sort((a, b) => a.name.localeCompare(b.name)), problems };
 }
 
-/** The pi MCP config files for a directory: user level, then project. */
-export function mcpConfigFiles(cwd: string, env: NodeJS.ProcessEnv = process.env): string[] {
-  return [path.join(piAgentDir(env), "mcp.json"), path.join(cwd, ".pi", "mcp.json")];
+/** The MCP config files that apply to sessions in a directory: toriel's mcp.yaml (ticket 216; pi's own mcp.json is not used, and neither is a project's .pi/mcp.json). */
+export function mcpConfigFiles(_cwd: string, env: NodeJS.ProcessEnv = process.env): string[] {
+  return [mcpYamlFile(env)];
 }
 
 /** Load agents and add the MCP warnings. */

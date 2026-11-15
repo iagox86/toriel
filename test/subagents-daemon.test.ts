@@ -140,6 +140,30 @@ describe("daemon: subagents", () => {
     assert.match(done.text, /cancelled the call/);
   });
 
+  it("ctrl-b (the background command) lets go of a foreground call at once and delivers the result later as a message (ticket 212)", async () => {
+    harness = await startDaemon({ FAKE_PI_RUN_MS: "1200" });
+    const { c, session, uuid } = await parentSession(harness);
+    const caller = await harness.connect();
+    const call = caller.request({ type: "agent_spawn", from: uuid, agent: "worker", task: "dig", description: "look" });
+    for (let i = 0; i < 100; i++) {
+      if (((await c.request({ type: "agents_op", from: uuid, action: "list" })).text as string).includes("[running")) {
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    const started = Date.now();
+    await c.request({ type: "background", session });
+    const answer = await call;
+    assert.ok(Date.now() - started < 1000, "the call answered before the subagent finished");
+    assert.equal(answer.state, "running");
+    assert.match(answer.text, /moved subagent #1 \(worker\) to the background.*arrives later as a message/);
+    const notice = await c.waitFor((m) => m.type === "notice" && /moved to the background: subagent #1 \(worker\)/.test(m.text));
+    assert.equal(notice.durable, true);
+    assert.match(((await c.request({ type: "agents_op", from: uuid, action: "list" })).text as string), /background/);
+    const got = await c.waitFor((m) => m.type === "event" && m.event?.type === "message_end" && JSON.stringify(m.event.message).includes("Subagent #1 (worker: look) finished"));
+    assert.match(JSON.stringify(got.event.message), /echo: dig/);
+  });
+
   it("answers a background spawn at once and delivers the result to the parent as a message", async () => {
     harness = await startDaemon();
     const { c, uuid } = await parentSession(harness);

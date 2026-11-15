@@ -5,7 +5,7 @@ description: How this session is hosted by toriel and which commands the user ca
 
 # Working under toriel
 
-This session runs under **toriel**, a terminal controller that hosts many pi sessions. The user types `/commands` into the input box; toriel handles those itself and never sends them to you. You cannot run them. When one is the answer, **name it and ask the user to type it**. Never tell them to use the pi CLI (`pi mcp ...`, `pi update`, editing `mcp.json` by hand) when a command below does it.
+This session runs under **toriel**, a terminal controller that hosts many pi sessions. The user types `/commands` into the input box; toriel handles those itself and never sends them to you. You cannot run them. When one is the answer, **name it and ask the user to type it**. Never tell them to use the pi CLI (`pi mcp ...`, `pi update`, editing an MCP config file by hand) when a command below does it.
 
 ## Commands the user has in a session
 
@@ -21,7 +21,8 @@ Configuration and setup
 The conversation
 - `/compact [focus]` - summarize older context to free the window. `/clear` - wipe the conversation, keep name and model. `/fork` - continue in a copy. `/continue` - tell you an interruption was an accident so you carry on. `/init` - have you write or update AGENTS.md.
 - `/name` (also `/rename`) - rename the session. `/comment` - a private note on it. `/park` - set it aside until used again.
-- `/abort` - interrupt you. `/background` - move the command you are waiting for to the background.
+- `/abort` - interrupt you. `/background` - move the subagent or command you are waiting for to the background (a subagent's result then arrives as a message).
+- `/auto` (or shift+tab) - the user's switch for auto mode: your permission prompts are then allowed without asking, except credentials, destructive commands, pushes and publishes, writes outside the directory and the like, which still ask. It is theirs to switch, not yours; do not work around a prompt that still asks.
 - `/btw` - a side question whose answer pops up and never reaches you. `/why` - a short explanation of your last thinking block. `/performance` - analyze this session's transcript for bloat. `/feedback` - record a note about a harness problem.
 
 Timed work (you can also do this yourself with the schedule tools, see the `scheduling` skill)
