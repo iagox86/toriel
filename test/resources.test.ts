@@ -218,6 +218,20 @@ describe("permission grants audit", () => {
     assert.deepEqual(ids(audit({ ...chain, permission: { path: { [grantsFile]: "allow" } } })), ["grants-path-rule"]);
   });
 
+  it("also checks the bash side: an external_directory allow on the grants file lets a command write it unasked (ticket 218)", () => {
+    const chain = { authorizerChain: ["toriel-grants"] };
+    const ok = { path: { [grantsFile]: "ask" } };
+    assert.deepEqual(ids(audit({ ...chain, permission: { ...ok, external_directory_write: { "/home/u/.local/share/toriel/*": "allow" } } })), ["grants-path-rule", "scope-guard-short-circuit"]);
+    assert.deepEqual(ids(audit({ ...chain, permission: { ...ok, external_directory: { "*": "allow" } } })), ["grants-path-rule", "scope-guard-short-circuit"]);
+    const [f] = audit({ ...chain, permission: { ...ok, external_directory_write: { [grantsFile]: "allow" } } });
+    assert.match(f?.message ?? "", /from a bash command: .*"external_directory_write": "ask"|from a bash command: make "external_directory_write" stop allowing it/);
+    // ask, deny, an unrelated allow and no rule at all are fine
+    for (const edw of [{ [grantsFile]: "ask" }, { [grantsFile]: "deny" }, { "/opt/*": "allow" }, { "*": "ask" }, undefined]) {
+      const found = audit({ ...chain, permission: { ...ok, ...(edw === undefined ? {} : { external_directory_write: edw }) } }).filter((x) => x.id === "grants-path-rule");
+      assert.deepEqual(found, [], JSON.stringify(edw));
+    }
+  });
+
   it("reports both problems together, and says nothing about them when the config is unusable", () => {
     assert.deepEqual(ids(audit({})), ["grants-chain", "grants-path-rule"]);
     const agent = agentDirWithPermissions();

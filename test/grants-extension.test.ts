@@ -211,6 +211,71 @@ describe("scope link", () => {
     }
   });
 
+  describe("interpreter payloads on the bash surface (ticket 218)", () => {
+    const bashAsk = (command: string) => ({ surface: "bash", command, accessIntent: { surface: "bash" }, payload: { request: { value: command } } });
+    const verdict = (command: string, scope: Parameters<typeof ext.scopeVerdict>[0] = root) => ext.scopeVerdict(scope, bashAsk(command));
+
+    it("denies the report's own payload: a path to pi's permission config inside python3 -c", () => {
+      const cmd = `python3 -c "import json; json.dump({}, open('/home/ron/.pi/agent/extensions/pi-permission-system/config.json','w'))"`;
+      const v = verdict(cmd);
+      assert.equal(v.kind, "deny");
+      if (v.kind === "deny") {
+        assert.match(v.reason, /\/home\/ron\/\.pi\/agent\/extensions\/pi-permission-system\/config\.json/);
+        assert.match(v.reason, new RegExp(W));
+        assert.match(v.reason, /script file/);
+      }
+    });
+
+    it("denies other runners and spellings, and ~ / $HOME / unresolvable variables", () => {
+      for (const cmd of [
+        `node -e "require('fs').writeFileSync('/etc/x','y')"`,
+        `perl -e 'open F, ">/home/u/x"'`,
+        `sh -c 'echo hi > /usr/local/x'`,
+        `bash -lc "cp a ~/.bashrc"`,
+        `/usr/bin/python3 -c "open('$HOME/x','w')"`,
+        `ruby --eval "File.write('/opt/x', 'y')"`,
+        `cd sub && python3 -c "open('/etc/x','w')"`,
+        `python3 -c "open('${W}/../outside','w')"`,
+        `python3 -c "open('../evil','w')"`,
+        `cd sub && python3 -c "open('../../evil','w')"`,
+        `python3 -c "open('$OUT/x','w')"`,
+        `python3 -c "open('${W}-evil/x','w')"`,
+      ]) {
+        assert.equal(verdict(cmd).kind, "deny", cmd);
+      }
+    });
+
+    it("lets through a payload with only in-tree paths, scratch paths, no paths, and commands that are not payloads", () => {
+      for (const cmd of [
+        `python3 -c "print(1+1)"`,
+        `python3 -c "open('${W}/out.txt','w')"`,
+        `python3 -c "open('rel/out.txt','w')"`,
+        `node -e "console.log('a/b', 10 / 2, 'https://example.com/x')"`,
+        `python3 script.py /etc/hosts`,
+        `ls /etc`,
+        `cat ${W}/x`,
+      ]) {
+        assert.deepEqual(verdict(cmd), { kind: "defer" }, cmd);
+      }
+    });
+
+    it("exempts scratch paths, unless the scope itself lives in /tmp", () => {
+      const home = { kind: "root" as const, root: "/srv/proj", mode: "deny" as const };
+      assert.deepEqual(verdict(`python3 -c "open('/tmp/scratch','w')"`, home), { kind: "defer" });
+      assert.deepEqual(verdict(`python3 -c "open('/dev/null','w')"`, home), { kind: "defer" });
+      assert.equal(verdict(`python3 -c "open('/srv/proj-evil/x','w')"`, home).kind, "deny");
+      assert.equal(verdict(`python3 -c "open('/tmp/scratch','w')"`).kind, "deny", "root is under /tmp here, so a /tmp sibling is outside it");
+    });
+
+    it("never denies in ask mode or with no scope, and never reaches the daemon on a deny", async () => {
+      const cmd = `python3 -c "open('/etc/x','w')"`;
+      assert.deepEqual(verdict(cmd, askRoot), { kind: "defer" });
+      assert.deepEqual(verdict(cmd, off), { kind: "defer" });
+      assert.deepEqual(ext.scopeVerdict(root, { surface: "bash", accessIntent: { surface: "bash" } }), { kind: "defer" }, "no command text, nothing to read");
+      assert.equal((await ext.authorize(sock, "u", bashAsk(cmd), () => { throw new Error("must not be called"); }, root)).kind, "deny");
+    });
+  });
+
   it("denies a symlink-out write even though the lexical path is inside W", () => {
     const main = path.join(base, "main");
     fs.mkdirSync(main);

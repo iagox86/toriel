@@ -12,6 +12,7 @@ import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, readFileSync, renameSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
+import { applyDrift, diffRoutes, type LitellmProbe, readLitellmEntries } from "./litellm-models.ts";
 import { mcpWarnings, mergeMcpServers, loadAgents } from "./agents.ts";
 import { piAgentDir } from "./pi-dir.ts";
 import { startupProblems } from "./preflight.ts";
@@ -43,6 +44,8 @@ export interface CatalogEntry {
   title: string;
   /** Only checkable when the permission package is set up; otherwise shown as skipped. */
   needsPermissionPackage?: boolean;
+  /** Only checked when the caller supplies a probe that asks the network (`toriel doctor` does; the in-app /doctor does not, because it would block the screen). */
+  needsProbe?: "litellm";
 }
 
 /** Every check doctor makes, in the order it prints them within a level. */
@@ -62,6 +65,7 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: "mcp-gdb-direct", level: "feature", title: 'the gdb MCP server is configured with "exposure": "direct" (the debug and crash-analysis agents need it)' },
   { id: "mcp-ghidra-direct", level: "feature", title: 'the ghidra MCP server is configured with "exposure": "direct" (the re-explain, re-find, re-trace and binary-diff agents need it)' },
   { id: "agent-lanes", level: "feature", title: "every model tier in agentLanes (cheap, medium, expensive) names a provider pi knows (models.json or a login)" },
+  { id: "litellm-models", level: "feature", title: "pi's models.json matches what the litellm proxy says about each route (context window, output limit, cost)", needsProbe: "litellm" },
   { id: "mcp-yaml", level: "recommended", title: "toriel's mcp.yaml (the MCP servers) is valid" },
   { id: "mcp-json", level: "recommended", title: "pi's own mcp.json holds no servers (toriel keeps them in mcp.yaml and pi would start the old ones itself)" },
   { id: "sandbox-bwrap", level: "feature", title: 'bubblewrap works (needed only when the "sandbox" setting is "bwrap": scoped sessions run each bash command sandboxed)' },
@@ -103,6 +107,8 @@ export interface DoctorOptions extends AuditOptions {
   probeBwrap?: () => string | undefined;
   /** What tmux says about keys (default: asks the server this process runs under; tests inject). */
   probeTmux?: () => TmuxKeys;
+  /** Asks the litellm proxy about its routes (ticket 215). Not set: the check is skipped ("run toriel doctor"). `toriel doctor` passes the real one. */
+  probeLitellm?: LitellmProbe;
   /** toriel's mcp.yaml (default: beside the settings file; tests inject). */
   mcpFile?: string;
   /** The text of kitty's config, including what it includes (default: read from kitty's config directory; tests inject). */
@@ -357,6 +363,36 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
       }
     }
   }
+  // pi's models.json hardcodes the litellm routes' metadata (ticket 215); litellm itself says what it believes, so a stale number is findable
+  const litellm = opts.probeLitellm !== undefined ? readLitellmEntries(opts.agentDir ?? piAgentDir(env)) : undefined;
+  if (litellm !== undefined && opts.probeLitellm !== undefined) {
+    const modelsFile = join(opts.agentDir ?? piAgentDir(env), "models.json");
+    const answer = opts.probeLitellm({ baseUrl: litellm.baseUrl, apiKey: litellm.apiKey });
+    if (typeof answer !== "string") {
+      const { drift, gone, extra } = diffRoutes(litellm.models, answer.routes);
+      if (drift.length > 0) {
+        const lines = drift.map((d) => `${d.id}: ${d.changes.map(([f, was, now]) => `${f} ${was === undefined ? "(unset)" : was} -> ${now}`).join(", ")}`);
+        out.push({
+          id: "litellm-models",
+          level: "feature",
+          message: `${modelsFile} has stale numbers for the litellm routes (pi truncates and compacts by them): ${lines.join("; ")}. litellm reports its own configured metadata for a route, not the backend's real limits, so this copies litellm's belief${gone.length > 0 ? `; ${nameList(gone)} ${gone.length > 1 ? "are" : "is"} in models.json but not served by litellm` : ""}${extra.length > 0 ? `; ${extra.length} route${extra.length > 1 ? "s" : ""} litellm serves ${extra.length > 1 ? "are" : "is"} not in models.json (add by hand if you want them)` : ""}`,
+          fix: {
+            file: modelsFile,
+            summary: `update ${drift.length} litellm model${drift.length > 1 ? "s" : ""} in models.json to litellm's numbers`,
+            edit: (c) => {
+              const providers = (typeof c.providers === "object" && c.providers !== null ? c.providers : {}) as Record<string, { models?: Array<Record<string, unknown>> }>;
+              const entry = providers.litellm;
+              if (entry === undefined || !Array.isArray(entry.models)) {
+                return c;
+              }
+              return { ...c, providers: { ...providers, litellm: { ...entry, models: applyDrift(entry.models, drift) } } };
+            },
+          },
+        });
+      }
+    }
+    // an unreachable or unauthorised proxy says nothing about the numbers: doctor stays quiet rather than nag when the server is down
+  }
   // toriel's MCP config (tickets 209, 216): a bad entry is left out of the session, so say which and why
   for (const problem of readMcpYaml(mcpFile).problems) {
     out.push({ id: "mcp-yaml", level: "recommended", message: `${mcpFile}: ${problem}`, manual: "the file is yours; doctor will not guess what an entry should be" });
@@ -450,6 +486,9 @@ export function runDoctor(opts: DoctorOptions = {}): Check[] {
     }
     if (noPackage && entry.needsPermissionPackage) {
       return { ...entry, state: "skipped", findings: [], note: "needs pi-permission-system (see above)" };
+    }
+    if (entry.needsProbe === "litellm" && opts.probeLitellm === undefined) {
+      return { ...entry, state: "skipped", findings: [], note: "asks the litellm server: run `toriel doctor` in a terminal to check" };
     }
     return { ...entry, state: "ok", findings: [] };
   });

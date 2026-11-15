@@ -57,6 +57,46 @@ describe("commandFloor: what auto mode leaves to the user", () => {
     assert.match(commandFloor("rm -rf /") ?? "", /outside the working tree/);
   });
 
+  it("asks about writes that leave the working tree through a redirection or an output flag (ticket 217)", () => {
+    for (const bad of [
+      "echo x > ~/tmp/probe.txt",
+      "echo x >> /etc/hosts",
+      "echo x 2> ~/err",
+      "cmd &> /home/u/log",
+      "echo x >$HOME/f",
+      "echo x > ../sibling/f",
+      "cat a | tee ~/x",
+      "make 2>&1 | tee -a /var/log/build.log",
+      "curl -o ~/x https://u",
+      "curl --output=/etc/x https://u",
+      "curl --output ~/x https://u",
+      "wget -O /usr/local/bin/x https://u",
+      "tar -xf a.tgz -C /opt",
+      "cp config ~/.bashrc",
+      "mv out.txt /etc/x",
+    ]) {
+      assert.match(commandFloor(bad) ?? "", /writes to a file outside the working tree/, bad);
+    }
+    for (const ok of [
+      "echo x > ./x",
+      "echo x > out/x.txt",
+      "echo x >> notes.md",
+      "make 2>&1 | tee build.log",
+      "make > /dev/null 2>&1",
+      "cmd 2>/dev/null",
+      "echo x > /tmp/scratch",
+      "curl -o out.json https://u",
+      "curl -s https://u | jq . > data.json",
+      "tar -xf a.tgz -C .",
+      "tar -xf /usr/share/a.tgz",
+      "cp /etc/hosts ./hosts.copy",
+      "echo 'a > b'",
+      "git log --oneline > /dev/stderr",
+    ]) {
+      assert.equal(commandFloor(ok), undefined, ok);
+    }
+  });
+
   it("asks about wiping or rewriting storage", () => {
     for (const bad of ["dd if=/dev/zero of=/dev/sda", "mkfs.ext4 /dev/sdb1", "wipefs -a /dev/sda", "shred -u secret", "echo x > /dev/sda", "fdisk /dev/sda", "zpool destroy tank"]) {
       assert.match(commandFloor(bad) ?? "", /storage|disk/, bad);

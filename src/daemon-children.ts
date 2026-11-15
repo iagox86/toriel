@@ -21,9 +21,10 @@ import { sessionIdOfFile } from "./session-file.ts";
 import { mayDelegate, type SubagentLimits } from "./subagents.ts";
 import { profileOfSession, saveSessionAgent } from "./session-agents.ts";
 import { log } from "./log.ts";
-import { type AskRule, AUTO_ANSWERED_NOTICE, encodeLine, GRANT_ANSWERED_NOTICE, type UsageReport } from "./shared.ts";
+import { type AskRule, AUTO_ANSWERED_NOTICE, AUTO_DENIED_NOTICE, encodeLine, GRANT_ANSWERED_NOTICE, type UsageReport } from "./shared.ts";
 import { floorReason, isPermissionPrompt, promptSubject } from "./auto-mode.ts";
 import { type ChildConfig, loadSettings, resolveChildConfig, settingsMtime } from "./settings.ts";
+import { fmtDuration, parseDurationText } from "./when.ts";
 import { errText } from "./util.ts";
 
 export interface SlashCommand {
@@ -283,7 +284,7 @@ export class ChildManager {
     }
     s.child = undefined;
     s.attachedTo = undefined;
-    s.pendingDialog = false;
+    this.clearDialog(s); // was a bare pendingDialog = false, which left a deny-after timer armed on the stopped session
     s.streaming = false;
     s.compacting = false;
     this.dropBridge(s, "the session was stopped");
@@ -378,6 +379,7 @@ export class ChildManager {
     s.dead = true;
     s.streaming = false;
     s.compacting = false;
+    this.clearDialog(s); // a dead child cannot answer its open prompt, and the deny-after timer must not fire on it (review of batch 7)
     this.dropBridge(s, reason);
     this.onStopped?.(s, crash);
   }
@@ -557,7 +559,45 @@ export class ChildManager {
     return true;
   }
 
+  /** How long a permission prompt of this session may wait before it is denied (ticket 88): its own setting, else the global one; undefined = for ever. */
+  denyAfterMs(s: DaemonSession): number | undefined {
+    if (s.denyAfter !== undefined) {
+      return s.denyAfter === null ? undefined : s.denyAfter;
+    }
+    const text = loadSettings().settings.permissionDenyAfter;
+    const d = text === undefined ? undefined : parseDurationText(text);
+    return d?.ok ? d.ms : undefined;
+  }
+
+  /**
+   * Ticket 88: opt-in, never the default. A permission prompt still unanswered after the session's deny-after is answered "No" here,
+   * the same way a user's No is, and a durable notice says it was automatic (and why), so a session nobody watches fails the action
+   * instead of waiting for ever. Only permission prompts: another extension's picker is left alone.
+   */
+  private armDeny(s: DaemonSession, request: Record<string, unknown>, value: string | undefined): void {
+    clearTimeout(s.denyTimer);
+    const ms = this.denyAfterMs(s);
+    if (ms === undefined || !isPermissionPrompt(request)) {
+      return;
+    }
+    s.denyTimer = setTimeout(() => {
+      s.denyTimer = undefined;
+      const stdin = (s.child as unknown as { process?: { stdin?: { write(text: string): void } } } | undefined)?.process?.stdin;
+      if (!s.pendingDialog || s.lastDialog !== request || !stdin || typeof request.id !== "string") {
+        return;
+      }
+      stdin.write(encodeLine({ type: "extension_ui_response", id: request.id, value: "No" }));
+      const what = promptSubject(typeof request.title === "string" ? request.title : "", value).slice(0, 160) || "a prompt";
+      log(`prompt denied after ${fmtDuration(ms)} without an answer for session ${s.sessionId}: ${what}`);
+      this.clearDialog(s);
+      this.hub.broadcast({ type: "notice", session: s.id, text: `${AUTO_DENIED_NOTICE}: nobody answered in ${fmtDuration(ms)}: ${what}`, durable: true });
+    }, ms);
+    s.denyTimer.unref();
+  }
+
   private clearDialog(s: DaemonSession): void {
+    clearTimeout(s.denyTimer);
+    s.denyTimer = undefined;
     if (s.pendingDialog) {
       s.pendingDialog = false;
       s.lastDialog = undefined;
@@ -599,6 +639,7 @@ export class ChildManager {
         s.lastDialog = request;
         this.hub.broadcastSessions();
         this.expireDialog(s, request);
+        this.armDeny(s, request, asked);
       }
       // Dialogs go to the attached controller; fire-and-forget records and
       // unattached dialogs broadcast so somebody can pick them up.

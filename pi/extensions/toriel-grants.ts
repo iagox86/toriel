@@ -10,7 +10,7 @@
 // would block the tool call, so nothing here may throw. Runs only in children
 // the toriel daemon starts (TORIEL_CHILD).
 import { ask } from "./toriel-agents.ts";
-import { isInside, readScope, type Scope } from "./lib/scope-root.ts";
+import { isInside, payloadEscape, readScope, type Scope } from "./lib/scope-root.ts";
 
 export const LINK_NAME = "toriel-grants";
 /** How long the daemon gets to answer; a slow answer is a deferred one. */
@@ -115,6 +115,11 @@ export function scopeVerdict(scope: Scope, details: AskDetails): Verdict {
     }
     const accessIntent = details?.accessIntent;
     const surface = typeof accessIntent?.surface === "string" ? accessIntent.surface : (typeof details?.surface === "string" ? details.surface : undefined);
+    if (surface === "bash" && scope.kind === "root" && scope.mode === "deny") {
+      // ticket 218: the package's bash parser does not see a path inside an interpreter payload (`python3 -c "open('/etc/x','w')"`)
+      const escaped = typeof details?.command === "string" ? payloadEscape(details.command, scope.root) : undefined;
+      return escaped === undefined ? { kind: "defer" } : deny(`scope guard: this command hands code to an interpreter that names ${escaped}, which is not inside this session's write scope ${scope.root} (TORIEL_SCOPE_ROOT). Put the code in a script file under ${scope.root} and run that, and keep what it writes under ${scope.root}.`);
+    }
     if (surface === undefined || !COVERED.has(surface)) {
       return { kind: "defer" };
     }

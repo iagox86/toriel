@@ -1,12 +1,24 @@
-// Daemon smoke test: connect, pick a live session (or spawn one in the current
-// directory), prompt it, wait for the run to settle.
-// Usage: node test/smoke-client.mjs     (TORIEL_SOCK / XDG_RUNTIME_DIR pick the daemon)
+// Daemon smoke test: start a THROWAWAY daemon (a temp dir, the fake pi: test/helpers.ts), connect, spawn a session in the current
+// directory, prompt it, wait for the run to settle. It never talks to your real daemon (ticket 214: a smoke run once typed
+// "Reply with exactly: SMOKE-OK" into a live session).
+// Usage: node test/smoke-client.mjs
+//        SMOKE_SOCK=/path/to/sock node test/smoke-client.mjs   (a daemon you started yourself, on purpose; it prompts a session there)
+// SMOKE_SOCK may not name the real daemon's default socket ($XDG_RUNTIME_DIR/toriel.sock or an --isolated profile's under it is fine).
 import net from "node:net";
+import path from "node:path";
+import { startDaemon } from "./helpers.ts";
 
-const SOCK = process.env.TORIEL_SOCK ?? (process.env.XDG_RUNTIME_DIR ? `${process.env.XDG_RUNTIME_DIR}/toriel.sock` : undefined);
-if (!SOCK) {
-  throw new Error("XDG_RUNTIME_DIR is not set; set it or TORIEL_SOCK");
+const explicit = process.env.SMOKE_SOCK;
+if (explicit !== undefined && process.env.XDG_RUNTIME_DIR && path.resolve(explicit) === path.join(process.env.XDG_RUNTIME_DIR, "toriel.sock")) {
+  throw new Error(`SMOKE_SOCK is your real daemon's socket (${explicit}); a smoke run would prompt one of your live sessions. Leave SMOKE_SOCK unset to use a throwaway daemon.`);
 }
+const harness = explicit === undefined ? await startDaemon() : undefined;
+const SOCK = explicit ?? harness.sock;
+/** Stop the throwaway daemon (and delete its dir), then exit. */
+const finish = async (code) => {
+  await harness?.stop().catch(() => {});
+  process.exit(code);
+};
 const sock = net.connect(SOCK);
 let buf = "";
 const messages = [];
@@ -15,7 +27,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const send = (msg) => sock.write(`${JSON.stringify(msg)}\n`);
 const fail = (why) => {
   console.error(`SMOKE FAIL: ${why}`);
-  process.exit(1);
+  finish(1);
 };
 
 sock.on("data", (d) => {
@@ -37,7 +49,7 @@ const sessions = () => [...messages].reverse().find((m) => m.type === "sessions"
 sock.on("connect", async () => {
   send({ type: "list" }); // announces this connection as a controller
   await wait(1000);
-  let session = sessions().find((s) => s.active && !s.dead);
+  let session = explicit === undefined ? undefined : sessions().find((s) => s.active && !s.dead); // a throwaway daemon has none: always spawn
   if (!session) {
     send({ id: "spawn-1", type: "spawn", cwd: process.cwd() });
     for (let i = 0; i < 40 && !session; i++) {
@@ -71,7 +83,7 @@ sock.on("connect", async () => {
       console.error("ASSISTANT TEXT:", assistant.slice(0, 300));
       console.error("SMOKE PASS");
       clearInterval(timer);
-      process.exit(0);
+      finish(0);
     }
     if (Date.now() - start > 120_000) {
       console.error("event types seen:", [...new Set(messages.map((m) => m.event?.type ?? m.type))].join(","));

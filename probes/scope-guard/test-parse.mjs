@@ -1,3 +1,8 @@
+if (process.env.NODE_TEST_CONTEXT !== undefined) {
+  // `node --test` sweeps any test-*.mjs in the tree as a test file; this probe is run by hand, not by the suite.
+  console.error("test-parse.mjs is a probe, not a test file: run it directly; use npm test for the suite");
+  process.exit(0);
+}
 import { createJiti } from 'jiti';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
