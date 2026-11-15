@@ -124,23 +124,44 @@ export function payloadEscape(command: string, root: string, home: string = proc
   return undefined;
 }
 
-/** Resolve a write target the way the file would be reached: `~` expanded, relative to `cwd`, symlinks followed through the nearest existing ancestor (the file itself may not exist yet). */
+/** Resolve a write target the way the file would be reached: `~` expanded, relative to `cwd`, every existing component followed through symlinks, `..` applied to the REAL parent. */
 export function resolveTarget(raw: string, cwd: string, home: string = process.env.HOME ?? "", realpath: (p: string) => string = fs.realpathSync): string {
   const expanded = raw === "~" || raw.startsWith("~/") ? home + raw.slice(1) : raw;
-  let abs = path.resolve(cwd, expanded);
+  // The naive way (path.resolve first, then realpath the nearest existing ancestor) normalizes `..` lexically, but the kernel applies
+  // `..` to the real directory, so `root/link/../x` (link -> outside) is root/x lexically and outside's parent / x really. Walk the
+  // segments on the real filesystem instead: realpath every component that exists, apply `..` to the realpath'd parent, and keep the
+  // segments below the deepest existing one as the not-yet-created tail.
+  const rawAbs = path.isAbsolute(expanded) ? expanded : `${cwd}/${expanded}`;
+  const segs = rawAbs.split(path.sep).filter((s) => s !== "" && s !== ".");
+  let cur: string;
+  try {
+    cur = realpath(path.parse(rawAbs).root);
+  } catch {
+    cur = path.parse(rawAbs).root;
+  }
   const tail: string[] = [];
-  for (;;) {
-    try {
-      return path.join(realpath(abs), ...tail.reverse());
-    } catch {
-      const parent = path.dirname(abs);
-      if (parent === abs) {
-        return path.join(abs, ...tail.reverse());
+  for (const seg of segs) {
+    if (seg === "..") {
+      // below a not-yet-existing component the fs behaviour is moot (nothing was created there), so `..` pops lexically
+      if (tail.length > 0) {
+        tail.pop();
+      } else {
+        cur = path.dirname(cur);
       }
-      tail.push(path.basename(abs));
-      abs = parent;
+      continue;
+    }
+    const next = `${cur}${path.sep}${seg}`;
+    try {
+      cur = realpath(next); // resolves the whole chain when it exists, so the tail restarts from the real thing
+      tail.length = 0;
+    } catch (err) {
+      if (!(err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT")) {
+        throw err; // EACCES and friends: fail closed, the veto turns this into a block
+      }
+      tail.push(seg);
     }
   }
+  return tail.length > 0 ? `${cur}${path.sep}${tail.join(path.sep)}` : cur;
 }
 
 /** Ticket 219: the resolved path of a write/edit target that is not inside the scope root (undefined when it is inside, or is scratch). */

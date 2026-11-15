@@ -53,6 +53,22 @@ describe("vetoVerdict (ticket 219)", () => {
     assert.match(vetoVerdict(deny(root), "edit", { path: "link/f" }, root) ?? "", /outside/);
   });
 
+  it("applies .. to the REAL parent when it follows a symlink (the kernel does, path.resolve does not)", () => {
+    // root/link/../x.txt lands at base/x.txt on the real filesystem, not root/x.txt: the .. is applied after the
+    // link resolves, so the veto must resolve that way too or the escape looks inside and slips by
+    fs.symlinkSync(outside, path.join(root, "link"));
+    assert.equal(resolveTarget("link/../x.txt", root), path.join(base, "x.txt"));
+    assert.match(vetoVerdict(deny(root), "write", { path: "link/../x.txt" }, root) ?? "", /outside/);
+    // same through a symlinked subdirectory, and through a chain
+    fs.mkdirSync(path.join(outside, "sub"));
+    fs.symlinkSync(path.join(outside, "sub"), path.join(root, "l2"));
+    fs.symlinkSync("l2", path.join(root, "l1"));
+    assert.match(vetoVerdict(deny(root), "write", { path: "l2/../y" }, root) ?? "", /outside/);
+    assert.match(vetoVerdict(deny(root), "write", { path: "l1/../z" }, root) ?? "", /outside/);
+    // a .. that only pops not-yet-created components stays inside
+    assert.equal(vetoVerdict(deny(root), "write", { path: "new/dir/../kept.txt" }, root), undefined);
+  });
+
   it("expands ~ to the home directory", () => {
     assert.match(vetoVerdict(deny(root), "write", { path: "~/.bashrc" }, root) ?? "", /outside/);
   });
