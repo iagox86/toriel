@@ -277,7 +277,9 @@ type ClientCommandBody =
   /** Deactivate if live, then move the session file to the trash dir. */
   | { type: "delete"; id?: string; session?: number; path?: string }
   /** Cut the session back to before a user message (tail goes to the trash). */
-  | { type: "rewind"; id?: string; session?: number; path?: string; entryId: string }
+  | { type: "rewind"; id?: string; session?: number; path?: string; entryId: string; /** Also put back the files the agent's write/edit tools changed since that message (ticket 11). */ code?: boolean }
+  /** Put back the files the agent's write/edit tools changed since a message, leaving the conversation as it is (ticket 11). */
+  | { type: "restore_code"; id?: string; session?: number; path?: string; entryId: string }
   /** Live: setSessionName on the child. Inactive: append session_info to the file. */
   | { type: "rename"; id?: string; session?: number; path?: string; name: string }
   /** Acquire exclusive input attach (force: steal from another controller). */

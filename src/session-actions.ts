@@ -6,9 +6,10 @@ import { Key, matchesKey } from "@earendil-works/pi-tui";
 import { coversPattern, isCappedSurface } from "./permissions.ts";
 import { answerValue, type DialogRequest, dialogAnswer, editablePattern, grantGuarded, grantRowFor, isTextDialog, isTypingKey, optionTakesReason } from "./dialogs.ts";
 import { isPlainLeft } from "./editor.ts";
-import { fmtAge } from "./format.ts";
+import { firstMessageLabel, fmtAge } from "./format.ts";
 import { TRASH_DIR } from "./config.ts";
-import { latestClearBackup, rewindTargets } from "./rewind.ts";
+import { latestClearBackup, type RewindTarget, rewindTargets } from "./rewind.ts";
+import { type CodeSummary, codePlanFor, summarize } from "./rewind-code.ts";
 import { messagesFromFile } from "./transcript.ts";
 import type { Host } from "./host.ts";
 import type { SessionMeta } from "./shared.ts";
@@ -245,7 +246,7 @@ export class SessionActions {
         },
       ];
     }
-    this.h.rewindPicker.open(targets);
+    this.h.rewindPicker.open(targets, (t) => summarize(codePlanFor(key, t.ts)));
     this.h.tui.requestRender();
   }
 
@@ -284,9 +285,12 @@ export class SessionActions {
       picker.move(1);
     } else if (matchesKey(data, Key.enter)) {
       const target = picker.current();
+      const code = target ? picker.codeOf(target) : undefined;
       picker.close();
       if (target?.restore) {
         void this.restoreCleared();
+      } else if (target && code !== undefined) {
+        this.askCode(target, code);
       } else if (target) {
         void this.rewindTo(target.entryId);
       }
@@ -311,7 +315,57 @@ export class SessionActions {
     }
   }
 
-  private async rewindTo(entryId: string): Promise<void> {
+  /**
+   * The agent changed files since the message picked: ask whether to undo them too (ticket 11). The question says what the undo does
+   * (how many files, how many lines), and the files it would leave alone; the conversation choices keep the usual meaning.
+   */
+  private askCode(target: RewindTarget, code: CodeSummary): void {
+    const what = code.files > 0 ? `${code.files} file${code.files === 1 ? "" : "s"} (+${code.added} -${code.removed})` : "nothing: no changed file can be put back";
+    const left = code.leftAlone > 0 ? ` and ${code.leftAlone} stay${code.leftAlone === 1 ? "s" : ""}` : "";
+    const both = "Conversation and code";
+    const conversation = "Conversation only";
+    const codeOnly = "Code only";
+    const choices = code.files > 0 ? [both, conversation, codeOnly, "Cancel"] : [conversation, "Cancel"];
+    this.h.choicePanel.open(`Rewind to before "${firstMessageLabel(target.text, 30) || "(empty message)"}": also undo ${what}${left}?`, choices, undefined, (choice) => {
+      if (choice === both) {
+        void this.rewindTo(target.entryId, true);
+      } else if (choice === conversation) {
+        void this.rewindTo(target.entryId, false);
+      } else if (choice === codeOnly) {
+        void this.restoreCodeOnly(target.entryId);
+      }
+    });
+    this.h.notify("only changes made by the write and edit tools are undone: a command's (sed -i, a build, git) is not tracked, and a file changed since stays as it is");
+    this.h.tui.requestRender();
+  }
+
+  /** A sentence for the files a restore put back and the ones it left alone (never their contents). */
+  private codeNotice(code: { restored: string[]; left: Array<{ path: string; why: string }> } | undefined): string {
+    if (code === undefined) {
+      return "";
+    }
+    const home = process.env.HOME ?? "";
+    const short = (p: string) => (home && p.startsWith(`${home}/`) ? `~${p.slice(home.length)}` : p);
+    const restored = code.restored.length > 0 ? `${code.restored.length} file${code.restored.length === 1 ? "" : "s"} put back` : "no file put back";
+    const left = code.left.length > 0 ? `; left alone: ${code.left.map((l) => `${short(l.path)} (${l.why})`).join("; ")}` : "";
+    return ` - ${restored}${left}`;
+  }
+
+  private async restoreCodeOnly(entryId: string): Promise<void> {
+    const key = this.h.viewing;
+    if (!key) {
+      return;
+    }
+    const meta = this.h.metaForPath(key);
+    try {
+      const r = (await this.h.request(meta ? { type: "restore_code", session: meta.id, entryId } : { type: "restore_code", path: key, entryId })) as { code?: { restored: string[]; left: Array<{ path: string; why: string }> } };
+      this.h.notify(`code restored${this.codeNotice(r.code)} (the conversation is unchanged)`);
+    } catch (err) {
+      this.h.notify(`restoring the code failed: ${errText(err)}`);
+    }
+  }
+
+  private async rewindTo(entryId: string, code = false): Promise<void> {
     const key = this.h.viewing;
     if (!key) {
       return;
@@ -319,11 +373,11 @@ export class SessionActions {
     const meta = this.h.metaForPath(key);
     try {
       const r = (await this.h.request(
-        meta ? { type: "rewind", session: meta.id, entryId } : { type: "rewind", path: key, entryId },
-      )) as { text: string; removed: number };
+        meta ? { type: "rewind", session: meta.id, entryId, ...(code ? { code } : {}) } : { type: "rewind", path: key, entryId, ...(code ? { code } : {}) },
+      )) as { text: string; removed: number; code?: { restored: string[]; left: Array<{ path: string; why: string }> } };
       this.h.reloadView(key);
       this.h.editor.setText(r.text);
-      this.h.notify(`rewound - ${r.removed} entries moved to trash`);
+      this.h.notify(`rewound - ${r.removed} entries moved to trash${this.codeNotice(r.code)}`);
       void this.h.loadLocal();
     } catch (err) {
       this.h.notify(`rewind failed: ${errText(err)}`);

@@ -1,5 +1,5 @@
 // Rewind: cut a session file back to just before one of its user messages.
-// Conversation only - files the agent edited are not restored. The removed
+// The conversation only: putting the files back too is rewind-code.ts. The removed
 // tail is never discarded: it moves to the trash dir with a manifest, like a
 // deleted session, so a rewind can be undone by hand (or a future /restore).
 import * as fs from "node:fs";
@@ -31,6 +31,8 @@ export interface RewindResult {
   /** Entries removed from the session. */
   removed: number;
   trashedTo: string;
+  /** When the rewound-to message was sent (ms since epoch; 0 when the entry has no time): the moment the code can be put back to. */
+  ts: number;
 }
 
 type ParsedLine = SessionLine<SessionEntryLike & { timestamp?: string; message?: { role?: string; content?: unknown } }>;
@@ -94,7 +96,7 @@ export function rewindFile(file: string, entryId: string, trashDir: string, now:
   );
   // Replace atomically so a crash never leaves a half-written session.
   writeFileAtomic(file, lines.slice(0, at).map((l) => `${l.raw}\n`).join(""));
-  return { text: messageText(target.entry!.message as never), removed: tail.length, trashedTo };
+  return { text: messageText(target.entry!.message as never), removed: tail.length, trashedTo, ts: Date.parse(target.entry!.timestamp ?? "") || 0 };
 }
 
 /**

@@ -15,7 +15,8 @@ import { formatLocalCommand, type LocalResult, runLocal } from "./local-command.
 import { log } from "./log.ts";
 import { matchModel, modelName } from "./model-match.ts";
 import { matchThinkingLevel } from "./think-match.ts";
-import { clearFile, latestClearBackup, restoreClear, rewindFile } from "./rewind.ts";
+import { clearFile, latestClearBackup, restoreClear, rewindFile, rewindTargets } from "./rewind.ts";
+import { restoreCode } from "./rewind-code.ts";
 import { setSessionFileCwd } from "./session-header.ts";
 import { encodeLine } from "./shared.ts";
 import { fmtClock, fmtDuration, parseDurationText } from "./when.ts";
@@ -450,8 +451,34 @@ export async function handleRewind(
   }
   const result = rewindFile(file, cmd.entryId, TRASH_DIR);
   log(`rewound ${file} before ${cmd.entryId}: ${result.removed} entries -> ${result.trashedTo}`);
+  // the files go back after the conversation was cut, so a rewind that fails leaves both as they were
+  const code = cmd.code ? codeResult(file, result.ts, true) : undefined;
   ctx.hub.broadcastSessions();
-  res(true, undefined, { text: result.text, removed: result.removed, trashedTo: result.trashedTo });
+  res(true, undefined, { text: result.text, removed: result.removed, trashedTo: result.trashedTo, ...(code ? { code } : {}) });
+}
+
+/** Put the files back for the message at `ts` and say what happened; the log names the files, never their contents. */
+function codeResult(file: string, ts: number, dropRecords: boolean): { restored: string[]; left: Array<{ path: string; why: string }> } {
+  const r = restoreCode(file, ts, dropRecords);
+  log(`restored the code of ${file} to ${new Date(ts).toISOString()}: ${r.restored.length} restored, ${r.left.length} left alone`);
+  return { restored: r.restored, left: r.left };
+}
+
+/** Put back the files the agent changed since a message, leaving the conversation alone (the "code only" choice of the rewind list). */
+export async function handleRestoreCode(ctx: DaemonContext, cmd: Cmd<"restore_code">, res: Responder): Promise<void> {
+  const s = ctx.registry.find(cmd);
+  const file = s?.sessionFile ?? cmd.path;
+  if (!file) {
+    throw new Error("restore_code requires a session or path");
+  }
+  if (s) {
+    requireIdle(s);
+  }
+  const target = rewindTargets(file).find((t) => t.entryId === cmd.entryId);
+  if (!target || target.ts <= 0) {
+    throw new Error(`no user message ${cmd.entryId} with a time in ${file}`);
+  }
+  res(true, undefined, { code: codeResult(file, target.ts, false) });
 }
 
 /** Deliver the user's answer to a dialog the child asked for. */
