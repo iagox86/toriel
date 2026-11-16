@@ -23,7 +23,7 @@ The conversation
 - `/compact [focus]` - summarize older context to free the window. `/clear` - wipe the conversation, keep name and model. `/fork` - continue in a copy. `/continue` - tell you an interruption was an accident so you carry on. `/init` - have you write or update AGENTS.md.
 - `/name` (also `/rename`) - rename the session. `/comment` - a private note on it. `/park` - set it aside until used again.
 - `/abort` - interrupt you. `/background` - move the subagent or command you are waiting for to the background (a subagent's result then arrives as a message).
-- `/auto` (or shift+tab) - the user's switch for auto mode: your permission prompts are then allowed without asking, except credentials, destructive commands, pushes and publishes, writes outside the directory and the like, which still ask. It is theirs to switch, not yours; do not work around a prompt that still asks.
+- `/auto` (shift+tab cycles normal, auto and plan mode) - the user's switch for auto mode: your permission prompts are then allowed without asking, except credentials, destructive commands, pushes and publishes, writes outside the directory and the like, which still ask. It is theirs to switch, not yours; do not work around a prompt that still asks.
 - `/deny-after <10m|off|default|status>` - the user's switch for unattended sessions: a permission prompt nobody answers within that time is denied for them, and you are told the action was refused. Off unless they set it. Do not retry a denied action in another form to get around it; say what you needed and stop.
 - `/plan` - plan mode: you can only look (no writes or edits, commands run read-only) until the user approves your plan. `/plan off` ends it.
 - `/tasks` - show your task list (the one you keep with `todo_write`).

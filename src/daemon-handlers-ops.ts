@@ -137,7 +137,7 @@ export function handleAutoMode(ctx: DaemonContext, cmd: Cmd<"auto_mode">, res: R
     type: "notice",
     session: s.id,
     text: on
-      ? `auto mode ON${until !== undefined ? ` until ${fmtClock(until, new Date())}` : ""}: permission prompts are allowed without asking, except the ones that always ask (credentials, destructive commands, pushes, writes outside the directory); /auto off or shift+tab ends it`
+      ? `auto mode ON${until !== undefined ? ` until ${fmtClock(until, new Date())}` : ""}: permission prompts are allowed without asking, except the ones that always ask (credentials, destructive commands, pushes, writes outside the directory); /auto off ends it (shift+tab moves on to the next mode)`
       : "auto mode OFF: permission prompts ask again",
     durable: true,
   });

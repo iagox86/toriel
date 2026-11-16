@@ -30,11 +30,28 @@ function fakeHost(meta: Record<string, unknown> | undefined, completing = false)
 const auto = (sa: SessionActions, text?: string) => (sa as unknown as { commands: { auto(t?: string): Promise<void> } }).commands.auto(text);
 
 describe("shift+tab", () => {
-  it("toggles auto mode for the viewed session", async () => {
-    const fh = fakeHost({ id: 7, attachedToYou: true });
+  const press = async (meta: Record<string, unknown>) => {
+    const fh = fakeHost({ attachedToYou: true, ...meta });
     assert.equal(new SessionActions(fh.host).keys(SHIFT_TAB), true);
-    await new Promise((r) => setImmediate(r));
-    assert.deepEqual(fh.requests, [{ type: "auto_mode", session: 7, on: undefined, for: undefined }]);
+    await new Promise((r) => setTimeout(r, 5));
+    return fh.requests;
+  };
+
+  it("cycles normal, auto, plan and back for the viewed session (ticket 233)", async () => {
+    assert.deepEqual(await press({ id: 7, sessionId: "u" }), [{ type: "auto_mode", session: 7, on: true }], "normal -> auto");
+    assert.deepEqual(await press({ id: 7, sessionId: "u", auto: true }), [
+      { type: "plan_mode", session: 7, on: true },
+      { type: "auto_mode", session: 7, on: false },
+    ], "auto -> plan: the two are exclusive");
+    assert.deepEqual(await press({ id: 7, sessionId: "u", plan: true }), [{ type: "plan_mode", session: 7, on: false }], "plan -> normal");
+    assert.deepEqual(await press({ id: 7, sessionId: "u", plan: true, auto: true }), [
+      { type: "plan_mode", session: 7, on: false },
+      { type: "auto_mode", session: 7, on: false },
+    ], "both on (set by commands) -> normal");
+  });
+
+  it("skips plan for a session that has no id yet, since plan mode is named by it", async () => {
+    assert.deepEqual(await press({ id: 7, auto: true }), [{ type: "auto_mode", session: 7, on: false }]);
   });
 
   it("stays the editor's while a completion popup is open, and when there is no session yet", () => {
