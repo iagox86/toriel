@@ -5,7 +5,7 @@ import { fmtTokens } from "./format.ts";
 import { displayName, type LocalSession } from "./session-list.ts";
 import type { SessionMeta, UsageReport } from "./shared.ts";
 import { budgetNearCap, budgetText } from "./subagent-budget.ts";
-import { accent, attention, dim, gauge, streaming } from "./theme.ts";
+import { accent, attention, dim, gauge, streaming, success } from "./theme.ts";
 import { fmtClock, fmtNext } from "./when.ts";
 
 export interface FleetStats {
@@ -156,8 +156,8 @@ function sessionSegments(inp: StatusInputs): Segment[] {
     out.push({ text: attention(`AUTO MODE${meta.autoUntil !== undefined ? ` until ${fmtClock(meta.autoUntil, new Date())}` : ""}`), drop: 0 });
   }
   if (meta?.plan) {
-    // like auto mode: a mode that changes what the agent may do is always visible
-    out.push({ text: attention("PLAN MODE"), drop: 0 });
+    // like auto mode: a mode that changes what the agent may do is always visible; green, because it is the safe one (it restricts the agent, auto mode is the risk)
+    out.push({ text: success("PLAN MODE"), drop: 0 });
   }
   const modelId = meta?.model && meta.model !== "loading" ? (meta.model.split("/").pop() as string) : undefined;
   if (modelId) {
