@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// toriel: the controller. `toriel` (auto-starts the daemon), `toriel kill-server`, `toriel doctor`.
+// toriel: the controller. `toriel` (auto-starts the daemon), `toriel kill-server`, `toriel doctor`, `toriel update`.
 // Everything but preflight is imported dynamically: a missing dependency would
 // otherwise fail at link time, before preflight could explain it.
 import { preflight } from "./src/preflight.ts";
@@ -17,6 +17,10 @@ if (process.argv[2] === "doctor") {
     return found.up ? describeDaemon(local, found.hello, compareDaemon(local, found.hello)) : undefined;
   };
   process.exit(await doctorMain(process.argv.slice(3), realIo(), {}, daemonReport));
+}
+if (process.argv[2] === "update") {
+  const { updateMain, realEnv } = await import("./src/update-cli.ts");
+  process.exit(await updateMain(process.argv.slice(3), { write: (t) => void process.stdout.write(t) }, await realEnv()));
 }
 await import("./src/migrate-on-start.ts");
 await import("./src/controller.ts");
