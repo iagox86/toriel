@@ -42,7 +42,7 @@ describe("daemon: lifecycle (3/3)", () => {
     const fork = (): Msg | undefined => c.sessions().find((s) => s.id === forked.sessionId);
     const argv = (): string[] => JSON.parse(fs.readFileSync(`${fork()?.sessionFile}.argv.json`, "utf8")) as string[];
     assert.equal(fork()?.agent, "explore");
-    assert.deepEqual(argv().slice(argv().indexOf("--tools"), argv().indexOf("--tools") + 2), ["--tools", "read,grep,find,ls"]);
+    assert.deepEqual(argv().slice(argv().indexOf("--tools"), argv().indexOf("--tools") + 2), ["--tools", "read,grep,find,ls,todo_write,enter_plan_mode,exit_plan_mode"]);
     await c.request({ type: "prompt", session: forked.sessionId, message: "hi" });
     await c.waitFor(isSettled);
     await c.request({ type: "deactivate", session: forked.sessionId });
@@ -116,7 +116,7 @@ describe("daemon: lifecycle (3/3)", () => {
     const file = (): string | undefined => c.sessions().find((x) => x.id === sessionId)?.sessionFile;
     const argv = (): string[] => JSON.parse(fs.readFileSync(`${file()}.argv.json`, "utf8")) as string[];
     assert.equal(c.sessions().find((x) => x.id === sessionId)?.agent, "explore");
-    assert.deepEqual(argv().slice(argv().indexOf("--tools"), argv().indexOf("--tools") + 3), ["--tools", "read,grep,find,ls", "--no-mcp"]);
+    assert.deepEqual(argv().slice(argv().indexOf("--tools"), argv().indexOf("--tools") + 3), ["--tools", "read,grep,find,ls,todo_write,enter_plan_mode,exit_plan_mode", "--no-mcp"]);
     assert.ok(argv().includes("--append-system-prompt"));
 
     await c.request({ type: "prompt", session: sessionId, message: "hi" });
@@ -226,6 +226,7 @@ describe("daemon: lifecycle (3/3)", () => {
     const f = c.sessions().find((x) => x.id === explore.sessionId)?.sessionFile;
     const eargv = JSON.parse(fs.readFileSync(`${f}.argv.json`, "utf8")) as string[];
     assert.equal(eargv.filter((a) => a === "--tools").length, 1, "a profile's own --tools is not mixed with modifiers");
+    assert.equal(eargv[eargv.indexOf("--tools") + 1], "read,grep,find,ls,todo_write,enter_plan_mode,exit_plan_mode", "a session the user drives keeps the task list and plan mode (ticket 232)");
   });
 
   it("loads toriel's own extensions and skill into every child by flag, keeping the extensions for a profile with discovery off and dropping the skill for a minimal one", async () => {

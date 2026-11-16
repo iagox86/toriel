@@ -65,6 +65,17 @@ describe("daemon: plan mode (ticket 229)", () => {
     await c.waitFor((m) => m.type === "notice" && /^plan mode OFF: you approved/.test(m.text));
   });
 
+  it("announces nothing for a session that never was in plan mode, and the end of plan mode only when it had begun (ticket 231)", async () => {
+    harness = await startDaemon();
+    const { c, session } = await savedSession(harness);
+    c.messages.length = 0;
+    await c.request({ type: "prompt", session, message: "/plan-report-off" });
+    await c.request({ type: "prompt", session, message: "/plan-report-off" });
+    await c.request({ type: "prompt", session, message: "hi again" });
+    await c.waitFor(isSettled);
+    assert.equal(c.messages.some((m) => m.type === "notice" && /plan mode/.test(m.text)), false, "an off report on a session that was off is not news");
+  });
+
   it("refuses an unknown session, and a session with no id yet", async () => {
     harness = await startDaemon();
     const c = await harness.connect();

@@ -17,7 +17,7 @@ import { exitNote, stderrTail } from "./subagent-exit.ts";
 import { historyLength } from "./daemon-history.ts";
 import { bundledArgs, bundledTools } from "./bundled-packages.ts";
 import { piAgentDir } from "./pi-dir.ts";
-import { resourceArgs, SPAWN_TOOLS, TORIEL_TOOLS } from "./resources.ts";
+import { resourceArgs, SESSION_TOOLS, SPAWN_TOOLS, TORIEL_TOOLS } from "./resources.ts";
 import { lineageArgs, loadLineage, parentMap, subagentDepth } from "./lineage.ts";
 import { sessionIdOfFile } from "./session-file.ts";
 import { mayDelegate, type SubagentLimits } from "./subagents.ts";
@@ -45,6 +45,8 @@ export interface StartOptions {
   appendSystemPrompt?: string;
   /** Launch a new session as this agent profile (a respawn finds its profile on its own). */
   agent?: AgentProfile;
+  /** Started by another session's toriel_agent call: its lineage is recorded only after it is up, so the start says so (ticket 232). */
+  subagent?: boolean;
 }
 
 
@@ -207,7 +209,9 @@ export class ChildManager {
     // a model tier (model: cheap) becomes a provider/id here, from the settings as they are now; only a new session takes the model, a resumed one keeps what its file says
     const launched = agent && isNew ? withResolvedModel(agent, loadSettings().settings.agentLanes, log) : agent;
     if (launched) {
-      args.push(...profileArgs(launched, { isNew }));
+      // a session the user drives (no parent) keeps the task list and plan mode whatever its profile lists (ticket 232)
+      const driven = !opts.subagent && subagentDepth(s.sessionId, parentMap(loadLineage())) === 0;
+      args.push(...profileArgs(launched, { isNew, extraTools: driven ? SESSION_TOOLS : [] }));
     }
     args.push(...resourceArgs({ skills: !agent?.minimal }));
     // the third-party pi packages toriel carries (ticket 230), unless the user has installed one themselves or switched it off
@@ -528,8 +532,9 @@ export class ChildManager {
     try {
       const report = JSON.parse(String(event.statusText)) as { v?: number; on?: unknown };
       if (report?.v === 1 && typeof report.on === "boolean") {
-        if (s.plan !== report.on) {
-          s.plan = report.on;
+        // a session that never was in plan mode has no state (undefined) and is off: only a real flip is announced (ticket 231)
+        if ((s.plan ?? false) !== report.on) {
+          s.plan = report.on || undefined;
           this.hub.broadcast({ type: "notice", session: s.id, text: report.on ? "plan mode ON: the agent asked to plan first; it can only look until you approve its plan" : "plan mode OFF: you approved the plan, the agent can change things again", durable: true });
         }
         this.hub.broadcastSessions();
