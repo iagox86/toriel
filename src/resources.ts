@@ -82,6 +82,13 @@ export const RESOURCES: readonly Resource[] = [
   { kind: "theme", path: "themes/solarized-dark.json", why: "the controller reads the theme at startup: without it toriel does not start" },
 ];
 
+/**
+ * The tools of the session the user is driving (ticket 232): the task list and plan mode belong to whoever the user talks to, so a session
+ * started on a profile that lists its tools still gets them (as bare names added to the profile's list: pi refuses to mix them with
+ * `+name`). A subagent gets them only when its profile names them, as in Claude Code, where plan mode is the main session's.
+ */
+export const SESSION_TOOLS: readonly string[] = ["todo_write", "enter_plan_mode", "exit_plan_mode"];
+
 /** `--tools` modifiers that add toriel's tools to whatever loadout a session has or restores. */
 export const TORIEL_TOOLS: readonly string[] = RESOURCES.flatMap((r) => (r.tools ?? []).map((t) => `+${t}`));
 

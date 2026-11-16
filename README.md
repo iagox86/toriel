@@ -95,7 +95,7 @@ begin a new session, or use the keys below.
 | left / right on a parent session | switcher | fold / unfold its subagents (left on a subagent jumps up to the parent) |
 | left on an empty editor | session | back to the switcher |
 | esc | session | abort the running agent |
-| shift+tab | session | toggle auto mode (`/auto`): permission prompts are allowed without asking, except credentials, destructive commands, pushes and the like |
+| shift+tab | session | the mode key: normal, then auto mode (`/auto`: permission prompts are allowed without asking, except credentials, destructive commands, pushes and the like), then plan mode (`/plan`: the agent can only look until you approve its plan), then back to normal. Auto and plan are exclusive here |
 | ctrl-b | session | while the agent waits for a subagent or a shell command: move it to the background (`/background`) |
 | esc esc | session | rewind to an earlier message |
 | ctrl-o, ctrl-t | session | expand tool output, show thinking |

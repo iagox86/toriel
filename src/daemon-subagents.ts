@@ -374,7 +374,7 @@ export class SubagentManager {
     });
     log(`subagent #${rec.handle} (${base.name}) started for ${parentName}: ${cmd.description}`);
     try {
-      await ctx.children.start(child, { agent: profile, name, forkPath: cmd.context === "fork" ? parent.sessionFile : undefined });
+      await ctx.children.start(child, { agent: profile, subagent: true, name, forkPath: cmd.context === "fork" ? parent.sessionFile : undefined });
       ctx.naming.applyInBackground(child);
       if (rec.state !== "running") {
         // stopped while it was starting: the process that just came up has no task and no lineage, so it goes

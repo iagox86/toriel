@@ -22,6 +22,8 @@ function writeAgents(h: Harness): void {
   agent("short", "maxTurns: 3\n");
   agent("ghostmodel", "model: fake/ghost\n");
   agent("goodmodel", "model: fake/fake-big\n");
+  agent("lister", "tools: read, grep\n");
+  agent("tasker", "tools: read, todo_write\n");
 }
 
 /** A session that has answered once, so it has a UUID to spawn from. */
@@ -65,7 +67,29 @@ const until = async (cond: () => boolean, ms = 5000): Promise<void> => {
 const spawn = (c: Client, from: string, over: Msg = {}) => c.request({ type: "agent_spawn", from, agent: "worker", task: "look around", description: "look", ...over });
 const lineage = (h: Harness): Msg => JSON.parse(fs.readFileSync(path.join(h.dir, "data", "toriel", "lineage.json"), "utf8"));
 
+/** The --tools value of every child the daemon has started, by the profile it ran (the fake pi writes its argv next to the session file). */
+const toolsLists = (h: Harness): string[] =>
+  fs
+    .readdirSync(h.sessionsDir)
+    .filter((f) => f.endsWith(".argv.json"))
+    .flatMap((f) => {
+      const argv = JSON.parse(fs.readFileSync(path.join(h.sessionsDir, f), "utf8")) as string[];
+      return argv.flatMap((a, i) => (a === "--tools" ? [argv[i + 1] as string] : []));
+    });
+
 describe("daemon: subagents", () => {
+  it("gives a subagent only the tools its profile lists, while a session the user drives on a profile also gets the task list and plan mode (ticket 232)", async () => {
+    harness = await startDaemon();
+    const { c, uuid } = await parentSession(harness);
+    await spawn(c, uuid, { agent: "lister", task: "look" });
+    await spawn(c, uuid, { agent: "tasker", task: "look" });
+    const sub = toolsLists(harness).filter((t) => t.startsWith("read,"));
+    assert.deepEqual(sub.sort(), ["read,grep", "read,todo_write"], "no plan tools and no task list unless the profile names them");
+    const driven = await c.request({ type: "spawn", cwd: harness.dir, agent: "lister" });
+    await c.waitFor((m) => m.type === "history" && m.session === driven.sessionId);
+    assert.ok(toolsLists(harness).includes("read,grep,todo_write,enter_plan_mode,exit_plan_mode"), toolsLists(harness).join(" | "));
+  });
+
   it("runs a foreground subagent to its final text, nests it under the parent and parks its session", async () => {
     harness = await startDaemon();
     const { c, uuid } = await parentSession(harness);

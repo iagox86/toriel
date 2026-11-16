@@ -220,10 +220,12 @@ export function profileHasMcp(profile: AgentProfile | undefined): boolean {
 }
 
 /** The pi arguments that launch a session as `profile`. Model and thinking are for new sessions only (see `profileArgs`). */
-export function profileArgs(profile: AgentProfile, opts: { isNew: boolean }): string[] {
+export function profileArgs(profile: AgentProfile, opts: { isNew: boolean; extraTools?: readonly string[] }): string[] {
   const args: string[] = [];
   if (profile.tools) {
-    args.push("--tools", profile.tools.join(","));
+    // extraTools: tools the session gets besides the profile's own list (bare names; pi cannot mix them with +name)
+    const extra = (opts.extraTools ?? []).filter((t) => !profile.tools?.includes(t));
+    args.push("--tools", [...profile.tools, ...extra].join(","));
     // --tools leaves MCP tools alone unless an entry names one, so say "none" outright
     if (!profile.tools.some((t) => t.startsWith("mcp__"))) {
       args.push("--no-mcp");

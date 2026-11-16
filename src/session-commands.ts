@@ -8,6 +8,7 @@ import { fmtTokens } from "./format.ts";
 import { detachFromParent, loadLineage } from "./lineage.ts";
 import { relationOf } from "./session-tree.ts";
 import { piAgentDir } from "./pi-dir.ts";
+import { nextMode, switches } from "./mode-cycle.ts";
 import { probeEntry, parseStatusDetailed, readConfigs, statusReport } from "./mcp-doctor.ts";
 import { addMcpServer, readMcpYaml, removeMcpServer, setMcpServerHeaders } from "./mcp-config.ts";
 import { bearerEnvHeader, bearerTokenHeader, MCP_ACTIONS, type McpAuthOptions, type McpEntry, mcpConfigFile, mcpEntry, mcpListLines, mcpServerConnected, parseHeaderArg, withHeaders } from "./mcp.ts";
@@ -315,7 +316,7 @@ export class SessionCommands {
   }
 
   /**
-   * /auto and shift+tab (ticket 213): switch auto mode for the viewed session. The daemon says what happened in the transcript
+   * /auto (ticket 213; shift+tab is `cycleMode`): switch auto mode for the viewed session. The daemon says what happened in the transcript
    * (a durable notice), so nothing is announced here on success. Needs no child: it is a flag the daemon keeps.
    */
   async auto(text = ""): Promise<void> {
@@ -346,6 +347,26 @@ export class SessionCommands {
     } catch (err) {
       const stale = err instanceof Error && /timed out/.test(err.message);
       this.h.notify(stale ? "auto mode: no answer from the daemon (is it older than this toriel? restart it: toriel kill-server)" : `auto mode failed: ${errText(err)}`);
+    }
+  }
+
+  /**
+   * shift+tab (tickets 213, 233): the next mode of normal -> auto -> plan -> normal for the viewed session. Each flag change is the same
+   * command /auto and /plan send, so the daemon announces it in the transcript; nothing is said here on success. Needs no child.
+   */
+  async cycleMode(): Promise<void> {
+    const meta = this.viewedMeta();
+    if (meta?.id === undefined) {
+      this.h.notify("modes need a session - send a message first");
+      return;
+    }
+    try {
+      for (const change of switches(meta, nextMode(meta))) {
+        await this.h.request(change.flag === "plan" ? { type: "plan_mode", session: meta.id, on: change.on } : { type: "auto_mode", session: meta.id, on: change.on }, 5000);
+      }
+    } catch (err) {
+      const stale = err instanceof Error && /timed out|unknown command/i.test(err.message);
+      this.h.notify(stale ? "mode: no answer from the daemon (is it older than this toriel? restart it: toriel kill-server)" : `mode change failed: ${errText(err)}`);
     }
   }
 
