@@ -52,8 +52,6 @@ export interface Over {
   mcpExtra?: Record<string, unknown>;
   /** What pi's own mcp.json holds (the file toriel no longer reads: the doctor offers to move it). */
   piMcpJson?: unknown;
-  /** Place a fake installed pi-permission-system package beside piCli: "absent" (unpatched) or "present" (carries the scope-patch marker). */
-  scopePatch?: "absent" | "present";
 }
 
 export function setup(home: string, over: Over = {}) {
@@ -110,11 +108,6 @@ export function setup(home: string, over: Over = {}) {
   const piCli = path.join(base, "cli.js");
   if (!over.noCli) {
     fs.writeFileSync(piCli, "");
-  }
-  if (over.scopePatch !== undefined) {
-    const pkg = path.join(base, "node_modules", "@gotgenes", "pi-permission-system", "src", "session");
-    mk(pkg);
-    fs.writeFileSync(path.join(pkg, "permission-session.ts"), over.scopePatch === "present" ? "// toriel-scope-patch\n" : "export {}\n");
   }
   const settingsFile = path.join(base, "toriel-settings.yaml");
   if (over.settings !== undefined) {

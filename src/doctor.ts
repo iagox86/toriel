@@ -82,7 +82,6 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: "kitty-shift-enter", level: "feature", title: "kitty sends Shift+Enter distinctly under tmux (kitty.conf mapping)" },
   { id: "truecolor", level: "feature", title: "the terminal shows toriel's theme as intended (truecolor)" },
   { id: "grants-path-rule", level: "hardening", title: "an agent cannot edit the permission grants file unasked (a path rule)", needsPermissionPackage: true },
-  { id: "permission-package-scope-patch", level: "hardening", title: "the installed pi-permission-system carries the toriel scope patch (a trusted project config cannot override a scope root)", needsPermissionPackage: true },
   { id: "scope-guard-short-circuit", level: "hardening", title: 'no config allow short-circuits the scope guard for directory-scoped sessions (external_directory_write, the bare external_directory, the "*" fallback)', needsPermissionPackage: true },
 ];
 
@@ -175,23 +174,6 @@ export function probeBwrap(): string | undefined {
   }
   if (r.status !== 0) {
     return `bwrap runs but cannot start a sandbox (${(r.stderr ?? "").trim().split("\n")[0] || `exit ${r.status}`}); unprivileged user namespaces may be disabled`;
-  }
-  return undefined;
-}
-
-/**
- * Locate the installed @gotgenes/pi-permission-system package (the copy pi loads raw src
- * from): the tree pi's cli.js lives in, then the running node's global modules (an nvm
- * layout). Undefined when none of the candidates has the package's source tree.
- */
-export function locatePermissionPackageSrc(piCli: string, execPath: string): string | undefined {
-  const roots = [dirname(piCli), join(dirname(execPath), "..", "lib", "node_modules")];
-  for (const root of roots) {
-    for (const candidate of [join(root, "@gotgenes", "pi-permission-system"), join(root, "node_modules", "@gotgenes", "pi-permission-system")]) {
-      if (existsSync(join(candidate, "src", "session", "permission-session.ts"))) {
-        return candidate;
-      }
-    }
   }
   return undefined;
 }
@@ -292,19 +274,6 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
   const piCli = opts.piCli ?? resolveChildConfig(loaded.settings, env).piCli;
   if (!existsSync(piCli)) {
     out.push({ id: "pi-cli", level: "required", message: `pi's cli.js is not at ${piCli}: run npm install in the toriel checkout, or set piCli in the toriel settings`, manual: "needs npm install in the checkout (a package install) or a piCli path only you know" });
-  }
-  // the scope patch: a trusted project config inside a scoped session's directory can
-  // re-allow outside-scope writes (project policy outranks global and lives INSIDE the
-  // scope root, writable by the agent), so the installed package must carry the two-site
-  // patch that withholds project policy under TORIEL_SCOPE_ROOT (pi/patches/scope-config-patch.md)
-  const pkgSrc = locatePermissionPackageSrc(piCli, env.TORIEL_NODE ?? process.execPath);
-  if (pkgSrc !== undefined && !readFileSync(join(pkgSrc, "src", "session", "permission-session.ts"), "utf8").includes("toriel-scope-patch")) {
-    out.push({
-      id: "permission-package-scope-patch",
-      level: "hardening",
-      message: `the installed pi-permission-system at ${pkgSrc} lacks the toriel scope patch: a trusted project config inside a scoped session's directory could re-allow outside-scope writes; apply the two-site patch from pi/patches/scope-config-patch.md in the toriel checkout (package updates overwrite it; this check flags it again then)`,
-      manual: "the patch edits the installed package's source, which a package update overwrites; apply it by hand from pi/patches/scope-config-patch.md",
-    });
   }
   // shipped agents that name mcp__<server>__* tools: pi gives an agent an MCP tool only when its server is exposed directly
   const shipped = loadAgents(process.cwd(), env).agents.filter((a) => a.source === "built-in");
