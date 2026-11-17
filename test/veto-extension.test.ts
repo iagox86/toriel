@@ -116,6 +116,52 @@ describe("vetoVerdict (ticket 219)", () => {
   });
 });
 
+describe("the project configuration directory (ticket 223)", () => {
+  const ask = (r: string): Scope => ({ kind: "root", root: r, mode: "ask" });
+  const config = path.join(".pi", "extensions", "pi-permission-system", "config.json");
+
+  it("blocks a write or edit into <root>/.pi in deny mode and in ask mode, however the rules answer", () => {
+    for (const scope of [deny(root), ask(root)]) {
+      for (const tool of ["write", "edit"]) {
+        assert.match(vetoVerdict(scope, tool, { path: path.join(root, config) }, root) ?? "", /inside \.pi, pi's project configuration/);
+        assert.match(vetoVerdict(scope, tool, { path: config }, root) ?? "", /inside \.pi/, "a relative path resolves against the cwd");
+        assert.match(vetoVerdict(scope, tool, { path: ".pi/agents/x.md" }, root) ?? "", /inside \.pi/);
+      }
+    }
+  });
+
+  it("blocks the directory itself and a path that only gets there through .. or a symlink", () => {
+    fs.mkdirSync(path.join(root, ".pi"));
+    fs.symlinkSync(path.join(root, ".pi"), path.join(root, "alias"));
+    assert.match(vetoVerdict(ask(root), "write", { path: ".pi" }, root) ?? "", /inside \.pi/);
+    assert.match(vetoVerdict(ask(root), "write", { path: "sub/../.pi/x" }, root) ?? "", /inside \.pi/);
+    assert.match(vetoVerdict(ask(root), "write", { path: "alias/config.json" }, root) ?? "", /inside \.pi/);
+  });
+
+  it("leaves lookalike names, other dot directories and reads alone", () => {
+    assert.equal(vetoVerdict(ask(root), "write", { path: ".pi-notes/x" }, root), undefined);
+    assert.equal(vetoVerdict(ask(root), "write", { path: ".pix" }, root), undefined);
+    assert.equal(vetoVerdict(ask(root), "write", { path: "docs/.pi/x" }, root), undefined, "only the root's own .pi is the project layer");
+    assert.equal(vetoVerdict(ask(root), "read", { path: ".pi/settings.json" }, root), undefined);
+    assert.equal(vetoVerdict(ask(root), "bash", { command: "cat .pi/settings.json" }, root), undefined);
+    assert.equal(vetoVerdict({ kind: "off" }, "write", { path: path.join(root, config) }, root), undefined, "an unscoped session is not fenced");
+  });
+
+  it("still leaves an ordinary write inside the root, and an outside one in ask mode, to the usual paths", () => {
+    assert.equal(vetoVerdict(ask(root), "write", { path: "src/a.ts" }, root), undefined);
+    assert.equal(vetoVerdict(ask(root), "write", { path: path.join(outside, "x") }, root), undefined);
+  });
+
+  it("blocks a write it cannot resolve rather than letting it by, in ask mode too", () => {
+    const hostile = {
+      get path(): string {
+        throw new Error("boom");
+      },
+    };
+    assert.match(vetoVerdict(ask(root), "write", hostile, root) ?? "", /internal error/);
+  });
+});
+
 describe("resolveTarget and writeEscape", () => {
   it("resolves through the nearest existing ancestor", () => {
     assert.equal(resolveTarget("a/b/c.txt", root), path.join(root, "a/b/c.txt"));

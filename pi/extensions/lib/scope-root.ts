@@ -173,16 +173,47 @@ export function writeEscape(root: string, raw: string, cwd: string, home: string
   return isInside(root, target) ? undefined : target;
 }
 
+/** pi's own project configuration directory: `<cwd>/.pi` holds the permission policy a trusted project layers over the user's (config.json, agents), packages and extensions. */
+export const PROTECTED_DIR = ".pi";
+
+/**
+ * Ticket 223: the resolved path of a write/edit target inside `<root>/.pi`, or undefined when it is elsewhere. The project layer of the
+ * permission policy outranks the user's and lives inside the scope root the agent can write, so an agent that could write
+ * `.pi/extensions/pi-permission-system/config.json` could allow what the user's rules ask about. This is the boundary that replaces the
+ * local patch to the permission package, which withheld that layer from scoped sessions.
+ */
+export function protectedEscape(root: string, raw: string, cwd: string, home: string = process.env.HOME ?? "", realpath: (p: string) => string = fs.realpathSync): string | undefined {
+  const target = resolveTarget(raw, cwd, home, realpath);
+  const guarded = path.join(root, PROTECTED_DIR);
+  return target === guarded || target.startsWith(guarded + path.sep) ? target : undefined;
+}
+
 /**
  * Ticket 219: the scope boundary as a veto on a tool call, whatever the permission rules say (the authorizer link only sees asks, so an
- * allow rule skipped it). Deny mode only; ask mode leaves the decision to the dialog. Returns a reason to block, or undefined to let the
- * call go on to the permission system. Total: never throws; an unexpected error in deny mode blocks a write rather than letting it by.
+ * allow rule skipped it). Outside-the-root writes are refused in deny mode only; ask mode leaves those to the dialog. Writes into the
+ * root's `.pi` directory (ticket 223) are refused in both modes: no dialog should let an agent edit its own permission policy. Returns a
+ * reason to block, or undefined to let the call go on to the permission system. Total: never throws; an unexpected error blocks a write
+ * rather than letting it by.
  */
 export function vetoVerdict(scope: Scope, toolName: string, input: unknown, cwd: string): string | undefined {
-  if (scope.kind === "off" || scope.mode !== "deny") {
+  if (scope.kind === "off") {
     return undefined;
   }
   const writes = toolName === "write" || toolName === "edit";
+  if (writes && scope.kind === "root") {
+    try {
+      const raw = (input as { path?: unknown } | undefined)?.path;
+      const guarded = typeof raw === "string" && raw !== "" ? protectedEscape(scope.root, raw, cwd) : undefined;
+      if (guarded !== undefined) {
+        return `scope guard: ${guarded} is inside ${PROTECTED_DIR}, pi's project configuration (the permission policy, packages and extensions of this directory). An agent does not edit it: it could loosen its own permissions. Ask the user to make the change.`;
+      }
+    } catch {
+      return `scope guard: internal error evaluating this ${toolName}; denying`;
+    }
+  }
+  if (scope.mode !== "deny") {
+    return undefined;
+  }
   try {
     if (scope.kind === "invalid") {
       return writes ? `scope guard: TORIEL_SCOPE_ROOT is set but unusable (${scope.why}); denying all writes. Fix the environment the daemon starts this session with.` : undefined;

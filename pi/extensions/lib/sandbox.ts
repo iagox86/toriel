@@ -196,6 +196,9 @@ export function derivePolicy(cfg: Extract<SandboxConfig, { kind: "bwrap" }>, ext
   const git = gitPolicy(cfg.root, fsApi);
   writable.push(...git.writable);
   readOnly.push(...git.readOnly);
+  // pi's project configuration (ticket 223): a command must not write the permission policy that pi layers over the user's. Only an existing
+  // `.pi` can be carved out (a missing path cannot be bound, and binding one would create it in the root); the write tools' veto covers the rest.
+  readOnly.push(path.join(cfg.root, ".pi"));
   for (const p of [cfg.shared, ...cfg.staticRw, ...extra]) {
     const real = p === undefined ? undefined : realOrUndefined(fsApi, p);
     if (real !== undefined && isDir(fsApi, real)) {
