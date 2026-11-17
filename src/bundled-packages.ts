@@ -21,11 +21,14 @@ export interface BundledPackage {
   tools: readonly string[];
   /** Only sessions without an agent profile get it (it holds the user's own state), unless a profile names one of its tools. */
   plainOnly?: boolean;
+  /** Loaded into every session, whatever its profile says (the permission gate: a profile that lists tools, or is minimal, still needs it). */
+  always?: boolean;
 }
 
 export const BUNDLED_PACKAGES: readonly BundledPackage[] = [
   { name: "@juicesharp/rpiv-ask-user-question", gives: "the ask_user_question tool (an agent puts you a multiple-choice question instead of guessing)", tools: ["ask_user_question"] },
   { name: "pi-web-access", gives: "web_search, fetch_content and related tools (the research-web and advisory-diff agents need them)", tools: ["web_search", "fetch_content", "get_search_content", "source_check", "web_enable"] },
+  { name: "@gotgenes/pi-permission-system", gives: "the permission gate: rules decide which tool calls are allowed, asked about or denied (toriel shows the dialogs and keeps the grants)", tools: [], always: true },
   { name: "pi-hermes-memory", gives: "persistent memory tools and past-session search", tools: ["memory_add", "memory_replace", "memory_remove", "memory_search", "session_search", "skill_manage"], plainOnly: true },
 ];
 
@@ -66,7 +69,7 @@ export function packageState(pkg: BundledPackage, opts: BundleOptions): PackageS
 
 /** Whether a session with `agent` (undefined = a plain session) loads the package. */
 export function loadsFor(pkg: BundledPackage, agent: ProfileLike | undefined): boolean {
-  if (agent === undefined) {
+  if (pkg.always || agent === undefined) {
     return true;
   }
   if (agent.tools !== undefined) {

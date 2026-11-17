@@ -23,6 +23,7 @@ function setup(opts: { listed?: unknown[] } = {}) {
     "@earendil-works/pi-coding-agent": "1.4.0",
     "@earendil-works/pi-tui": "1.4.0",
     "pi-web-access": "0.48.0",
+    "@gotgenes/pi-permission-system": "42.0.0",
     "pi-hermes-memory": "0.11.0",
     "@juicesharp/rpiv-ask-user-question": "2.15.0",
   };
@@ -39,9 +40,10 @@ function setup(opts: { listed?: unknown[] } = {}) {
 const LATEST: Record<string, string> = {
   "@earendil-works/pi-coding-agent": "1.5.2",
   "pi-web-access": "0.48.0",
+  "@gotgenes/pi-permission-system": "42.0.0",
   "pi-hermes-memory": "0.12.0",
   "@juicesharp/rpiv-ask-user-question": "2.15.0",
-  "@gotgenes/pi-permission-system": "42.1.0",
+  "pi-user-extra": "42.1.0",
 };
 const fetcher = async (name: string): Promise<string> => {
   const v = LATEST[name];
@@ -63,7 +65,7 @@ describe("compareVersions", () => {
 describe("npmNameOf", () => {
   it("takes the name out of an npm entry and ignores the rest", () => {
     assert.equal(npmNameOf("npm:pi-web-access"), "pi-web-access");
-    assert.equal(npmNameOf("npm:@gotgenes/pi-permission-system@42.0.0"), "@gotgenes/pi-permission-system");
+    assert.equal(npmNameOf("npm:pi-user-extra@42.0.0"), "pi-user-extra");
     assert.equal(npmNameOf({ source: "npm:foo" }), "foo");
     assert.equal(npmNameOf("git:github.com/x/y"), undefined);
     assert.equal(npmNameOf("/home/me/pkg"), undefined);
@@ -72,19 +74,20 @@ describe("npmNameOf", () => {
 
 describe("collect", () => {
   it("reads pi, the bundled packages and the user's own", () => {
-    const s = setup({ listed: ["npm:@gotgenes/pi-permission-system", "git:github.com/x/y"] });
-    pkg(s.globalRoot, "@gotgenes/pi-permission-system", "42.0.0");
+    const s = setup({ listed: ["npm:pi-user-extra", "git:github.com/x/y"] });
+    pkg(s.globalRoot, "pi-user-extra", "42.0.0");
     const cs = collect(s);
     assert.deepEqual(cs.map((c) => `${c.kind}:${c.name}`), [
       "pi:pi",
       "bundled:@juicesharp/rpiv-ask-user-question",
       "bundled:pi-web-access",
+      "bundled:@gotgenes/pi-permission-system",
       "bundled:pi-hermes-memory",
-      "user:@gotgenes/pi-permission-system",
+      "user:pi-user-extra",
     ]);
     assert.equal(cs[0]?.installed, "1.4.0");
     assert.deepEqual(cs[0]?.packages, ["@earendil-works/pi-coding-agent", "@earendil-works/pi-tui"]);
-    assert.equal(cs[4]?.installed, "42.0.0");
+    assert.equal(cs[5]?.installed, "42.0.0");
     assert.equal(cs.some((c) => c.shadowed), false);
   });
 
@@ -130,13 +133,13 @@ describe("withLatest", () => {
 
 describe("renderReport", () => {
   it("says what is behind and how to update it, and leaves the user's own packages to pi", async () => {
-    const s = setup({ listed: ["npm:@gotgenes/pi-permission-system"] });
-    pkg(s.globalRoot, "@gotgenes/pi-permission-system", "42.0.0");
+    const s = setup({ listed: ["npm:pi-user-extra"] });
+    pkg(s.globalRoot, "pi-user-extra", "42.0.0");
     const cs = await withLatest(collect(s), { fetcher });
     const text = renderReport(cs);
     assert.match(text, /pi\s+1\.4\.0\s+1\.5\.2\s+update available: 1\.5\.2/);
     assert.match(text, /pi-hermes-memory\s+0\.11\.0\s+0\.12\.0\s+update available: 0\.12\.0/);
-    assert.match(text, /@gotgenes\/pi-permission-system\s+42\.0\.0\s+42\.1\.0\s+update available/);
+    assert.match(text, /pi-user-extra\s+42\.0\.0\s+42\.1\.0\s+update available/);
     assert.match(text, /Update with: toriel update pi pi-hermes-memory\b/);
     assert.equal(cs.filter(isBehind).length, 3);
   });
@@ -211,7 +214,7 @@ describe("applyUpdates", () => {
 describe("updateMain", () => {
   const run = async (args: string[], listed: unknown[] = []) => {
     const s = setup({ listed });
-    pkg(s.globalRoot, "@gotgenes/pi-permission-system", "42.0.0");
+    pkg(s.globalRoot, "pi-user-extra", "42.0.0");
     const f = fakeRunner();
     const chunks: string[] = [];
     const code = await updateMain(args, { write: (t) => void chunks.push(t) }, { ...s, fetcher, runner: f.runner });
@@ -233,7 +236,7 @@ describe("updateMain", () => {
   });
 
   it("`all` bumps every behind component of toriel's own, never the user's packages", async () => {
-    const r = await run(["all"], ["npm:@gotgenes/pi-permission-system"]);
+    const r = await run(["all"], ["npm:pi-user-extra"]);
     const install = r.calls[0] ?? "";
     assert.match(install, /pi-hermes-memory@0\.12\.0/);
     assert.match(install, /pi-coding-agent@1\.5\.2/);
@@ -241,7 +244,7 @@ describe("updateMain", () => {
   });
 
   it("sends the user to `pi update` for their own package and refuses an unknown name", async () => {
-    const own = await run(["@gotgenes/pi-permission-system"], ["npm:@gotgenes/pi-permission-system"]);
+    const own = await run(["pi-user-extra"], ["npm:pi-user-extra"]);
     assert.equal(own.code, 2);
     assert.match(own.out, /pi update/);
     const unknown = await run(["nope"]);

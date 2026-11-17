@@ -71,10 +71,10 @@ describe("daemon: bundled pi packages (ticket 230)", () => {
     assert.equal(packages.length, BUNDLED_NAMES.length - 1);
   });
 
-  it("gives a minimal profile none of them", async () => {
+  it("gives a minimal profile only the permission gate", async () => {
     const w = world();
     harness = await startDaemon({ TORIEL_BUNDLED_ROOT: w.bundledRoot, PI_CODING_AGENT_DIR: w.agentDir, TORIEL_AGENTS_DIR: path.join(os.tmpdir(), "toriel-no-user-agents") });
     const argv = await argvOf(harness, "explore");
-    assert.deepEqual(flagged(argv, "-e").filter((p) => p.startsWith(w.bundledRoot)), []);
+    assert.deepEqual(flagged(argv, "-e").filter((p) => p.startsWith(w.bundledRoot)), [path.join(w.bundledRoot, "@gotgenes", "pi-permission-system")]);
   });
 });

@@ -23,7 +23,7 @@ describe("daemon: start-up self-check", () => {
     }
     const log = fs.readFileSync(logFile, "utf8");
     assert.match(log, /WARNING \[required\]: pi has no config at .*agent: run pi once and log in/);
-    assert.match(log, /WARNING \[recommended\]: pi-permission-system is not in pi's packages/);
+    assert.match(log, /WARNING \[recommended\]: pi-permission-system is bundled with toriel but not installed/);
     fs.rmSync(path.dirname(piDir), { recursive: true, force: true });
   });
 });

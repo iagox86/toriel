@@ -5,6 +5,7 @@
 // `--tools` list.
 import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync } from "node:fs";
 import { join } from "node:path";
+import type { PackageState } from "./bundled-packages.ts";
 import { PERMISSIONS_FILE } from "./config.ts";
 import { errText } from "./util.ts";
 
@@ -200,12 +201,19 @@ export function projectPackageListed(cwd: string, name: string): boolean {
 }
 
 /**
- * pi-permission-system gates the tools its rules mark `ask`, and toriel shows its dialogs, but
- * it is the user's own pi package (settings.json `packages`), not something toriel ships. Without
- * it nothing asks; with it but without a readable config, it asks about everything.
+ * pi-permission-system gates the tools its rules mark `ask`, and toriel shows its dialogs. toriel carries it (ticket 230,
+ * bundled-packages.ts), so it is there unless the toriel settings switch it off or npm install did not run; a copy the user lists in
+ * pi's own settings.json wins over it. Without it nothing asks; with it but without a readable config, it asks about everything.
+ * `state` is the package's state as bundled-packages.ts judges it; without one (a direct audit) only pi's settings.json is consulted.
  */
-function permissionSystemProblem(agentDir: string): string | undefined {
-  const installed = piPackageListed(agentDir, PERMISSION_PACKAGE);
+function permissionSystemProblem(agentDir: string, state?: PackageState): string | undefined {
+  if (state === "off") {
+    return `${PERMISSION_PACKAGE} is switched off (bundledPackagesOff in the toriel settings) and is not in pi's packages (settings.json): sessions run without permission prompts`;
+  }
+  if (state === "missing") {
+    return `${PERMISSION_PACKAGE} is bundled with toriel but not installed (run npm install in the toriel directory) and is not in pi's packages (settings.json): sessions run without permission prompts`;
+  }
+  const installed = state === undefined ? piPackageListed(agentDir, PERMISSION_PACKAGE) : true;
   if (installed === undefined) {
     return undefined; // unreadable: piSetupProblem says so
   }
@@ -400,6 +408,8 @@ export function scopeGuardFindings(config: unknown, accepted?: Array<{ surface: 
 export interface AuditOptions {
   /** Check for pi-permission-system (default true; the `warnNoPermissionSystem` setting turns it off at start-up). */
   permissionSystem?: boolean;
+  /** The permission package's state (bundled-packages.ts `packageState`): toriel carries it, so "bundled" and "user" mean installed. Absent: pi's settings.json is the only place looked at. */
+  permissionPackage?: PackageState;
   /** Where toriel keeps permission grants (default PERMISSIONS_FILE). */
   grantsFile?: string;
   /** Config allows the scope-guard check treats as deliberate and does not flag (the toriel settings' `scopeGuardAcceptedAllows`). */
@@ -422,7 +432,7 @@ export function auditFindings(agentDir: string, root = PI_RESOURCES_DIR, opts: A
     out.push({ id: "stale-links", level: "required", message: `old toriel links in the pi agent dir load twice: remove them with rm ${stale.map((f) => f.replace(/ /g, "\\ ")).join(" ")}`, manual: "doctor --fix only edits JSON config files, not links on disk; run the rm command shown" });
   }
   if (opts.permissionSystem !== false) {
-    const permission = permissionSystemProblem(agentDir);
+    const permission = permissionSystemProblem(agentDir, opts.permissionPackage);
     if (permission) {
       out.push({ id: "permission-package", level: "recommended", message: permission, manual: "installing pi-permission-system (a package install) or repairing its config.json is yours to do; doctor does not run installs" });
     } else {

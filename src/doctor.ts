@@ -28,6 +28,7 @@ import { type BundledPackage, BUNDLED_PACKAGES, NODE_MODULES_DIR, packageState }
 
 const WEB_PACKAGE = "pi-web-access";
 const webPackage = BUNDLED_PACKAGES.find((p) => p.name === WEB_PACKAGE) as BundledPackage;
+const PERMISSION_PKG = "@gotgenes/pi-permission-system";
 /** "a", "a and b", "a, b and c". */
 function nameList(names: readonly string[]): string {
   return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
@@ -66,7 +67,7 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: "grants-chain", level: "feature", title: 'permission grants are switched on ("toriel-grants" in authorizerChain)', needsPermissionPackage: true },
   { id: "mcp-git-direct", level: "feature", title: 'the git MCP server is configured with "exposure": "direct" (the code-review, git-archaeology and advisory-diff agents need it)' },
   { id: "web-package", level: "feature", title: "pi-web-access is installed (the research-web and advisory-diff agents need its web tools)" },
-  { id: "bundled-packages", level: "feature", title: "the pi packages toriel carries are installed with it (ask_user_question, web search, memory; ticket 230)" },
+  { id: "bundled-packages", level: "feature", title: "the pi packages toriel carries are installed with it (ask_user_question, web search, the permission gate, memory; ticket 230)" },
   { id: "mcp-gdb-direct", level: "feature", title: 'the gdb MCP server is configured with "exposure": "direct" (the debug and crash-analysis agents need it)' },
   { id: "mcp-ghidra-direct", level: "feature", title: 'the ghidra MCP server is configured with "exposure": "direct" (the re-explain, re-find, re-trace and binary-diff agents need it)' },
   { id: "agent-lanes", level: "feature", title: "every model tier in agentLanes (cheap, medium, expensive) names a provider pi knows (models.json or a login)" },
@@ -266,7 +267,9 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
   }
   const settingsPath = opts.settingsFile ?? settingsFile(env);
   const loaded = loadSettings(settingsPath);
-  out.push(...auditFindings(opts.agentDir ?? piAgentDir(), opts.root ?? PI_RESOURCES_DIR, { ...opts, scopeGuardAcceptedAllows: loaded.settings.scopeGuardAcceptedAllows }));
+  // toriel carries the permission package (ticket 230): it counts as installed when it is bundled, or the user's own in pi's settings
+  const permissionPackage = packageState(BUNDLED_PACKAGES.find((p) => p.name === PERMISSION_PKG) as BundledPackage, { agentDir: opts.agentDir ?? piAgentDir(env), off: loaded.settings.bundledPackagesOff, root: opts.bundledRoot });
+  out.push(...auditFindings(opts.agentDir ?? piAgentDir(), opts.root ?? PI_RESOURCES_DIR, { ...opts, permissionPackage, scopeGuardAcceptedAllows: loaded.settings.scopeGuardAcceptedAllows }));
   for (const problem of loaded.problems) {
     out.push({ id: "settings", level: "recommended", message: `toriel settings: ${problem}`, manual: "the settings file is yours; doctor will not guess which value you meant" });
   }

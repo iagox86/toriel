@@ -38,13 +38,14 @@ flags), so moving or updating the repo needs nothing else. toriel never writes
 into `~/.pi/agent`; your pi settings, models, MCP servers and packages there
 are used as they are. `npm install` also brings the third-party pi packages toriel carries, so a new
 machine needs nothing else: `@juicesharp/rpiv-ask-user-question` (agents can ask you a question),
-`pi-web-access` (web search and fetch; set up a search provider for it in `~/.pi/agent/web-search.json`)
-and `pi-hermes-memory` (persistent memory). One you installed yourself in pi's `packages` wins over
-toriel's copy, and `bundledPackagesOff` in the toriel settings turns any of them off. [pi-permission-system](https://www.npmjs.com/package/@gotgenes/pi-permission-system)
-is a good package to have in pi's `packages`: it asks before the tools your
-rules mark `ask`, and toriel shows those prompts. toriel does not install or
-manage it; it only warns in the notice line when it is missing (turn that off
-with `warnNoPermissionSystem: false`).
+`pi-web-access` (web search and fetch; set up a search provider for it in `~/.pi/agent/web-search.json`),
+[`@gotgenes/pi-permission-system`](https://www.npmjs.com/package/@gotgenes/pi-permission-system)
+(the permission gate: it asks before the tools your rules mark `ask`, and toriel shows those prompts;
+its rules stay in `~/.pi/agent/extensions/pi-permission-system/config.json`, and every session gets it,
+whatever its agent profile) and `pi-hermes-memory` (persistent memory). One you installed yourself in
+pi's `packages` wins over toriel's copy, and `bundledPackagesOff` in the toriel settings turns any of
+them off (switching the permission gate off leaves nothing to ask before tools: the notice line warns,
+and `warnNoPermissionSystem: false` turns that warning off). `toriel update` says when they are behind.
 
 At startup toriel checks its setup and says what is wrong instead of failing
 later: node too old, `npm install` not run, no `XDG_RUNTIME_DIR`, pi never set

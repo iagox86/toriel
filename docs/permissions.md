@@ -39,7 +39,7 @@ Related: #88 (auto-deny after a timeout; not built) and #94 (agent tool `toriel_
 ## What pi gives us, and what it does not
 
 toriel has no permission system of its own; the gate is `@gotgenes/pi-permission-system`
-in each child (installed 42.0.0, used unmodified: no fork, no patch). Facts checked in
+in each child (42.0.0, a pinned dependency of toriel since ticket 230 stage 4, loaded by flag in every session; used unmodified: no fork, no patch). Facts checked in
 its source and docs:
 
 - "Yes, allow X for this session" records a rule in an in-memory `SessionRules`

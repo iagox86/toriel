@@ -9,6 +9,7 @@ import { loadSettings } from "../src/settings.ts";
 const ASK = "@juicesharp/rpiv-ask-user-question";
 const WEB = "pi-web-access";
 const MEMORY = "pi-hermes-memory";
+const PERM = "@gotgenes/pi-permission-system";
 const pkg = (name: string) => BUNDLED_PACKAGES.find((p) => p.name === name) as (typeof BUNDLED_PACKAGES)[number];
 
 let dir: string;
@@ -72,27 +73,27 @@ describe("which sessions load which package", () => {
   });
 
   it("a profile without a tool list gets the packages that are not the user's own state, unless it is minimal", () => {
-    assert.deepEqual(packagesFor({}, { agentDir, root }).map((p) => p.name), [ASK, WEB], "no memory for a subagent");
-    assert.deepEqual(packagesFor({ minimal: true }, { agentDir, root }), []);
+    assert.deepEqual(packagesFor({}, { agentDir, root }).map((p) => p.name), [ASK, WEB, PERM], "no memory for a subagent");
+    assert.deepEqual(packagesFor({ minimal: true }, { agentDir, root }).map((p) => p.name), [PERM], "the permission gate is never left out");
   });
 
   it("a profile that owns its tool list loads a package only when it names one of its tools", () => {
-    assert.deepEqual(packagesFor({ tools: ["read", "web_search", "fetch_content"] }, { agentDir, root }).map((p) => p.name), [WEB]);
-    assert.deepEqual(packagesFor({ tools: ["read", "grep"] }, { agentDir, root }), []);
+    assert.deepEqual(packagesFor({ tools: ["read", "web_search", "fetch_content"] }, { agentDir, root }).map((p) => p.name), [WEB, PERM]);
+    assert.deepEqual(packagesFor({ tools: ["read", "grep"] }, { agentDir, root }).map((p) => p.name), [PERM], "only the gate, which every profile gets");
     assert.equal(loadsFor(pkg(MEMORY), { tools: ["memory_search"] }), true, "naming a tool is asking for the package");
   });
 
   it("leaves out what is the user's, off or missing", () => {
     listed(WEB);
     fs.rmSync(path.join(root, ASK), { recursive: true });
-    assert.deepEqual(packagesFor(undefined, { agentDir, root, off: [MEMORY] }), []);
+    assert.deepEqual(packagesFor(undefined, { agentDir, root, off: [MEMORY, PERM] }), []);
   });
 });
 
 describe("the pi arguments", () => {
   it("are -e <package directory> for each, which pi loads even with extension discovery off", () => {
     assert.deepEqual(bundledArgs(undefined, { agentDir, root }), BUNDLED_NAMES.flatMap((n) => ["-e", path.join(root, n)]));
-    assert.deepEqual(bundledArgs({ minimal: true }, { agentDir, root }), []);
+    assert.deepEqual(bundledArgs({ minimal: true }, { agentDir, root }), ["-e", path.join(root, PERM)]);
   });
 
   it("name the tools to add for a resumed session, only for what is loaded", () => {
@@ -110,6 +111,6 @@ describe("bundledPackagesOff setting", () => {
     fs.writeFileSync(file, "bundledPackagesOff:\n  - not-a-package\n");
     const bad = loadSettings(file);
     assert.equal(bad.settings.bundledPackagesOff, undefined);
-    assert.match(bad.problems.join("\n"), /bundledPackagesOff must be a list of bundled package names \(@juicesharp\/rpiv-ask-user-question, pi-web-access, pi-hermes-memory\)/);
+    assert.match(bad.problems.join("\n"), /bundledPackagesOff must be a list of bundled package names \(@juicesharp\/rpiv-ask-user-question, pi-web-access, @gotgenes\/pi-permission-system, pi-hermes-memory\)/);
   });
 });

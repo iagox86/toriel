@@ -30,34 +30,45 @@ describe("the pinned pi", () => {
     assert.match(r.out, /tool names cannot be mixed with \+name or -name entries/);
   });
 
+  it("loads the bundled permission package by -e under --no-extensions (it is the gate every session needs)", async () => {
+    const reply = await rpc("get_commands", ["-e", join(ROOT, "node_modules", "@gotgenes", "pi-permission-system")]);
+    const names = ((reply.data as { commands: Array<{ name: string }> }).commands ?? []).map((c) => c.name);
+    assert.ok(names.includes("permission-system"), `the package's command is registered (got ${names.join(", ")})`);
+  });
+
   it("answers a get_state request over RPC (the daemon's handshake with every child)", async () => {
-    const child = spawn(process.execPath, [DEFAULT_PI_CLI, "--mode", "rpc", "--no-session", "--no-extensions", "--no-skills", "--offline"], { env, stdio: ["pipe", "pipe", "pipe"] });
-    try {
-      const reply = await new Promise<Record<string, unknown>>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("pi did not answer get_state in 20s")), 20_000);
-        let buf = "";
-        child.stdout.on("data", (d: Buffer) => {
-          buf += d.toString();
-          for (const line of buf.split("\n")) {
-            try {
-              const msg = JSON.parse(line) as Record<string, unknown>;
-              if (msg.type === "response" && msg.id === "smoke") {
-                clearTimeout(timer);
-                resolve(msg);
-              }
-            } catch {
-              // a partial or non-JSON line
-            }
-          }
-        });
-        child.on("error", reject);
-        child.stdin.write(`${JSON.stringify({ type: "get_state", id: "smoke" })}\n`);
-      });
-      assert.equal(reply.success, true);
-      assert.equal(reply.command, "get_state");
-      assert.equal(typeof (reply.data as Record<string, unknown>).sessionId, "string", "the controller keys a session by the sessionId in get_state");
-    } finally {
-      child.kill();
-    }
+    const reply = await rpc("get_state");
+    assert.equal(reply.success, true);
+    assert.equal(reply.command, "get_state");
+    assert.equal(typeof (reply.data as Record<string, unknown>).sessionId, "string", "the controller keys a session by the sessionId in get_state");
   });
 });
+
+/** One RPC request to a fresh pi (no model, no network, an empty config directory) and its reply. */
+async function rpc(command: string, extra: string[] = []): Promise<Record<string, unknown>> {
+  const child = spawn(process.execPath, [DEFAULT_PI_CLI, "--mode", "rpc", "--no-session", "--no-extensions", "--no-skills", "--offline", ...extra], { env, stdio: ["pipe", "pipe", "pipe"] });
+  try {
+    return await new Promise<Record<string, unknown>>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`pi did not answer ${command} in 20s`)), 20_000);
+      let buf = "";
+      child.stdout.on("data", (d: Buffer) => {
+        buf += d.toString();
+        for (const line of buf.split("\n")) {
+          try {
+            const msg = JSON.parse(line) as Record<string, unknown>;
+            if (msg.type === "response" && msg.id === "smoke") {
+              clearTimeout(timer);
+              resolve(msg);
+            }
+          } catch {
+            // a partial or non-JSON line
+          }
+        }
+      });
+      child.on("error", reject);
+      child.stdin.write(`${JSON.stringify({ type: command, id: "smoke" })}\n`);
+    });
+  } finally {
+    child.kill();
+  }
+}
