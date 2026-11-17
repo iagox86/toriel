@@ -130,6 +130,12 @@ describe("derivePolicy", () => {
     assert.deepEqual(p.writable, [root, shared, cache, approved]);
   });
 
+  it("keeps the root's .pi read-only (ticket 223); a missing one is skipped when bwrap binds it", FIXTURE, () => {
+    const root = mk();
+    assert.deepEqual(derivePolicy(cfgFor(root)).readOnly, [join(root, ".pi")]);
+    assert.ok(bwrapArgs(derivePolicy(cfgFor(root)), root).join(" ").includes(`--ro-bind-try ${join(root, ".pi")} ${join(root, ".pi")}`));
+  });
+
   it("drops an approved root that is /tmp, under it, or contains it: binding one would put the real /tmp back (ticket 206)", FIXTURE, () => {
     const root = mk();
     const under = realpathSync(mkdtempSync(join("/tmp", "toriel-sandbox-under-tmp-")));
@@ -217,6 +223,19 @@ describe("real bwrap", { skip: inSandbox ? IN_SANDBOX : bwrapUsable ? false : "b
     assert.ok(!denied.ok);
     assert.match(denied.out, /Read-only file system/);
     assert.ok(!existsSync(join(outside, "no")));
+  });
+
+  it("cannot write the project's .pi (the permission policy a trusted project layers on the user's), but can write beside it (ticket 223)", () => {
+    const root = mk();
+    mkdirSync(join(root, ".pi", "extensions", "pi-permission-system"), { recursive: true });
+    const config = join(root, ".pi", "extensions", "pi-permission-system", "config.json");
+    for (const command of [`echo '{}' > ${config}`, `mkdir ${root}/.pi/agents`, `rm -rf ${root}/.pi/extensions`, `echo x > ${root}/.pi/settings.json`]) {
+      const r = run(cfgFor(root), command, root);
+      assert.ok(!r.ok, command);
+      assert.match(r.out, /Read-only file system/, command);
+    }
+    assert.ok(!existsSync(config));
+    assert.ok(run(cfgFor(root), `echo x > ${root}/.pi-notes && echo y > ${root}/src.txt`, root).ok);
   });
 
   it("writes through the worktree's node_modules symlink to the shared checkout", () => {

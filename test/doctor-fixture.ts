@@ -52,8 +52,6 @@ export interface Over {
   mcpExtra?: Record<string, unknown>;
   /** What pi's own mcp.json holds (the file toriel no longer reads: the doctor offers to move it). */
   piMcpJson?: unknown;
-  /** Place a fake installed pi-permission-system package beside piCli: "absent" (unpatched) or "present" (carries the scope-patch marker). */
-  scopePatch?: "absent" | "present";
 }
 
 export function setup(home: string, over: Over = {}) {
@@ -111,11 +109,6 @@ export function setup(home: string, over: Over = {}) {
   if (!over.noCli) {
     fs.writeFileSync(piCli, "");
   }
-  if (over.scopePatch !== undefined) {
-    const pkg = path.join(base, "node_modules", "@gotgenes", "pi-permission-system", "src", "session");
-    mk(pkg);
-    fs.writeFileSync(path.join(pkg, "permission-session.ts"), over.scopePatch === "present" ? "// toriel-scope-patch\n" : "export {}\n");
-  }
   const settingsFile = path.join(base, "toriel-settings.yaml");
   if (over.settings !== undefined) {
     fs.writeFileSync(settingsFile, over.settings);
@@ -123,6 +116,6 @@ export function setup(home: string, over: Over = {}) {
     fs.writeFileSync(settingsFile, renderSettings());
   }
   const grantsFile = path.join(home, ".local", "share", "toriel", "permissions.json");
-  const opts: DoctorOptions = { agentDir, mcpFile, root, bundledRoot, grantsFile, settingsFile, piCli, pathDirs: [bin], platform: "linux", startup: [], probeLitellm: () => "not asked in this test", env: { TORIEL_NODE: "/nonexistent-node" } };
+  const opts: DoctorOptions = { agentDir, mcpFile, root, bundledRoot, grantsFile, settingsFile, piCli, pathDirs: [bin], platform: "linux", startup: [], probeLitellm: () => "not asked in this test", env: {} };
   return { agentDir, mcpFile, opts, config: path.join(agentDir, "extensions", "pi-permission-system", "config.json"), grantsFile };
 }

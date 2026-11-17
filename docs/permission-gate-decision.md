@@ -82,3 +82,7 @@ Migration for B: add the extension with `tool_call` next to the link and make it
 2. After it ships and one package update has passed without trouble: retire the scope patch and its doctor entry.
 
 Not filed: a full owned gate (rejected above) and a new parser (not needed).
+
+## Update (ticket 223): the patch is retired
+
+The veto only covers deny mode, but the patch withheld the project layer in ask mode too (any profiled session outside a linked worktree). So retiring the patch needed one more piece: the veto now also blocks `write`/`edit` into `<root>/.pi` in both modes, and the sandbox mounts an existing `<root>/.pi` read-only for bash. `pi/patches/scope-config-patch.md` and the `permission-package-scope-patch` doctor finding are gone. Known gap: a `.pi` that does not exist yet cannot be mounted read-only, so bash can still create one (see docs/reference.md, "The scope veto").
