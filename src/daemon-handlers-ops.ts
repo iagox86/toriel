@@ -11,6 +11,7 @@ import { planOn, setPlanOn } from "../pi/extensions/lib/plan-mode.ts";
 import { type Cmd, type DaemonContext, requireNotInPi, type Responder } from "./daemon-context.ts";
 import { deliverToSession } from "./daemon-handlers-bridge.ts";
 import { sendHistory } from "./daemon-history.ts";
+import { answerText, recordDecision } from "./decision-log.ts";
 import { autoOn, type DaemonSession, type HeldPrompt, requireIdle } from "./daemon-session.ts";
 import { formatLocalCommand, type LocalResult, runLocal } from "./local-command.ts";
 import { log } from "./log.ts";
@@ -519,6 +520,10 @@ export function handleUiResponse(
   if (typeof response.id !== "string") {
     throw new Error("ui_response without id");
   }
+  if (s.dialogInfo && s.lastDialog?.id === response.id) {
+    recordDecision({ ...s.dialogInfo.base, by: "user", answer: answerText(response), waitMs: Date.now() - s.dialogInfo.at });
+  }
+  s.dialogInfo = undefined;
   s.pendingDialog = false;
   s.lastDialog = undefined;
   clearTimeout(s.denyTimer);

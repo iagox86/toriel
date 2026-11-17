@@ -3,6 +3,8 @@ import type * as net from "node:net";
 import type { RpcClient } from "@earendil-works/pi-coding-agent";
 import type { Suggestion } from "./permissions.ts";
 import type { AgentProfile } from "./agents.ts";
+import type { DecisionBase } from "./decision-log.ts";
+import type { ScopeAssignment } from "./scope-root.ts";
 import type { PromptImage } from "./shared.ts";
 import type { Todo } from "../pi/extensions/lib/tasks.ts";
 
@@ -71,6 +73,10 @@ export interface DaemonSession {
   tasks?: Todo[];
   /** Plan mode (ticket 229), as the daemon last set it or the toriel-plan extension reported it; the marker file is the truth. */
   plan?: boolean;
+  /** The write scope this session's child started with (undefined = unscoped), kept for the permission decision log and the feedback snapshot (ticket 239). */
+  scope?: ScopeAssignment;
+  /** The permission prompt now shown to a controller, with when it arrived and what the decision log will say about it once someone answers (ticket 239). */
+  dialogInfo?: { at: number; base: DecisionBase };
 }
 
 /** Whether auto mode is on for `s` now. */

@@ -68,6 +68,10 @@ export const LINEAGE_FILE = process.env.TORIEL_LINEAGE ?? path.join(DATA_DIR, "t
 export const SESSION_AGENTS_FILE = process.env.TORIEL_SESSION_AGENTS ?? path.join(DATA_DIR, "toriel", "session-agents.json");
 export const HANDLED_FILE = process.env.TORIEL_HANDLED ?? path.join(DATA_DIR, "toriel", "handled-files.json");
 export const FEEDBACK_FILE = process.env.TORIEL_FEEDBACK ?? path.join(DATA_DIR, "toriel", "feedback.jsonl");
+/** One folder per /feedback note, holding everything needed to look at it elsewhere (ticket 239). */
+export const FEEDBACK_DIR = process.env.TORIEL_FEEDBACK_DIR ?? path.join(DATA_DIR, "toriel", "feedback");
+/** One line per permission prompt: who answered it and why it was shown (ticket 239). */
+export const DECISIONS_FILE = process.env.TORIEL_DECISIONS ?? path.join(DATA_DIR, "toriel", "permission-decisions.jsonl");
 /** Logs and other state that is not user data (XDG_STATE_HOME), kept out of the source tree. */
 export const STATE_DIR = PROFILE_DIR ? path.join(PROFILE_DIR, "state") : path.join(process.env.XDG_STATE_HOME ?? path.join(process.env.HOME ?? "", ".local", "state"), "toriel");
 export const LOG = process.env.TORIEL_LOG ?? path.join(STATE_DIR, "daemon.log");
