@@ -244,6 +244,7 @@ describe("daemon: lifecycle (3/3)", () => {
       "toriel-agents.ts",
       "toriel-cache-warn.ts",
       "toriel-filehistory.ts",
+      "toriel-files.ts",
       "toriel-grants.ts",
       "toriel-jobs.ts",
       "toriel-mcp.ts",
@@ -261,7 +262,7 @@ describe("daemon: lifecycle (3/3)", () => {
     await c.waitFor((m) => m.type === "history" && m.session === explore.sessionId);
     const eargv = argvOf(explore.sessionId as number);
     assert.ok(eargv.includes("--no-extensions"));
-    assert.equal(flagged(eargv, "-e").length, 11, "explicit -e still loads under --no-extensions");
+    assert.equal(flagged(eargv, "-e").length, 12, "explicit -e still loads under --no-extensions");
     assert.deepEqual(flagged(eargv, "--skill"), []);
   });
 
