@@ -13,6 +13,7 @@ import { autoOn, type DaemonSession } from "./daemon-session.ts";
 import { randomUUID } from "node:crypto";
 import { type AgentProfile, loadAgents, profileArgs, profileHasMcp, withResolvedModel } from "./agents.ts";
 import { recordHandled } from "./handled-files.ts";
+import { brief, type DecisionBase, recordDecision } from "./decision-log.ts";
 import { exitNote, stderrTail } from "./subagent-exit.ts";
 import { historyLength } from "./daemon-history.ts";
 import { bundledArgs, bundledTools } from "./bundled-packages.ts";
@@ -129,6 +130,7 @@ export class ChildManager {
       throw new Error(`working directory no longer exists: ${s.cwd} (moved or deleted; recreate it or symlink it to the new location)`);
     }
     const scope = scopeForSession(s.cwd, s.agent !== undefined && s.agent.scope !== "none");
+    s.scope = scope;
     if (scope !== undefined) {
       log(`scope for ${s.sessionId ?? s.id}: ${scope.root} (mode ${scope.mode})`);
     }
@@ -563,7 +565,7 @@ export class ChildManager {
    * it: pi's chain will not let a grant allow a path ask, so the daemon, which sees every dialog first, does it. Says so in
    * the log and in a notice. False when the prompt is not covered (or not a file-path prompt) and must be shown.
    */
-  private answerCovered(s: DaemonSession, request: Record<string, unknown>, value: string | undefined): boolean {
+  private answerCovered(s: DaemonSession, request: Record<string, unknown>, value: string | undefined, rule?: AskRule): boolean {
     const covering = this.grants ? answerablePrompt(this.grants, s.sessionId, request, value) : undefined;
     const stdin = (s.child as unknown as { process?: { stdin?: { write(text: string): void } } } | undefined)?.process?.stdin;
     if (!covering || !stdin || typeof request.id !== "string") {
@@ -573,6 +575,7 @@ export class ChildManager {
     // one grant covers a compound command's several specs, so it comes back once per spec: name each grant once
     const ids = [...new Set(covering.map((g) => `#${g.id}`))].join(", ");
     log(`file-path prompt answered by ${ids} for session ${s.sessionId}: ${String(value ?? "")}`);
+    recordDecision({ ...this.decisionBase(s, request, value, rule), by: "grant", answer: "yes" });
     this.hub.broadcast({ type: "notice", session: s.id, text: `${GRANT_ANSWERED_NOTICE} ${ids}: ${String(value ?? "a file path")}`, durable: true });
     return true;
   }
@@ -581,11 +584,11 @@ export class ChildManager {
    * Auto mode (ticket 213): a permission prompt in a session with auto mode on is answered "Yes" here, before any controller sees
    * it, unless it is in the always-ask floor (auto-mode.ts), which is shown as usual with a flash saying why. Runs after
    * `answerCovered`, so a grant wins first. Says so in the log and in a notice that reads under the tool call it allowed.
-   * False when the prompt must be shown.
+   * "answered" when it did; otherwise the prompt must be shown, with the floor's reason when auto mode was on and stood aside.
    */
-  private answerAuto(s: DaemonSession, request: Record<string, unknown>, value: string | undefined, rule: AskRule | undefined): boolean {
+  private answerAuto(s: DaemonSession, request: Record<string, unknown>, value: string | undefined, rule: AskRule | undefined): "answered" | { floor?: string } {
     if (!autoOn(s) || !isPermissionPrompt(request)) {
-      return false;
+      return {};
     }
     const title = typeof request.title === "string" ? request.title : "";
     const surfaces = (request.toriel as { grants?: Array<{ surface: string }> } | undefined)?.grants;
@@ -593,17 +596,37 @@ export class ChildManager {
     if (why) {
       log(`auto mode asks about a prompt for session ${s.sessionId}: ${why}`);
       this.hub.broadcast({ type: "notice", session: s.id, text: `auto mode still asks about this one: ${why}` });
-      return false;
+      return { floor: why };
     }
     const stdin = (s.child as unknown as { process?: { stdin?: { write(text: string): void } } } | undefined)?.process?.stdin;
     if (!stdin) {
-      return false;
+      return {};
     }
     stdin.write(encodeLine({ type: "extension_ui_response", id: request.id, value: "Yes" }));
     const what = promptSubject(title, value).slice(0, 160) || "a prompt";
     log(`prompt answered by auto mode for session ${s.sessionId}: ${what}`);
     this.hub.broadcast({ type: "notice", session: s.id, text: `${AUTO_ANSWERED_NOTICE}: ${what}`, durable: true });
-    return true;
+    recordDecision({ ...this.decisionBase(s, request, value, rule), by: "auto", answer: "yes" });
+    return "answered";
+  }
+
+  /** What the decision log says about a permission prompt before anyone has answered it (ticket 239). */
+  private decisionBase(s: DaemonSession, request: Record<string, unknown>, value: string | undefined, rule?: AskRule, floor?: string): DecisionBase {
+    const grants = (request.toriel as { grants?: Array<{ surface: string }> } | undefined)?.grants ?? [];
+    const title = typeof request.title === "string" ? request.title : "";
+    return {
+      session: s.id,
+      sessionId: s.sessionId,
+      agent: s.agent?.name ?? null,
+      title: brief(title.split("\n")[0], 100),
+      surfaces: [...new Set(grants.map((g) => g.surface))],
+      value: brief(value),
+      ...(rule ? { rule: { explicit: rule.explicit, pattern: rule.pattern, origin: rule.origin } } : {}),
+      auto: autoOn(s),
+      ...(floor ? { floor } : {}),
+      attended: s.attachedTo !== undefined,
+      ...(s.scope ? { scope: s.scope.mode } : {}),
+    };
   }
 
   /** How long a permission prompt or question of this session may wait before it is denied or dismissed (ticket 88): its own setting, else the global one; undefined = for ever. */
@@ -638,6 +661,10 @@ export class ChildManager {
       const title = typeof request.title === "string" ? request.title : "";
       const what = (permission ? promptSubject(title, value) : (title.split("\n")[0] ?? "")).slice(0, 160) || (permission ? "a prompt" : "a question");
       log(`${permission ? "prompt denied" : "question dismissed"} after ${fmtDuration(ms)} without an answer for session ${s.sessionId}: ${what}`);
+      if (s.dialogInfo) {
+        recordDecision({ ...s.dialogInfo.base, by: "deny-after", answer: permission ? "no" : "cancelled", waitMs: Date.now() - s.dialogInfo.at });
+        s.dialogInfo = undefined;
+      }
       this.clearDialog(s);
       this.hub.broadcast({ type: "notice", session: s.id, text: `${permission ? AUTO_DENIED_NOTICE : AUTO_DISMISSED_NOTICE}: nobody answered in ${fmtDuration(ms)}: ${what}`, durable: true });
     }, ms);
@@ -647,6 +674,10 @@ export class ChildManager {
   private clearDialog(s: DaemonSession): void {
     clearTimeout(s.denyTimer);
     s.denyTimer = undefined;
+    if (s.dialogInfo) {
+      recordDecision({ ...s.dialogInfo.base, by: "dropped", waitMs: Date.now() - s.dialogInfo.at });
+      s.dialogInfo = undefined;
+    }
     if (s.pendingDialog) {
       s.pendingDialog = false;
       s.lastDialog = undefined;
@@ -679,12 +710,15 @@ export class ChildManager {
         if (suggested !== event || rule !== undefined) {
           s.suggestion = undefined;
         }
-        if (this.answerCovered(s, request, asked)) {
+        if (this.answerCovered(s, request, asked, rule)) {
           return; // answered from a grant: nobody is asked
         }
-        if (this.answerAuto(s, request, asked, rule)) {
+        const auto = this.answerAuto(s, request, asked, rule);
+        if (auto === "answered") {
           return; // answered by auto mode
         }
+        // the decision log says who answers this one when somebody does (handleUiResponse, the deny-after timer, clearDialog)
+        s.dialogInfo = isPermissionPrompt(request) ? { at: Date.now(), base: this.decisionBase(s, request, asked, rule, auto.floor) } : undefined;
         // ticket 220: the dialog says when it will be denied, so the wait is not silent; the same request is kept as lastDialog (a reattach sends it again)
         const denyMs = this.denyAfterMs(s);
         shown = denyMs === undefined ? request : { ...request, toriel: { ...(request.toriel as object | undefined), denyAt: Date.now() + denyMs } };

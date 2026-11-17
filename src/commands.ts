@@ -192,8 +192,8 @@ export const SWITCHER_COMMANDS = [
   },
   {
     name: "feedback",
-    description: "record a note about a harness or extension problem, with this session and turn attached, for later investigation",
-    help: "Saves a note (with this session and the last turn attached) to toriel's feedback log so a harness or extension problem can be looked at later. -l lists recent notes.\n\nExample: /feedback -c tool-quirk the grep tool ignored my path",
+    description: "record a note about a harness or extension problem, with a bundle (session copy, logs, state) for later investigation",
+    help: "Saves a note to toriel's feedback log, with a bundle folder next to it: a full copy of this session, the logs around the note, the permission rules and decisions, the doctor report and the state of the session (auto mode, scope, sandbox, grants). Nothing leaves this machine. -l lists recent notes and their bundles.\n\nExample: /feedback -c tool-quirk the grep tool ignored my path",
     build: (cmd) => {
       cmd
         .option("-c, --category <name>", "short tag, e.g. tool-quirk, ui, extension")
@@ -494,8 +494,8 @@ export const SESSION_COMMANDS = [
   },
   {
     name: "feedback",
-    description: "record a note about a harness or extension problem, with this session and turn attached, for later investigation",
-    help: "Saves a note (with this session and the last turn attached) to toriel's feedback log. -l lists recent notes.\n\nExample: /feedback -c ui the popup covers the input",
+    description: "record a note about a harness or extension problem, with a bundle (session copy, logs, state) for later investigation",
+    help: "Saves a note to toriel's feedback log, with a bundle folder next to it: a full copy of this session, the logs around the note, the permission rules and decisions, the doctor report and the state of the session. Nothing leaves this machine. -l lists recent notes and their bundles.\n\nExample: /feedback -c ui the popup covers the input",
     build: (cmd) => {
       cmd
         .option("-c, --category <name>", "short tag, e.g. tool-quirk, ui, extension")
