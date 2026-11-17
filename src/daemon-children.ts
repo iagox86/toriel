@@ -144,7 +144,7 @@ export class ChildManager {
       cliPath: cfg.piCli,
       cwd: s.cwd,
       args,
-      env: { ...childEnv(s, SOCK, process.env, scope, { sharedDir: SHARED_DIR, tmpDir: SANDBOX_TMP_DIR, sandboxWritable: sandbox, mcpFile: profileHasMcp(s.agent) ? mcpYamlFile() : undefined, fileHistoryDir: FILE_HISTORY_DIR, planDir: PLAN_DIR }), ...this.delegationEnv(s) },
+      env: { ...childEnv(s, SOCK, process.env, scope, { sharedDir: SHARED_DIR, tmpDir: SANDBOX_TMP_DIR, sandboxWritable: sandbox, mcpFile: profileHasMcp(s.agent) ? mcpYamlFile() : undefined, fileHistoryDir: FILE_HISTORY_DIR, planDir: PLAN_DIR, freshness: settings.fileFreshness }), ...this.delegationEnv(s) },
     });
     client.onEvent((event) => this.onEvent(s, event as Record<string, unknown>));
     this.launching.add(client);

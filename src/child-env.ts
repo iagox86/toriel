@@ -4,6 +4,7 @@
 // ones or it would see the daemon's environment instead (#100).
 import { delimiter, join } from "node:path";
 import { FILE_HISTORY_ENV } from "../pi/extensions/lib/file-history.ts";
+import { FRESHNESS_ENV } from "../pi/extensions/lib/freshness.ts";
 import { PLAN_DIR_ENV } from "../pi/extensions/lib/plan-mode.ts";
 import { MCP_FILE_ENV } from "../pi/extensions/lib/mcp-config.ts";
 import { SCOPE_ENV, SCOPE_MODE_ENV } from "../pi/extensions/lib/scope-root.ts";
@@ -12,7 +13,7 @@ import type { ScopeAssignment } from "./scope-root.ts";
 import { DEFAULT_SANDBOX_WRITABLE, type TorielSettings } from "./settings.ts";
 
 /** The daemon-owned variables that must never come from the daemon's own environment. */
-const OWNED_KEYS = [SCOPE_ENV, SCOPE_MODE_ENV, "TORIEL_SANDBOX", "TORIEL_SANDBOX_RW", "TORIEL_SHARED_DIR", "TORIEL_SANDBOX_TMP", MCP_FILE_ENV, FILE_HISTORY_ENV, PLAN_DIR_ENV];
+const OWNED_KEYS = [SCOPE_ENV, SCOPE_MODE_ENV, "TORIEL_SANDBOX", "TORIEL_SANDBOX_RW", "TORIEL_SHARED_DIR", "TORIEL_SANDBOX_TMP", MCP_FILE_ENV, FILE_HISTORY_ENV, PLAN_DIR_ENV, FRESHNESS_ENV];
 
 /** What a child gets beyond its scope: the shared directory, and (only when set) the sandbox switch with its extra writable roots. */
 export interface ChildExtras {
@@ -27,6 +28,8 @@ export interface ChildExtras {
   fileHistoryDir?: string;
   /** Where the per-session plan-mode markers are (ticket 229); the toriel-plan extension and the plan-mode bash wrapper read them. */
   planDir?: string;
+  /** False turns the toriel-files extension's read-before-edit check off (the fileFreshness setting); anything else leaves it on. */
+  freshness?: boolean;
 }
 
 /**
@@ -78,6 +81,9 @@ export function childEnv(s: EnvSession, sock: string, base: NodeJS.ProcessEnv = 
   }
   if (extras.fileHistoryDir !== undefined) {
     env[FILE_HISTORY_ENV] = extras.fileHistoryDir;
+  }
+  if (extras.freshness === false) {
+    env[FRESHNESS_ENV] = "off";
   }
   if (extras.planDir !== undefined) {
     env[PLAN_DIR_ENV] = extras.planDir;

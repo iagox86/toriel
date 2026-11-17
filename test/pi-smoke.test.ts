@@ -3,7 +3,7 @@
 // toriel's assumptions fails here, in one place, instead of as a live bug.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -36,6 +36,18 @@ describe("the pinned pi", () => {
     assert.ok(names.includes("permission-system"), `the package's command is registered (got ${names.join(", ")})`);
   });
 
+  it("lets an extension replace the built-in edit tool under the same name (toriel-files adds replaceAll that way)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-smoke-edit-"));
+    const dump = join(dir, "tools.json");
+    const probe = join(dir, "probe.ts");
+    writeFileSync(probe, `import { writeFileSync } from "node:fs";\nexport default function (pi: any) {\n  pi.on("session_start", () => writeFileSync(${JSON.stringify(dump)}, JSON.stringify(pi.getAllTools().map((t: any) => ({ name: t.name, replaceAll: Boolean(t.parameters?.properties?.edits?.items?.properties?.replaceAll) })))));\n}\n`);
+    await rpc("get_state", ["-e", join(ROOT, "pi", "extensions", "toriel-files.ts"), "-e", probe], { TORIEL_CHILD: "1" });
+    await new Promise((r) => setTimeout(r, 300));
+    const tools = JSON.parse(readFileSync(dump, "utf8")) as Array<{ name: string; replaceAll: boolean }>;
+    assert.equal(tools.filter((t) => t.name === "edit").length, 1, "one edit tool, not two");
+    assert.equal(tools.find((t) => t.name === "edit")?.replaceAll, true, "and it is the extension's");
+  });
+
   it("answers a get_state request over RPC (the daemon's handshake with every child)", async () => {
     const reply = await rpc("get_state");
     assert.equal(reply.success, true);
@@ -45,8 +57,8 @@ describe("the pinned pi", () => {
 });
 
 /** One RPC request to a fresh pi (no model, no network, an empty config directory) and its reply. */
-async function rpc(command: string, extra: string[] = []): Promise<Record<string, unknown>> {
-  const child = spawn(process.execPath, [DEFAULT_PI_CLI, "--mode", "rpc", "--no-session", "--no-extensions", "--no-skills", "--offline", ...extra], { env, stdio: ["pipe", "pipe", "pipe"] });
+async function rpc(command: string, extra: string[] = [], moreEnv: Record<string, string> = {}): Promise<Record<string, unknown>> {
+  const child = spawn(process.execPath, [DEFAULT_PI_CLI, "--mode", "rpc", "--no-session", "--no-extensions", "--no-skills", "--offline", ...extra], { env: { ...env, ...moreEnv }, stdio: ["pipe", "pipe", "pipe"] });
   try {
     return await new Promise<Record<string, unknown>>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error(`pi did not answer ${command} in 20s`)), 20_000);

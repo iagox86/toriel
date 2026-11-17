@@ -43,6 +43,8 @@ export interface TorielSettings {
   preventSleep?: boolean;
   /** List sessions toriel has never run (plain pi, other instances) in the switcher (default false; /external toggles it for one run). */
   showExternalSessions?: boolean;
+  /** Refuse an edit or write of a file the session has not read or that changed since it did (default true; read when a session starts). */
+  fileFreshness?: boolean;
   /** Most permission grants one session may hold (default 100; read when the daemon starts). */
   permissionGrantLimit?: number;
   /** Lifetimes the permission dialog offers as "allow for ..." rows: durations, or "session" for until revoked (default ["1h", "session"]; [] = none). */
@@ -113,7 +115,7 @@ export function settingsMtime(file: string = settingsFile()): number | null {
 }
 
 const NUMBER_KEYS = ["summaryIntervalMinutes", "summaryMinNewMessages", "scheduleUsagePause", "scheduleDailyLimit", "permissionGrantLimit", "trashRetentionDays", "subagentMaxConcurrent", "subagentMaxDepth", "subagentMaxSpawns", "subagentBudgetTokens", "subagentKeepMinutes", "subagentIdleMinutes", "subagentMaxMinutes"] as const;
-const BOOLEAN_KEYS = ["warnNoPermissionSystem", "preventSleep", "showExternalSessions", "autoName"] as const;
+const BOOLEAN_KEYS = ["warnNoPermissionSystem", "preventSleep", "showExternalSessions", "autoName", "fileFreshness"] as const;
 /** Number settings where 0 is a meaningful "off". */
 const ZERO_OK: readonly string[] = ["summaryIntervalMinutes", "scheduleUsagePause", "trashRetentionDays", "subagentKeepMinutes", "subagentIdleMinutes", "subagentMaxMinutes"];
 /** The shortest and longest a prompt may wait before it is denied for nobody answering it (ticket 88). */
