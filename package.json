@@ -5,8 +5,8 @@
   "version": "0.0.1",
   "description": "daemon-backed controller that hosts multiple live pi sessions in one terminal",
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "1.4.0",
-    "@earendil-works/pi-tui": "1.4.0",
+    "@earendil-works/pi-coding-agent": "1.5.2",
+    "@earendil-works/pi-tui": "1.5.2",
     "@gotgenes/pi-permission-system": "42.0.0",
     "@juicesharp/rpiv-ask-user-question": "2.15.0",
     "commander": "^15.0.0",
