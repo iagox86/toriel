@@ -38,6 +38,7 @@ import {
   handleUiResponse,
 } from "./daemon-handlers-ops.ts";
 import { handleMessage } from "./daemon-handlers-messages.ts";
+import { handleFeedbackSnapshot } from "./daemon-feedback.ts";
 import { handleAgentSpawn, handleAgentsOp } from "./daemon-subagents.ts";
 import { handlePermissionAdd, handlePermissionCheck, handlePermissionList, handlePermissionRestore, handlePermissionRevoke } from "./daemon-permissions.ts";
 import { handleResolve } from "./daemon-resolve.ts";
@@ -82,6 +83,8 @@ export async function dispatch(ctx: DaemonContext, cmd: ClientCommand, socket: n
       return handleAutoMode(ctx, cmd, res);
     case "plan_mode":
       return handlePlanMode(ctx, cmd, res);
+    case "feedback_snapshot":
+      return handleFeedbackSnapshot(ctx, cmd, res);
     case "clear_queue":
       return handleClearQueue(ctx, cmd, res);
     case "commands":

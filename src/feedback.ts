@@ -36,6 +36,8 @@ export interface FeedbackRecord {
   };
   cwd?: string;
   env?: { toriel?: string; pi?: string; daemonLog?: string };
+  /** The folder holding everything gathered with the note (feedback-bundle.ts): the session copy, logs, snapshot. Absent on notes from before bundles. */
+  bundle?: string;
 }
 
 /** Append a record, filling in its version and id. */
@@ -130,7 +132,7 @@ export function formatFeedback(records: FeedbackRecord[], limit = 12): string {
     const tag = r.category ? ` [${r.category}]` : "";
     const where = r.session?.name ?? (r.session?.file ? path.basename(r.session.file) : "");
     const by = r.source === "agent" ? " (agent)" : "";
-    return `${when}${tag}${by}${where ? ` - ${where}` : ""}\n  ${r.text.replace(/\s+/g, " ")}`;
+    return `${when}${tag}${by}${where ? ` - ${where}` : ""}\n  ${r.text.replace(/\s+/g, " ")}${r.bundle ? `\n  bundle: ${r.bundle}` : ""}`;
   });
   const hidden = records.length - shown.length;
   return [hidden > 0 ? `${hidden} older not shown` : "", ...lines, "", `file: ${FEEDBACK_FILE}`].filter((l, i) => l !== "" || i > 0).join("\n");
