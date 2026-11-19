@@ -45,6 +45,8 @@ export class SessionActions {
   private readonly h: Host;
   private readonly commands: SessionCommands;
   private lastEsc = 0;
+  /** Dialogs that already got a ui_response; an in-flight grant store must not answer one a second time. */
+  private readonly answersSent = new WeakSet<DialogRequest>();
 
   constructor(host: Host) {
     this.h = host;
@@ -404,13 +406,7 @@ export class SessionActions {
       }
       const text = skip ? "" : this.h.editor.getText().trim();
       this.h.editor.setText("");
-      this.h.send({
-        type: "ui_response",
-        session: meta.id,
-        response: { type: "extension_ui_response", id: dialog.id, ...(text ? { value: text } : { cancelled: true }) },
-      });
-      view.dialog = undefined;
-      this.h.renderChrome();
+      this.answerDialog(meta.id, view, dialog, text ? { value: text } : { cancelled: true });
       return true;
     }
     const panel = this.h.dialogPanel;
@@ -442,10 +438,25 @@ export class SessionActions {
       this.answerWithGrant(meta.id, view, dialog, row.for);
       return true;
     }
-    this.h.send({ type: "ui_response", session: meta.id, response: { type: "extension_ui_response", id: dialog.id, ...fields, ...("value" in fields ? { value: answerValue(dialog, fields.value) } : {}) } });
-    view.dialog = undefined;
-    this.h.renderChrome();
+    this.answerDialog(meta.id, view, dialog, { ...fields, ...("value" in fields ? { value: answerValue(dialog, fields.value) } : {}) });
     return true;
+  }
+
+  /** Send one ui_response for `dialog`, recording it so no second send ever happens for the same dialog:
+   *  an in-flight grant store that completes after the panel moved on still answers pi (the user's press was an
+   *  answer), a dialog already answered some other way is left alone, and only a panel still showing the dialog
+   *  is cleared. */
+  private answerDialog(session: number, view: SessionView, dialog: DialogRequest, fields: Record<string, unknown>): void {
+    this.answersSent.add(dialog);
+    this.h.send({
+      type: "ui_response",
+      session,
+      response: { type: "extension_ui_response", id: dialog.id, ...fields },
+    });
+    if (view.dialog === dialog) {
+      view.dialog = undefined;
+    }
+    this.h.renderChrome();
   }
 
   /**
@@ -455,12 +466,10 @@ export class SessionActions {
    */
   private answerWithGrant(session: number, view: SessionView, dialog: DialogRequest, life: string, pattern?: string): void {
     const answer = (): void => {
-      if (view.dialog !== dialog) {
-        return; // answered some other way meanwhile
+      if (this.answersSent.has(dialog)) {
+        return; // answered meanwhile: a second in-flight store completed, or another answer won the dialog
       }
-      this.h.send({ type: "ui_response", session, response: { type: "extension_ui_response", id: dialog.id, value: "Yes" } });
-      view.dialog = undefined;
-      this.h.renderChrome();
+      this.answerDialog(session, view, dialog, { value: "Yes" });
     };
     if (!(dialog.toriel?.grants ?? []).some((g) => isCappedSurface(g.surface))) {
       answer();
@@ -542,12 +551,7 @@ export class SessionActions {
       }
       view.pendingReason = reason ? { text: reason, at: Date.now() } : undefined;
       panel.edit(null);
-      this.h.send({
-        type: "ui_response",
-        session,
-        response: { type: "extension_ui_response", id: dialog.id, value: answerValue(dialog, value) },
-      });
-      view.dialog = undefined;
+      this.answerDialog(session, view, dialog, { value: answerValue(dialog, value) });
     } else if (matchesKey(data, Key.backspace)) {
       panel.erase();
     } else if (matchesKey(data, Key.delete)) {
