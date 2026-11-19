@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { answerablePrompt, protectedPaths, touchesProtected } from "../src/daemon-permissions.ts";
+import { answerablePrompt, exemptPaths, protectedPaths, touchesProtected } from "../src/daemon-permissions.ts";
 import { cappedReason, GrantStore, isCappedSurface } from "../src/permissions.ts";
 
 const HOUR = 3_600_000;
@@ -390,5 +390,87 @@ describe("touchesProtected: every spelling of a protected file", () => {
     s.add({ session: A, surface: "path_write", pattern: "*", source: "dialog" }, true);
     const request = { id: "d", method: "select", title: "Permission Required\npath : x/../.pi/agent/mcp.json", options: ["Yes", "No"], toriel: { grants: [{ surface: "path_write", pattern: "x/../.pi/agent/mcp.json" }] } };
     assert.equal(answerablePrompt(s, A, request, "x/../.pi/agent/mcp.json", PROTECTED), undefined);
+  });
+});
+
+describe("touchesProtected: the agent-maintained memory carve-out (ticket 246)", () => {
+  const PROTECTED = ["/home/me/.local/share/toriel/permissions.json", "/home/me/.pi/agent"];
+  const EXEMPT = ["/home/me/.pi/agent/pi-hermes-memory/skills", "/home/me/.pi/agent/projects-memory"];
+  const touches = (text: string, exempt: readonly string[] = EXEMPT) => touchesProtected(text, PROTECTED, exempt);
+
+  it("lets the hermes skill store and project memory through, in every spelling", () => {
+    for (const text of [
+      "write /home/me/.pi/agent/pi-hermes-memory/skills/x/SKILL.md",
+      "cat ~/.pi/agent/pi-hermes-memory/skills/x/SKILL.md",
+      "write ../.pi/agent/pi-hermes-memory/skills/x/SKILL.md",
+      "write x/../.pi/agent/pi-hermes-memory/skills/x/SKILL.md",
+      "write /home/me/.pi/agent/projects-memory/p/skills/y/SKILL.md",
+      "cat ~/.pi/agent/projects-memory/p/skills/y/SKILL.md",
+      "cat ../.pi/agent/projects-memory/p/skills/y/SKILL.md",
+    ]) {
+      assert.equal(touches(text), false, text);
+    }
+  });
+
+  it("still protects pi's own files under the carved directory", () => {
+    for (const text of [
+      "write /home/me/.pi/agent/settings.json",
+      "cat ~/.pi/agent/auth.json",
+      "write /home/me/.pi/agent/extensions/x.ts",
+      "write /home/me/.pi/agent/skills/user/SKILL.md",
+      "cat /home/me/.pi/agent/pi-hermes-memory/sessions.db",
+      "cat /home/me/.pi/agent/pi-hermes-memory/MEMORY.md",
+      "cat ~/.pi/agent/pi-hermes-memory/USER.md",
+    ]) {
+      assert.equal(touches(text), true, text);
+    }
+  });
+
+  it("fails closed on a traversal out of an exempt tree, in either direction", () => {
+    assert.equal(touches("/home/me/.pi/agent/pi-hermes-memory/skills/x/../../../settings.json"), true, "the collapsed form is not exempt");
+    assert.equal(touches("/home/me/.pi/agent/pi-hermes-memory/skills/.."), true, "collapses to pi-hermes-memory itself");
+    assert.equal(touches("/home/me/.pi/agent/projects-memory/../auth.json"), true);
+    assert.equal(touches("/home/me/.pi/agent/pi-hermes-memory/skills/x/./SKILL.md"), false, "an inner . segment is harmless");
+  });
+
+  it("does not match a name that merely starts like an exempt tree", () => {
+    assert.equal(touches("/home/me/.pi/agent/pi-hermes-memory/skills-evil/x/SKILL.md"), true);
+    assert.equal(touches("/home/me/.pi/agent/projects-memory2/x/SKILL.md"), true);
+  });
+
+  it("protects a mixed text naming an exempt path and a protected one, in either order", () => {
+    assert.equal(touches("cp /home/me/.pi/agent/pi-hermes-memory/skills/a /home/me/.pi/agent/settings.json"), true);
+    assert.equal(touches("cp /home/me/.pi/agent/settings.json /home/me/.pi/agent/pi-hermes-memory/skills/a"), true);
+  });
+
+  it("ignores whitespace pi wrapped a long path with, and without the exemption is strict", () => {
+    assert.equal(touches("write /home/me/.pi/agent/pi-hermes-memory/ski\nlls/x/SKILL.md"), false);
+    assert.equal(touchesProtected("write /home/me/.pi/agent/pi-hermes-memory/skills/x/SKILL.md", PROTECTED), true, "strict default");
+  });
+
+  it("moves the exempt set with PI_CODING_AGENT_DIR", () => {
+    const saved = process.env.PI_CODING_AGENT_DIR;
+    const dir = "/tmp/agent-override";
+    try {
+      process.env.PI_CODING_AGENT_DIR = dir;
+      assert.deepEqual(exemptPaths(), [`${dir}/pi-hermes-memory/skills`, `${dir}/projects-memory`]);
+      assert.equal(touchesProtected(`write ${dir}/pi-hermes-memory/skills/x/SKILL.md`, protectedPaths(), exemptPaths()), false);
+      assert.equal(touchesProtected(`write ${dir}/settings.json`, protectedPaths(), exemptPaths()), true);
+    } finally {
+      if (saved === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = saved;
+      }
+    }
+  });
+
+  it("makes answerablePrompt cover a hermes skill path but not pi's own files", () => {
+    const s = make();
+    s.add({ session: A, surface: "path_write", pattern: "/home/me/.pi/agent/*", source: "dialog" }, true);
+    const request = (surface: string, title: string) => ({ id: "d1", method: "select", title, options: ["Yes", "No"], toriel: { grants: [{ surface, pattern: "/home/me/.pi/agent/*" }] } });
+    const ask = (title: string) => request("path_write", title);
+    assert.equal(answerablePrompt(s, A, ask("x"), "/home/me/.pi/agent/pi-hermes-memory/skills/x/SKILL.md", PROTECTED, EXEMPT)?.length, 1, "a hermes skill is covered");
+    assert.equal(answerablePrompt(s, A, ask("x"), "/home/me/.pi/agent/settings.json", PROTECTED, EXEMPT), undefined, "pi's own settings.json is not");
   });
 });

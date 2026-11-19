@@ -1,6 +1,7 @@
 // The daemon's side of permission grants (docs/permissions.md): the handlers for the
 // permission_* commands. The store itself is pure (src/permissions.ts); the toriel-grants
 // link in each child asks `permission_check` before pi's dialog opens.
+import { join } from "node:path";
 import * as os from "node:os";
 import { PERMISSIONS_FILE } from "./config.ts";
 import { mcpYamlFile } from "./config-dir.ts";
@@ -61,9 +62,20 @@ export function handlePermissionCheck(ctx: DaemonContext, cmd: Cmd<"permission_c
   res(true, undefined, { allow: false });
 }
 
-/** Files a grant must never answer for: the grants themselves, pi's own configuration and toriel's mcp.yaml (an entry there is a command the next session runs). Such an ask always reaches the user. */
+/** Files a grant must never answer for: the grants themselves, pi's own configuration (minus the agent-maintained memory subtrees, `exemptPaths` below) and toriel's mcp.yaml (an entry there is a command the next session runs). Such an ask always reaches the user. */
 export function protectedPaths(): string[] {
   return [PERMISSIONS_FILE, piAgentDir(), mcpYamlFile()];
+}
+
+/**
+ * The agent-maintained content subtrees under pi's own directory that sessions write to constantly
+ * (Hermes skills and project memory), carved out of the whole-tree protection of `piAgentDir()`,
+ * ticket 246. Deliberately narrow: sessions.db, MEMORY.md, USER.md, the standing-instructions file,
+ * pi's user `skills/`, `extensions/`, `bin/` and everything else under `~/.pi/agent` stay protected.
+ */
+export function exemptPaths(): string[] {
+  const dir = piAgentDir();
+  return [join(dir, "pi-hermes-memory", "skills"), join(dir, "projects-memory")];
 }
 
 /**
@@ -71,13 +83,13 @@ export function protectedPaths(): string[] {
  * an earlier prompt, and the ask is not about a protected file (`value` is what was asked about; the title is checked too, since
  * a command's value need not be the bare path). Only file-path surfaces: the grants link already settles every other kind.
  */
-export function answerablePrompt(grants: GrantStore, uuid: string | undefined, request: Record<string, unknown>, value: string | undefined, protectedFiles: readonly string[] = protectedPaths()): Grant[] | undefined {
+export function answerablePrompt(grants: GrantStore, uuid: string | undefined, request: Record<string, unknown>, value: string | undefined, protectedFiles: readonly string[] = protectedPaths(), exempt: readonly string[] = exemptPaths()): Grant[] | undefined {
   const asked = (request.toriel as { grants?: PermissionGrantSpec[] } | undefined)?.grants ?? [];
   const options = Array.isArray(request.options) ? request.options : [];
   if (!uuid || request.method !== "select" || !options.includes("Yes") || asked.length === 0 || !asked.every((a) => isCappedSurface(a.surface))) {
     return undefined;
   }
-  return touchesProtected([value ?? "", typeof request.title === "string" ? request.title : ""].join("\n"), protectedFiles) ? undefined : grants.covers(uuid, asked, true);
+  return touchesProtected([value ?? "", typeof request.title === "string" ? request.title : ""].join("\n"), protectedFiles, exempt) ? undefined : grants.covers(uuid, asked, true);
 }
 
 /**
@@ -85,8 +97,15 @@ export function answerablePrompt(grants: GrantStore, uuid: string | undefined, r
  * path's last two segments (`.pi/agent`), which is what a relative spelling such as `../.pi/agent/mcp.json` or a repo-local `.pi/`
  * directory still contains. The text is also tried with `..` and `.` segments collapsed, so `/home/u/x/../.pi/agent` is seen as
  * what it is. Whitespace is ignored, since pi wraps long commands across lines. Matching too much only means one more prompt.
+ *
+ * `exempt` (ticket 246, opt-in per caller) carves out the agent-maintained subtrees under a protected
+ * directory: an occurrence of a protected needle counts as protected unless the text right after it is
+ * one of the exempt sub-paths (`/pi-hermes-memory/skills`, `/projects-memory`) followed by `/` or the
+ * end. Every occurrence in both the raw and the collapsed haystack is judged on its own, so a traversal
+ * out of an exempt tree (`skills/x/../../../settings.json`) still fails closed - the collapsed form is
+ * not exempt even when the raw one looks like it is.
  */
-export function touchesProtected(text: string, protectedFiles: readonly string[] = protectedPaths()): boolean {
+export function touchesProtected(text: string, protectedFiles: readonly string[] = protectedPaths(), exempt: readonly string[] = []): boolean {
   const home = os.homedir();
   const squash = (t: string) => t.replace(/\s+/g, "");
   const collapse = (t: string): string => {
@@ -101,7 +120,21 @@ export function touchesProtected(text: string, protectedFiles: readonly string[]
   const haystacks = [flat, collapse(flat)];
   const tail = (p: string) => p.split("/").filter(Boolean).slice(-2).join("/");
   const needles = protectedFiles.flatMap((p) => [squash(p), squash(p.startsWith(home) ? `~${p.slice(home.length)}` : p), squash(tail(p))]);
-  return needles.some((n) => n.length > 0 && haystacks.some((h) => h.includes(n)));
+  // the sub-path of an exempt tree under the protected directory it belongs to: the remainder after a
+  // needle match is the same for every spelling of the needle (absolute, ~, tail), so one set covers all
+  const exemptSubs = exempt.flatMap((e) => protectedFiles.filter((p) => e.startsWith(p)).map((p) => squash(e.slice(p.length))));
+  const exemptAt = (h: string, index: number, needle: string): boolean => {
+    const rest = h.slice(index + needle.length);
+    return exemptSubs.some((s) => rest.startsWith(s) && (rest.length === s.length || rest[s.length] === "/"));
+  };
+  return needles.some((n) => n.length > 0 && haystacks.some((h) => {
+    for (let i = h.indexOf(n); i !== -1; i = h.indexOf(n, i + 1)) {
+      if (!exemptAt(h, i, n)) {
+        return true;
+      }
+    }
+    return false;
+  }));
 }
 
 /** A file-path grant comes only from answering the file-path prompt the daemon holds open for the session, with a pattern that covers what pi asked about. */
@@ -112,7 +145,7 @@ function checkPromptFor(ctx: DaemonContext, uuid: string, cmd: Cmd<"permission_a
     throw new Error(`a "${cmd.surface}" (file-path) grant is made by answering the file-path prompt that is open for the session, and none matches`);
   }
   // such a prompt always reaches the user (see answerablePrompt), so a grant for it would sit in /permissions promising what never happens
-  if (touchesProtected(typeof open.title === "string" ? open.title : "")) {
+  if (touchesProtected(typeof open.title === "string" ? open.title : "", protectedPaths(), exemptPaths())) {
     throw new Error("this prompt is about the permission grants file or pi's own configuration; those are always asked about, so no grant is made for it");
   }
   const asked = ((open.toriel as { grants?: PermissionGrantSpec[] } | undefined)?.grants ?? []).filter((g) => g.surface === cmd.surface);

@@ -196,3 +196,18 @@ describe("floorReason", () => {
     assert.match(floorReason({ title: title("git push"), value: "git push", rule: DEFAULT }) ?? "", /pushes/, "the floor's own reasons come first");
   });
 });
+
+describe("floorReason: the agent-maintained memory carve-out (ticket 246)", () => {
+  const skill = "/home/u/.pi/agent/pi-hermes-memory/skills/x/SKILL.md";
+
+  it("stands aside for a file-path ask on a hermes skill, but not for a bash ask naming it", () => {
+    assert.equal(floorReason({ title: `Permission Required\ntool : write\npath : ${skill}`, surfaces: [{ surface: "path_write" }], rule: DEFAULT }), undefined);
+    assert.match(floorReason({ title: `Permission Required\ntool : bash\ncommand : cat ${skill}` }) ?? "", /grants file or pi's own configuration/);
+    assert.match(floorReason({ title: `Permission Required\ntool : bash`, value: `cat ${skill}`, surfaces: [{ surface: "bash" }], rule: DEFAULT }) ?? "", /grants file or pi's own configuration/, "a bash ask keeps the strict check");
+  });
+
+  it("still protects pi's own files on a non-bash ask, and pi's configuration directory keeps the guard for a command it cannot resolve", () => {
+    assert.match(floorReason({ title: `Permission Required\ntool : write\npath : /home/u/.pi/agent/settings.json`, surfaces: [{ surface: "path_write" }] }) ?? "", /grants file or pi's own configuration/);
+    assert.match(floorReason({ title: `Permission Required\ntool : bash\ncommand : cd ~/.pi/agent/projects-memory/p && cat ../../settings.json` }) ?? "", /grants file or pi's own configuration/);
+  });
+});

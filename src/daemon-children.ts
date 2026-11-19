@@ -5,7 +5,7 @@ import { childEnv, sandboxWritableRoots } from "./child-env.ts";
 import { mcpYamlFile } from "./config-dir.ts";
 import { scopeForSession } from "./scope-root.ts";
 import { DIALOG_METHODS, FILE_HISTORY_DIR, PLAN_DIR, SANDBOX_TMP_DIR, SHARED_DIR, SOCK } from "./config.ts";
-import { answerablePrompt, touchesProtected } from "./daemon-permissions.ts";
+import { answerablePrompt, exemptPaths, protectedPaths, touchesProtected } from "./daemon-permissions.ts";
 import { type GrantStore, ruleFor, withSuggestion } from "./permissions.ts";
 import { type BridgeTracker, INJECT_COMMAND, injectedId, mergedQueueTexts, parseBridgeReport } from "./daemon-bridge.ts";
 import type { ClientHub } from "./daemon-hub.ts";
@@ -700,8 +700,12 @@ export class ChildManager {
       // a select dialog may carry the grant the toriel-grants link saw for it
       const asked = s.suggestion?.value;
       const suggested = DIALOG_METHODS.has(event.method as string) ? withSuggestion(event, s.suggestion, Date.now()) : event;
-      // an ask about the grants file or pi's config is always asked: say so instead of offering rows that could only be refused
-      const request = event.method === "select" && touchesProtected(typeof event.title === "string" ? event.title : "") ? { ...suggested, toriel: { protectedAsk: true } } : suggested;
+      // an ask about the grants file or pi's config is always asked: say so instead of offering rows that could only be refused.
+      // the ticket 246 carve-out (the agent-maintained memory subtrees) applies only when the dialog's surfaces are known and
+      // non-bash: without surface info stay strict, since if this disagrees with the grant gates the dialog offers rows that get refused - the bug it exists to prevent
+      const surfaces = ((suggested.toriel as { grants?: Array<{ surface: string }> } | undefined)?.grants ?? []).map((g) => g.surface);
+      const exempt = surfaces.length > 0 && !surfaces.includes("bash") ? exemptPaths() : [];
+      const request = event.method === "select" && touchesProtected(typeof event.title === "string" ? event.title : "", protectedPaths(), exempt) ? { ...suggested, toriel: { protectedAsk: true } } : suggested;
       let shown: Record<string, unknown> = request;
       if (DIALOG_METHODS.has(event.method as string)) {
         // the reason for the ask (ticket 213) is read before the suggestion is used up below: most asks carry a grant to suggest, so it is cleared for them
