@@ -96,6 +96,62 @@ describe("permission prompt: toriel's own layout", () => {
     assert.equal(answered(t.sent[0]), "Yes");
   });
 
+  it("still answers pi when the panel's dialog was replaced while a file-path grant store was in flight", async () => {
+    // the silent-bail bug (ticket 249): one awaited permission_add per grant opens a window in which a
+    // re-delivered ui_request (same content, new object) replaces view.dialog, and the store completing
+    // after that used to bail, leaving pi unanswered and the panel stuck forever
+    const t = setup({ path: true });
+    let release!: (v: unknown) => void;
+    const gate = new Promise((resolve) => (release = resolve));
+    (t.sa as unknown as { h: { request(cmd: unknown): Promise<unknown> } }).h.request = (cmd: unknown) => {
+      t.requests.push(cmd as Record<string, unknown>);
+      return gate.then(() => ({ echo: "granted" }));
+    };
+    t.sa.dialogKeys(t.view, "3"); // the kept-across-restarts row of a file-path ask: store first, answer after
+    const replacement: DialogRequest = { ...t.dialog, shownAt: Date.now() }; // same id, new object, re-delivered
+    t.view.dialog = replacement;
+    t.panel.sync(replacement);
+    release(undefined);
+    await settle();
+    assert.deepEqual(t.sent, [{ type: "ui_response", session: 4, response: { type: "extension_ui_response", id: "g1", value: "Yes" } }]);
+    assert.equal(t.view.dialog, replacement, "a dialog the answer does not belong to stays in the panel");
+    assert.notEqual(t.view.dialog, t.dialog);
+  });
+
+  it("does not answer twice when the store completes after the dialog was answered another way", async () => {
+    const t = setup({ path: true });
+    let release!: (v: unknown) => void;
+    const gate = new Promise((resolve) => (release = resolve));
+    (t.sa as unknown as { h: { request(cmd: unknown): Promise<unknown> } }).h.request = (cmd: unknown) => {
+      t.requests.push(cmd as Record<string, unknown>);
+      return gate.then(() => ({ echo: "granted" }));
+    };
+    t.sa.dialogKeys(t.view, "3"); // store in flight
+    t.sa.dialogKeys(t.view, "\x1b"); // No: answered the other way meanwhile
+    assert.equal(answered(t.sent[0]), "No");
+    assert.equal(t.view.dialog, undefined);
+    release(undefined);
+    await settle();
+    assert.deepEqual(t.sent, [t.sent[0]], "only the No went to pi; the stalled grant answer never does");
+  });
+
+  it("answers once when the same row is pressed twice quickly (two stores in flight)", async () => {
+    const t = setup({ path: true });
+    let release!: (v: unknown) => void;
+    const gate = new Promise((resolve) => (release = resolve));
+    (t.sa as unknown as { h: { request(cmd: unknown): Promise<unknown> } }).h.request = (cmd: unknown) => {
+      t.requests.push(cmd as Record<string, unknown>);
+      return gate.then(() => ({ echo: "granted" }));
+    };
+    t.sa.dialogKeys(t.view, "3");
+    t.sa.dialogKeys(t.view, "3"); // both stores in flight before either completes
+    release(undefined);
+    await settle();
+    assert.equal(t.requests.length, 2, "both stores were armed");
+    const sent = t.sent.filter((cmd) => (cmd.response as { value?: unknown } | undefined)?.value === "Yes");
+    assert.equal(sent.length, 1, "one Yes reaches pi");
+  });
+
   it("works from the highlighted row with enter", async () => {
     const t = setup();
     down(t, 1); // the first allow row
