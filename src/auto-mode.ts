@@ -4,7 +4,7 @@
 // The floor is a lexical check on what pi asked about, so it is a convenience and not a boundary: a command can hide what it does
 // (`eval`, a variable, a script it wrote a moment ago). The real boundary is the sandbox (docs/sandbox-spike.md); the floor catches
 // the plain, common forms and errs toward asking, because a false positive costs one prompt and a false negative costs a lot more.
-import { touchesProtected } from "./daemon-permissions.ts";
+import { exemptPaths, protectedPaths, touchesProtected } from "./daemon-permissions.ts";
 import type { AskRule } from "./shared.ts";
 
 /**
@@ -213,13 +213,16 @@ function commandOf(inp: FloorInput): string | undefined {
 
 /**
  * Why a permission prompt must still reach the user in auto mode, or undefined when auto mode may answer it. The floor, from
- * ticket 213: the permission grants file and pi's configuration, credential and secret files, writes outside the session's
- * directory, destructive filesystem commands, pushes and publishes, privilege escalation and code piped from the network.
- * Anything pi itself denies never becomes a prompt.
+ * ticket 213: the permission grants file and pi's configuration (minus the agent-maintained memory subtrees, ticket 246 -
+ * but only on a non-bash ask, since a command's `..` run cannot be resolved across squashed `&&` tokens), credential and secret
+ * files, writes outside the session's directory, destructive filesystem commands, pushes and publishes, privilege escalation
+ * and code piped from the network. Anything pi itself denies never becomes a prompt.
  */
 export function floorReason(inp: FloorInput): string | undefined {
   const all = `${inp.title}\n${inp.value ?? ""}`;
-  if (touchesProtected(all)) {
+  const command = commandOf(inp);
+  // a command (or an ask with no surface report, which could be one) keeps the strict check: see the docblock
+  if (touchesProtected(all, protectedPaths(), command !== undefined ? [] : exemptPaths())) {
     return "it names the permission grants file or pi's own configuration";
   }
   if (CREDENTIAL_FILES.test(all)) {
@@ -228,7 +231,6 @@ export function floorReason(inp: FloorInput): string | undefined {
   if (inp.surfaces?.some((s) => s.surface === "external_directory_write")) {
     return "it writes outside the session's directory";
   }
-  const command = commandOf(inp);
   if (command !== undefined) {
     // pi wraps a long command across lines mid-word, and a real newline separates two commands: with no unwrapped value to go by, both readings are checked
     const found = commandFloor(command) ?? (inp.value === undefined ? commandFloor(command.replace(/\n/g, "")) : undefined);

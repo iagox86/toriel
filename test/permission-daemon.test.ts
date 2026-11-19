@@ -264,6 +264,22 @@ describe("daemon: permission grants", () => {
       assert.equal(dialog.request.toriel?.protectedAsk, undefined);
     });
 
+    it("does not mark a prompt about the agent-maintained memory store, but still refuses a grant for pi's own files (ticket 246)", async () => {
+      const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-hermes-"));
+      const skill = path.join(agentDir, "pi-hermes-memory", "skills", "x", "SKILL.md");
+      const pattern = `${agentDir}/*`;
+      const h = await start({ PI_CODING_AGENT_DIR: agentDir, FAKE_PI_ASK_COMMAND: `cat ${skill}` });
+      const { c, session, uuid } = await savedSession(h);
+      const link = await h.connect();
+      await link.request({ type: "permission_check", uuid, grants: [{ surface: "path_read", pattern }], value: `cat ${skill}` });
+      await c.request({ type: "prompt", session, message: "/ask-select" });
+      const dialog = await c.waitFor((m) => m.type === "ui_request" && m.request?.id === "ask-select-1");
+      assert.equal(dialog.request.toriel?.protectedAsk, undefined, "a hermes skill is carved out of the whole-tree protection");
+      assert.ok(dialog.request.toriel?.grants?.length, "the suggestion rides along, so the dialog can offer grant rows");
+      const added = await c.request({ type: "permission_add", session, surface: "path_read", pattern, dialog: "ask-select-1", source: "dialog" });
+      assert.equal(added.grant.pattern, pattern);
+    });
+
     it("answers a later prompt the grant covers itself, before any controller sees it", async () => {
       const { c, session, raise } = await pathPrompt();
       await c.request({ type: "permission_add", session, surface: "path_write", pattern: "/p/*", for: "session", source: "dialog", dialog: "ask-select-1" });

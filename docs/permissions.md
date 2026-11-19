@@ -135,6 +135,12 @@ matching); a project config overlay (above).
     so `../.pi/agent/mcp.json` and a repo-local `.pi/agent` count (toriel's own `mcp.yaml` is protected the same way: an entry there is a command the next session runs), and the text is also tried
     with `..`, `.` and doubled `/` collapsed. Whitespace is ignored (pi wraps long commands).
     It errs toward matching: the cost of a false positive is one more prompt, never a grant.
+    Two agent-maintained subtrees under `~/.pi/agent` are carved out (`exemptPaths`, ticket 246:
+    the Hermes skill store `pi-hermes-memory/skills/` and project memory `projects-memory/`),
+    which sessions write to constantly; only on file-path asks and non-bash ones, and the
+    collapsed reading is judged too, so a `..` run out of a carved tree fails closed, and the
+    rest of `~/.pi/agent` (sessions.db, MEMORY.md, USER.md, the user's own `skills/`) stays
+    protected.
     Not covered: a path built at run time (`$HOME/...`, a symlink, a command that computes
     it), which the title does not show; the sandbox, not this check, is the answer there;
   - the surface stays exact (`path_write` does not cover `path_read`), the pattern is a glob
