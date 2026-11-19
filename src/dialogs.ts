@@ -215,6 +215,17 @@ export function withCursor(text: string, at: number): string {
   return at >= text.length ? `${text}█` : `${text.slice(0, at)}\x1b[7m${text[at]}\x1b[27m${text.slice(at + 1)}`;
 }
 
+/** Every option carries its own "N. " numbering, row for row, in order: an extension (or a tool) numbered its
+ * rows for a host it assumed does not, so numbering them again would show every number doubled. */
+export function optionsNumberedAlready(options: string[]): boolean {
+  return options.length > 0 && options.every((o, i) => o.startsWith(`${i + 1}. `));
+}
+
+/** The row's leading number: the extension's own when it numbered its options, the panel's otherwise. */
+function leadFor(options: string[], i: number): string {
+  return optionsNumberedAlready(options) ? "" : `${i + 1}. `;
+}
+
 /** `reason` non-null = the highlighted option is being edited inline, with the cursor at `cursor` (default: the end). */
 export function dialogLines(d: DialogRequest, index: number, width: number, reason: string | null = null, cursor = reason?.length ?? 0): string[] {
   const out: string[] = [];
@@ -238,17 +249,19 @@ export function dialogLines(d: DialogRequest, index: number, width: number, reas
   }
   (d.options ?? []).forEach((o, i) => {
     const row = grantRowFor(d, o);
-    const lead = `${i + 1}. `;
+    // continuations align under the option's own text: " > " plus the three-character number (the option's own when pre-numbered)
+    const hang = "      ";
+    const lead = leadFor(d.options ?? [], i);
     if (i === index && reason !== null) {
       const label = row && editablePattern(d, o) !== undefined ? `Yes, and allow pattern (${row.for === "session" ? "this session" : durationWords(row.for)})` : o;
       // wrapped, not cut: the text being typed and the cursor must stay in view however long it gets
-      out.push(...wrapRows(`${lead}${label}: ${withCursor(reason, cursor)}`, width, " > ", `   ${" ".repeat(lead.length)}`).map(selected));
+      out.push(...wrapRows(`${lead}${label}: ${withCursor(reason, cursor)}`, width, " > ", hang).map(selected));
       return;
     }
     if (i === index) {
       const hint = optionTakesReason(d, o) ? "  (tab: type a reason)" : editablePattern(d, o) !== undefined ? "  (tab: edit the pattern)" : "";
       // the row you are on shows in full (it names the pattern a grant would store) with its tab hint at the end
-      out.push(...wrapRows(`${lead}${o}${hint}`, width, " > ", `   ${" ".repeat(lead.length)}`).map(selected));
+      out.push(...wrapRows(`${lead}${o}${hint}`, width, " > ", hang).map(selected));
       return;
     }
     out.push(dim(`  ${truncateToWidth(` ${lead}${o}`, width - 2)}`));

@@ -56,6 +56,23 @@ describe("dialog rendering", () => {
     assert.match(text, /2\. Yes, allow bash "sudo -V" for this session/);
   });
 
+  it("numbers its rows once when the options already carry their own numbering (ask_user_question pre-numbers them, ticket 245)", () => {
+    // the package's rpc fallback sends every line as "N. <label> - <description>" and "N. Type something."
+    const qa = { id: "8", method: "select", title: "Pick one", options: ["1. Solarized - dark", "2. Nord - cool", "3. 1.5 release - pending", "4. Type something."] };
+    const text = dialogLines(qa as DialogRequest, 1, 100).join("\n");
+    assert.match(text, /1\. Solarized - dark/);
+    assert.doesNotMatch(text, /1\. 1\./);
+    assert.doesNotMatch(text, /2\. 2\./);
+    assert.match(text, /4\. Type something\./);
+  });
+
+  it("keeps numbering rows whose option text is not consistently numbered", () => {
+    const mixed = { id: "10", method: "select", title: "Pick", options: ["1. Solarized", "Nord"] };
+    const text = dialogLines(mixed as DialogRequest, 0, 100).join("\n");
+    assert.match(text, /1\. 1\. Solarized/, "only some rows numbered: the panel numbers as before");
+    assert.match(text, /2\. Nord/);
+  });
+
   it("keeps the status hint to one short line", () => {
     assert.doesNotMatch(dialogPrompt(perm), /\n/);
   });
