@@ -43,6 +43,21 @@ export function commandsFor(ctx: AutocompleteContext): SlashCommand[] {
 
 const isEmpty = (lines: string[]): boolean => lines.every((l) => l.trim() === "");
 
+/**
+ * Whether `typed` is one of toriel's own commands, a space, and what follows, for a command that declares an argument completer.
+ * pi-tui sends an explicit Tab on such a line to file completion (its argument path runs only for a non-forced request), so
+ * without this a Tab after "/new -m " or "/model " never reaches the completer (ticket 247). A command with no completer
+ * (/mcp add ...) keeps Tab for files; the commands it applies to follow the same filtering as `commandsFor`.
+ */
+function completesItsArguments(ctx: AutocompleteContext, typed: string): boolean {
+  const name = /^\s*\/(\S+)\s/.exec(typed)?.[1];
+  if (name === undefined || !ctx.sources) {
+    return false;
+  }
+  const own: readonly CommandSpec[] = ctx.switcher ? SWITCHER_COMMANDS : SESSION_COMMANDS;
+  return own.some((c) => c.name === name && c.complete !== undefined && !(ctx.headerSelected && c.needsSession));
+}
+
 export class CommandAutocomplete implements AutocompleteProvider {
   private readonly source: () => AutocompleteContext;
 
@@ -65,6 +80,9 @@ export class CommandAutocomplete implements AutocompleteProvider {
     const typed = (lines[cursorLine] ?? "").slice(0, cursorCol);
     if (options.force && /^\s*\/\S*$/.test(typed)) {
       // a tab popup whose text has become a command name keeps completing commands, not files
+      options = { ...options, force: false };
+    } else if (options.force && completesItsArguments(ctx, typed)) {
+      // Tab inside a command that completes its own arguments: those, not files
       options = { ...options, force: false };
     }
     if (isEmpty(lines)) {
