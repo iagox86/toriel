@@ -69,7 +69,8 @@ describe("the switcher list", () => {
       sw.sessions.map((s) => s.key),
       ["/s/b.jsonl"],
     );
-    assert.match(sw.filterNote, /1 outside session hidden {2}- {2}\/external show/);
+    assert.match(sw.hiddenNote, /1 outside session hidden {2}- {2}\/external show/);
+    assert.equal(sw.filterNote, "", "hiding outside sessions is not a filter: groups still fold (ticket 248)");
   });
 
   it("/external show lists them all, /external hide hides them again", async () => {
@@ -77,7 +78,7 @@ describe("the switcher list", () => {
     actions.refresh();
     await actions.runCommand("/external show", undefined);
     assert.equal(sw.sessions.length, 2);
-    assert.equal(sw.filterNote, "");
+    assert.equal(sw.hiddenNote, "");
     await actions.runCommand("/external", undefined);
     assert.equal(sw.sessions.length, 1);
   });

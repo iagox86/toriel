@@ -194,7 +194,8 @@ export class SwitcherActions {
       ? `filter${filter.regex ? " (regex)" : ""}: ${filter.text}  -  ${shown.length} of ${list.length}  -  /filter clears`
       : "";
     const hiddenNote = hidden > 0 ? `${hidden} outside session${hidden === 1 ? "" : "s"} hidden  -  /external show` : "";
-    this.h.switcher.filterNote = [filterNote, hiddenNote].filter(Boolean).join("   ");
+    this.h.switcher.filterNote = filterNote;
+    this.h.switcher.hiddenNote = hiddenNote;
     this.h.switcher.groupMatches = filter ? (title) => filter.testGroup(title) : undefined;
     this.h.switcher.sessions = shown;
     this.h.switcher.groups = this.groups.groups;
