@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { counts, describeTodos, listing, MAX_TODOS, parseReport, parseTodos, reconstructTodos, STATUS_KEY, stripLines, TOOL_NAME, type Todo } from "../pi/extensions/lib/tasks.ts";
+import { counts, describeTodos, listing, MAX_TODOS, parseReport, parseTodos, reconstructTodos, STALE_AFTER_MS, STATUS_KEY, staleNote, stripLines, TOOL_NAME, type Todo } from "../pi/extensions/lib/tasks.ts";
 import tasksExtension from "../pi/extensions/toriel-tasks.ts";
 
 const t = (content: string, status: Todo["status"] = "pending", activeForm?: string): Todo => ({ content, status, ...(activeForm ? { activeForm } : {}) });
@@ -83,6 +83,29 @@ describe("stripLines", () => {
     assert.equal(lines.length, 5);
     assert.equal(lines[0], "tasks 0/7 done");
     assert.match(lines[4] ?? "", /\+4 more/);
+  });
+});
+
+describe("a stale list (ticket 251)", () => {
+  const open = [t("a", "in_progress"), t("b")];
+
+  it("says nothing until five minutes of work have passed, then how long", () => {
+    assert.equal(staleNote(0), "");
+    assert.equal(staleNote(STALE_AFTER_MS - 1), "");
+    assert.equal(staleNote(STALE_AFTER_MS), "not updated 5m");
+    assert.equal(staleNote(12 * 60_000 + 30_000), "not updated 12m");
+    assert.equal(staleNote(65 * 60_000), "not updated 1h05m");
+  });
+
+  it("puts it in the strip's header, and leaves a fresh or finished list alone", () => {
+    assert.equal(stripLines(open, 6, 12 * 60_000)[0], "tasks 0/2 done - not updated 12m");
+    assert.equal(stripLines(open, 6, 1000)[0], "tasks 0/2 done");
+    assert.deepEqual(stripLines([t("a", "completed")], 6, 99 * 60_000), ["tasks 1/1 done"]);
+  });
+
+  it("puts it in /tasks too", () => {
+    assert.equal(listing(open, 7 * 60_000)[0], "Tasks: 0 of 2 done - not updated 7m");
+    assert.equal(listing(open)[0], "Tasks: 0 of 2 done");
   });
 });
 

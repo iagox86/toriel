@@ -118,6 +118,25 @@ describe("sessionMetas", () => {
     assert.equal(asOther?.attachedElsewhere, true);
   });
 
+  it("says since when an open task list has gone unchanged, only while the session is working (ticket 251)", () => {
+    const reg = new SessionRegistry();
+    const s = reg.create("/w");
+    s.child = {} as never;
+    s.tasks = [{ content: "a", status: "in_progress" }, { content: "b", status: "pending" }];
+    s.tasksAt = 1000;
+    const stale = () => sessionMetas(reg, new Presence(), new Map(), fakeSocket().socket)[0]?.tasksStaleSince;
+    assert.equal(stale(), undefined, "an idle session is never stale");
+    s.streaming = true;
+    s.runSince = 400;
+    assert.equal(stale(), 1000, "the later of the last write and the run start");
+    s.runSince = 5000;
+    assert.equal(stale(), 5000, "a list written before this run counts from the run's start, not from an hour ago");
+    s.tasks = [{ content: "a", status: "completed" }];
+    assert.equal(stale(), undefined, "a finished list is never stale");
+    s.tasks = undefined;
+    assert.equal(stale(), undefined);
+  });
+
   it("shows the newest usage report of the session's provider", () => {
     const reg = new SessionRegistry();
     reg.create("/w").provider = "zai";

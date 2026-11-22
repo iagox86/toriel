@@ -529,6 +529,7 @@ export class ChildManager {
       log(`session ${s.id}: ignored a malformed toriel-tasks record`);
     } else {
       s.tasks = todos.length > 0 ? todos : undefined;
+      s.tasksAt = Date.now();
       this.hub.broadcastSessions();
     }
     return true;
@@ -777,9 +778,11 @@ export class ChildManager {
     }
     if (type === "agent_start") {
       s.streaming = true;
+      s.runSince = Date.now();
       this.hub.broadcastSessions();
     } else if (type === "agent_settled") {
       s.streaming = false;
+      s.runSince = undefined;
       this.onSettled?.(s);
       // no tool can still be asking once the turn is over
       this.clearDialog(s);

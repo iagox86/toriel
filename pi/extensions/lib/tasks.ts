@@ -104,16 +104,30 @@ export function parseReport(text: unknown): Todo[] | undefined {
   }
 }
 
+/** A list nobody has touched for this long, while the session works, is drawn as stale (ticket 251). */
+export const STALE_AFTER_MS = 5 * 60_000;
+
+/** "not updated 12m" (or "1h05m") once `staleMs` of working time has passed since the list changed; "" before that. */
+export function staleNote(staleMs: number): string {
+  if (!(staleMs >= STALE_AFTER_MS)) {
+    return "";
+  }
+  const minutes = Math.floor(staleMs / 60_000);
+  return `not updated ${minutes >= 60 ? `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, "0")}m` : `${minutes}m`}`;
+}
+
 /**
  * The strip above the editor: a header with the count, the task in progress, then what is next, `max` lines at most. Finished
- * tasks are only counted (they are the past), and a list that is all done is the header alone. No tasks, no lines.
+ * tasks are only counted (they are the past), and a list that is all done is the header alone. No tasks, no lines. `staleMs` is how
+ * long the session has worked since the list last changed: past STALE_AFTER_MS the header says so.
  */
-export function stripLines(todos: readonly Todo[], max = 6): string[] {
+export function stripLines(todos: readonly Todo[], max = 6, staleMs = 0): string[] {
   if (todos.length === 0) {
     return [];
   }
   const c = counts(todos);
-  const out = [`tasks ${c.done}/${c.total} done`];
+  const stale = c.done < c.total ? staleNote(staleMs) : "";
+  const out = [`tasks ${c.done}/${c.total} done${stale ? ` - ${stale}` : ""}`];
   if (c.done === c.total) {
     return out;
   }
@@ -130,10 +144,11 @@ export function stripLines(todos: readonly Todo[], max = 6): string[] {
 }
 
 /** The whole list, for /tasks. */
-export function listing(todos: readonly Todo[]): string[] {
+export function listing(todos: readonly Todo[], staleMs = 0): string[] {
   if (todos.length === 0) {
     return ["No tasks. The agent keeps a list when it works on something with several steps."];
   }
   const c = counts(todos);
-  return [`Tasks: ${c.done} of ${c.total} done`, "", ...todos.map((t) => `${t.status === "completed" ? "✓" : t.status === "in_progress" ? "▸" : "○"} ${t.content}`)];
+  const stale = c.done < c.total ? staleNote(staleMs) : "";
+  return [`Tasks: ${c.done} of ${c.total} done${stale ? ` - ${stale}` : ""}`, "", ...todos.map((t) => `${t.status === "completed" ? "✓" : t.status === "in_progress" ? "▸" : "○"} ${t.content}`)];
 }

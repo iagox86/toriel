@@ -51,7 +51,7 @@ import { SwitcherActions } from "./switcher-actions.ts";
 import { killServer } from "./lifecycle.ts";
 import { compareDaemon, describeDaemon, type DaemonVerdict, type Hello } from "./version-check.ts";
 import { selectListTheme } from "./pi-theme.ts";
-import { stripLines as taskStripLines } from "../pi/extensions/lib/tasks.ts";
+import { STALE_AFTER_MS, stripLines as taskStripLines } from "../pi/extensions/lib/tasks.ts";
 import {
   displayName,
   sessionKey,
@@ -1074,7 +1074,9 @@ class Controller {
     const parentName = rel ? this.nameOfSession(rel.parentId) ?? rel.parentName : undefined;
     this.banner.setText(rel && parentName && !this.switching.isOpen ? accent(truncateToWidth(` ${bannerText(rel, parentName)}`, width)) : "");
     // the agent's task list (ticket 228) over the schedules: the header and what is queued dim, the task under way in the accent
-    const taskRows = meta?.tasks && !this.switching.isOpen ? taskStripLines(meta.tasks).map((l) => (l.startsWith("▸") ? accent : dim)(truncateToWidth(` ${l}`, width))) : [];
+    // a list that has not changed for a while the session has been working is drawn without the accent (ticket 251)
+    const staleMs = meta?.tasksStaleSince ? Date.now() - meta.tasksStaleSince : 0;
+    const taskRows = meta?.tasks && !this.switching.isOpen ? taskStripLines(meta.tasks, 6, staleMs).map((l) => (l.startsWith("▸") && staleMs < STALE_AFTER_MS ? accent : dim)(truncateToWidth(` ${l}`, width))) : [];
     const scheduleRows = meta?.scheduleLines?.length && !this.switching.isOpen ? meta.scheduleLines.map((l) => dim(truncateToWidth(` ${l}`, width))) : [];
     this.scheduleStrip.setText([...taskRows, ...scheduleRows].join("\n"));
     this.childBorder = !!rel && !this.switching.isOpen;

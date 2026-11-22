@@ -699,7 +699,8 @@ export class SessionCommands {
 
   /** /tasks (ticket 228): the agent's task list as the daemon last had it. Reads the session list only, so it does not wake a sleeping session. */
   private tasks(): void {
-    this.h.infoPanel.show(taskListing(this.viewedMeta()?.tasks ?? []).join("\n"));
+    const meta = this.viewedMeta();
+    this.h.infoPanel.show(taskListing(meta?.tasks ?? [], meta?.tasksStaleSince ? Date.now() - meta.tasksStaleSince : 0).join("\n"));
     this.h.tui.requestRender();
   }
 
