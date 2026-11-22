@@ -21,7 +21,7 @@ interface Boundary {
 }
 interface Pi {
   on(event: "session_start" | "session_tree", handler: (event: unknown, ctx: Ctx) => void): unknown;
-  on(event: "agent_start", handler: () => void): unknown;
+  on(event: "before_agent_start", handler: () => void): unknown;
   on(event: "tool_result", handler: (event: ToolResultEvent) => { content: Array<{ type: string; text?: string }> } | undefined): unknown;
   on(event: "agent_before_settle", handler: (event: Boundary) => { entries: Array<Record<string, unknown>>; continue: boolean } | undefined): unknown;
   registerTool(tool: {
@@ -66,7 +66,9 @@ export default function (pi: Pi): void {
   };
   pi.on("session_start", sync);
   pi.on("session_tree", sync);
-  pi.on("agent_start", () => nudges.runStarted());
+  // a user prompt begins a run: the one-more-turn allowance is back. Not `agent_start`: pi also emits that for the turn a
+  // reminder buys itself (agent.continue()), and resetting then would hand an ignore-the-reminder model a turn every settle.
+  pi.on("before_agent_start", () => nudges.runStarted());
   // every other tool's result carries the reminder when it is time; a failure here never changes a tool result
   pi.on("tool_result", (event) => {
     try {

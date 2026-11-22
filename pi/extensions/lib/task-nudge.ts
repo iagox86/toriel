@@ -50,7 +50,11 @@ export class TaskNudges {
     return reminderText(this.todos);
   }
 
-  /** A new run (a prompt from the user) begins: the one-more-turn allowance is back. */
+  /**
+   * A new run (a prompt from the user) begins: the one-more-turn allowance is back. Wire it to `before_agent_start`, not
+   * `agent_start`: pi emits `agent_start` again for the turn this reminder buys itself (`agent.continue()`), and a model that
+   * ignores the reminder would otherwise be handed a new turn every time it settles.
+   */
   runStarted(): void {
     this.endOfRunAsked = false;
   }

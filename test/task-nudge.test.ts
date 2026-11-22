@@ -130,7 +130,7 @@ describe("toriel-tasks extension reminders", () => {
   it("asks for another turn before the run ends, as a hidden entry, once", async () => {
     const { handlers, tool, ctx, result } = load();
     await tool.execute("c1", { todos: [{ content: "a", status: "in_progress" }] }, undefined, undefined, ctx);
-    handlers.get("agent_start")?.({}, ctx);
+    handlers.get("before_agent_start")?.({}, ctx);
     for (let i = 0; i < END_OF_RUN_CALLS; i++) {
       result("bash");
     }
@@ -140,6 +140,25 @@ describe("toriel-tasks extension reminders", () => {
     assert.equal(first?.entries[0]?.display, false);
     assert.match(String(first?.entries[0]?.content), /todo_write/);
     assert.equal(handlers.get("agent_before_settle")?.({ outcome: "completed" }, ctx), undefined);
+  });
+
+  it("does not hand out the allowance again when pi re-emits agent_start for the turn a reminder bought (ticket 250)", async () => {
+    const { handlers, tool, ctx, result } = load();
+    await tool.execute("c1", { todos: [{ content: "a", status: "in_progress" }] }, undefined, undefined, ctx);
+    handlers.get("before_agent_start")?.({}, ctx);
+    for (let i = 0; i < END_OF_RUN_CALLS; i++) {
+      result("bash");
+    }
+    assert.equal((handlers.get("agent_before_settle")?.({ outcome: "completed" }, ctx) as { continue: boolean } | undefined)?.continue, true);
+    // pi fires agent_start again for the continued turn (runAgentLoopContinue); the settle after it must stay silent
+    handlers.get("agent_start")?.({}, ctx);
+    for (let i = 0; i < END_OF_RUN_CALLS + 4; i++) {
+      result("bash");
+    }
+    assert.equal(handlers.get("agent_before_settle")?.({ outcome: "completed" }, ctx), undefined, "one nudge per run, however many turns it lasts");
+    // and the next user prompt gets a fresh allowance
+    handlers.get("before_agent_start")?.({}, ctx);
+    assert.ok((handlers.get("agent_before_settle")?.({ outcome: "completed" }, ctx) as { continue: boolean } | undefined)?.continue, "a new run nudges again");
   });
 
   it("does nothing with no list, and never throws into pi", () => {
