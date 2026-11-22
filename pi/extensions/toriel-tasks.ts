@@ -1,15 +1,29 @@
 // toriel tasks (ticket 228): a task list the agent keeps while it works, and toriel shows above the editor. The agent sends the whole
 // list each time (todo_write), so the list is the last call; it lives in that call's tool result, so fork, rewind and resume all see
 // the list as of their point in the conversation (lib/tasks.ts). Each change, and each session start, is reported to toriel as a
-// setStatus record under "toriel-tasks". Runs only in children the toriel daemon starts (TORIEL_CHILD).
+// setStatus record under "toriel-tasks". A model that stops updating the list is reminded (lib/task-nudge.ts, ticket 250): after a
+// run of tool calls the next tool result carries a reminder, and a run about to end with the list out of date gets one more turn.
+// Runs only in children the toriel daemon starts (TORIEL_CHILD).
+import { TaskNudges } from "./lib/task-nudge.ts";
 import { counts, describeTodos, MAX_TODOS, parseTodos, reconstructTodos, STATUS_KEY, type TasksReport, TOOL_NAME, type Todo } from "./lib/tasks.ts";
 
 interface Ctx {
   sessionManager?: { getBranch(): Array<{ type?: string; message?: { role?: string; toolName?: string; details?: unknown } }> };
   ui?: { setStatus?(key: string, text: string | undefined): void };
 }
+interface ToolResultEvent {
+  toolName?: string;
+  content?: Array<{ type: string; text?: string }>;
+}
+/** What pi hands a handler at the end of a run. */
+interface Boundary {
+  outcome?: string;
+}
 interface Pi {
   on(event: "session_start" | "session_tree", handler: (event: unknown, ctx: Ctx) => void): unknown;
+  on(event: "agent_start", handler: () => void): unknown;
+  on(event: "tool_result", handler: (event: ToolResultEvent) => { content: Array<{ type: string; text?: string }> } | undefined): unknown;
+  on(event: "agent_before_settle", handler: (event: Boundary) => { entries: Array<Record<string, unknown>>; continue: boolean } | undefined): unknown;
   registerTool(tool: {
     name: string;
     label: string;
@@ -32,7 +46,9 @@ export default function (pi: Pi): void {
   if (!process.env.TORIEL_CHILD) {
     return;
   }
+  const nudges = new TaskNudges();
   const report = (ctx: Ctx | undefined, todos: readonly Todo[]): void => {
+    nudges.setList(todos);
     try {
       const record: TasksReport = { v: 1, todos: [...todos] };
       ctx?.ui?.setStatus?.(STATUS_KEY, JSON.stringify(record));
@@ -50,6 +66,25 @@ export default function (pi: Pi): void {
   };
   pi.on("session_start", sync);
   pi.on("session_tree", sync);
+  pi.on("agent_start", () => nudges.runStarted());
+  // every other tool's result carries the reminder when it is time; a failure here never changes a tool result
+  pi.on("tool_result", (event) => {
+    try {
+      const reminder = nudges.afterToolCall(event?.toolName);
+      return reminder === undefined ? undefined : { content: [...(event.content ?? []), { type: "text", text: `\n\n${reminder}` }] };
+    } catch {
+      return undefined;
+    }
+  });
+  // the run is about to end with the list out of date: one more turn, once per run, so "all done" gets recorded
+  pi.on("agent_before_settle", (event) => {
+    try {
+      const reminder = nudges.beforeRunEnds(event?.outcome === "aborted");
+      return reminder === undefined ? undefined : { entries: [{ type: "custom_message", customType: "toriel-task-reminder", content: reminder, display: false }], continue: true };
+    } catch {
+      return undefined;
+    }
+  });
   pi.registerTool({
     name: TOOL_NAME,
     label: "Tasks",
