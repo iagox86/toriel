@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import type { Host } from "../src/host.ts";
 import { addProvider, apiKeyValue, fetchModels, keyKind, listProviders, parseModelList, removeProvider, resolveForProbe, setProviderKey } from "../src/providers.ts";
 import { SessionCommands } from "../src/session-commands.ts";
+import { until } from "./helpers.ts";
 
 const SECRET = "sk-SECRET-key-123";
 const NOW = new Date(2026, 10, 15, 9, 30, 5);
@@ -212,7 +213,8 @@ describe("/provider add", () => {
     try {
       const f = fakeHost(SECRET);
       new SessionCommands(f.host).run(`/provider add home ${s.url}`);
-      await settle();
+      // the whole chain: key prompt, HTTP to the stub, models.json written, reload requested, notice shown
+      await until(() => fs.existsSync(file) && f.requests.some((r) => r.type === "reload") && f.notices.some((n) => /2 models/.test(n)));
       assert.deepEqual(f.asked, ["API key for home"]);
       assert.deepEqual(readJson().providers.home, { baseUrl: s.url, api: "openai-completions", apiKey: SECRET, models: [{ id: "open/one", contextWindow: 64000, maxTokens: 8000 }, { id: "open/two" }] });
       assert.ok(s.auth.includes(`Bearer ${SECRET}`), "the key was used to ask");
@@ -229,8 +231,13 @@ describe("/provider add", () => {
     try {
       const f = fakeHost(SECRET);
       new SessionCommands(f.host).run(`/provider add work-bifrost ${s.url}/v1`);
-      await settle();
-      await new Promise((r) => setTimeout(r, 500));
+      await until(() => {
+        try {
+          return Boolean(readJson().providers["work-bifrost"]?.models);
+        } catch {
+          return false; // not written yet
+        }
+      });
       const models = readJson().providers["work-bifrost"]?.models as Array<Record<string, unknown>>;
       assert.deepEqual(
         models.map((m) => m.id),
