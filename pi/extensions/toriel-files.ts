@@ -36,7 +36,8 @@ interface Pi {
 /** Files bigger than this get no edit hint (the hint reads the whole file). */
 const HINT_MAX_BYTES = 4 * 1024 * 1024;
 
-const EDIT_SCHEMA = {
+/** pi's edit parameters plus replaceAll; test/pi-smoke.test.ts holds it to pi's own schema, so a pi bump that changes the edit surface fails the suite (ticket 241). */
+export const EDIT_SCHEMA = {
   type: "object",
   properties: {
     path: { type: "string", description: "Path to the file to edit (relative or absolute)" },

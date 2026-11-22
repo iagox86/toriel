@@ -46,6 +46,8 @@ export interface StartOptions {
   appendSystemPrompt?: string;
   /** Launch a new session as this agent profile (a respawn finds its profile on its own). */
   agent?: AgentProfile;
+  /** provider/id the user chose for a new session (/new -m); wins over the profile's model and the settings' default. A resumed session keeps its file's. */
+  model?: string;
   /** Started by another session's toriel_agent call: its lineage is recorded only after it is up, so the start says so (ticket 232). */
   subagent?: boolean;
 }
@@ -209,7 +211,10 @@ export class ChildManager {
     const agent = opts.agent ?? profileOfSession(fileId) ?? s.agent;
     s.agent = agent;
     // a model tier (model: cheap) becomes a provider/id here, from the settings as they are now; only a new session takes the model, a resumed one keeps what its file says
-    const launched = agent && isNew ? withResolvedModel(agent, loadSettings().settings.agentLanes, log) : agent;
+    const resolved = agent && isNew && !opts.model ? withResolvedModel(agent, loadSettings().settings.agentLanes, log) : agent;
+    // the user's own choice replaces the profile's (a tier is then not resolved, nor reported as unset)
+    const chosen = isNew ? opts.model : undefined;
+    const launched = resolved && chosen ? { ...resolved, model: chosen } : resolved;
     if (launched) {
       // a session the user drives (no parent) keeps the task list and plan mode whatever its profile lists (ticket 232)
       const driven = !opts.subagent && subagentDepth(s.sessionId, parentMap(loadLineage())) === 0;
@@ -229,10 +234,13 @@ export class ChildManager {
     if (isNew && cfg.thinking && !agent?.thinking) {
       args.push("--thinking", cfg.thinking);
     }
-    if (isNew && cfg.model && !launched?.model) {
+    if (chosen && !launched) {
+      args.push("--model", chosen);
+    }
+    if (isNew && cfg.model && !launched?.model && !chosen) {
       args.push("--model", cfg.model);
     }
-    if (isNew && cfg.provider && !launched?.model) {
+    if (isNew && cfg.provider && !launched?.model && !chosen) {
       args.push("--provider", cfg.provider);
     }
     return { args, cfg };

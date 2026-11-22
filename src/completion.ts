@@ -11,3 +11,16 @@ export function matching(choices: readonly string[], typed: string): string[] {
   }
   return choices.filter((c) => words.every((w) => c.toLowerCase().includes(w)));
 }
+
+/**
+ * After "... -m " or "--model ": the models containing what was typed. The value replaces the whole line
+ * typed after the command, like the other completers (so the flags before it are kept).
+ */
+export function modelFlagCompletions(typed: string, models: readonly string[]): string[] {
+  const m = /^(.*?(?:^|\s)(?:-m|--model)[ =])(\S*)$/.exec(typed);
+  if (!m) {
+    return [];
+  }
+  const [, head = "", prefix = ""] = m;
+  return models.filter((c) => c.toLowerCase().includes(prefix.toLowerCase())).map((c) => `${head}${c}`);
+}
