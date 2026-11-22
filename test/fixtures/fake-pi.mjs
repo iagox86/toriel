@@ -461,6 +461,11 @@ async function handle(cmd) {
       persist(user);
       out({ type: "message_end", message: user });
       await sleep(Number(process.env.FAKE_PI_RUN_MS ?? 50));
+      if (cmd.message.includes("[again]")) {
+        // like pi: agent_start is emitted again for a continued turn inside one run (the review of ticket 251)
+        await sleep(Number(process.env.FAKE_PI_AGAIN_MS ?? 250));
+        out({ type: "agent_start" });
+      }
       // "[turns N]" makes N-1 tool-call turns before the answer; "[hang]" runs until aborted (subagent limit tests)
       aborted = false;
       const turns = Number(/\[turns (\d+)\]/.exec(cmd.message)?.[1] ?? 1);

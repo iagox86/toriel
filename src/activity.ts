@@ -41,7 +41,11 @@ export function reduceActivity(state: ActivityState, ev: Record<string, unknown>
   const isAssistant = (ev.message as { role?: string } | undefined)?.role === "assistant";
   switch (ev.type as string) {
     case "agent_start":
-      set("working");
+      // pi emits agent_start again for every continued turn in one run (a task reminder's, a queued message's, a retry's);
+      // the elapsed timer keeps the busy period's original start and only a run that starts from idle opens a fresh one
+      if (!state.activity) {
+        set("working");
+      }
       break;
     case "agent_settled":
       state.activity = undefined;

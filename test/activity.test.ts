@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { type ActivityState, activityLines, formatElapsed, reduceActivity } from "../src/activity.ts";
+import { type Activity, type ActivityState, activityLines, formatElapsed, reduceActivity } from "../src/activity.ts";
 
 const fresh = (): ActivityState => ({ queue: [] });
 
@@ -18,6 +18,22 @@ describe("activity", () => {
     assert.equal(s.activity?.since, 1000, "elapsed counts from the start of the run, not the phase");
     reduceActivity(s, { type: "agent_settled" }, 5000);
     assert.equal(s.activity, undefined);
+  });
+
+  it("keeps the elapsed start when pi re-emits agent_start for a continued turn inside one run", () => {
+    const s = fresh();
+    const act = (): Activity | undefined => s.activity; // reads after TS narrows the settled assert to undefined
+    reduceActivity(s, { type: "agent_start" }, 1000);
+    reduceActivity(s, { type: "tool_execution_start", toolName: "bash" }, 2000);
+    // a continue's agent_start (the turn a task reminder bought, a queued message, a retry): the same busy period
+    reduceActivity(s, { type: "agent_start" }, 30_000);
+    assert.equal(act()?.label, "running bash");
+    assert.equal(act()?.since, 1000, "no restart of the timer mid-run");
+    reduceActivity(s, { type: "agent_settled" }, 31_000);
+    assert.equal(s.activity, undefined);
+    reduceActivity(s, { type: "agent_start" }, 32_000);
+    assert.equal(act()?.label, "working", "a run that starts from idle opens a fresh one");
+    assert.equal(act()?.since, 32_000, "a run that starts from idle opens a fresh one");
   });
 
   it("shows retry and compaction as activity, not a hang", () => {

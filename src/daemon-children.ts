@@ -777,9 +777,13 @@ export class ChildManager {
       log(`session ${s.id} event: queue_update steering=${steering.length}`);
     }
     if (type === "agent_start") {
-      s.streaming = true;
-      s.runSince = Date.now();
-      this.hub.broadcastSessions();
+      // a continued turn (the one a task reminder buys, a queued message, a retry) re-emits agent_start mid-run: it is the
+      // same busy period, so the stale-list clock (and meta, which nothing here changes) keeps the run's original start (ticket 251)
+      if (!s.streaming) {
+        s.streaming = true;
+        s.runSince = Date.now();
+        this.hub.broadcastSessions();
+      }
     } else if (type === "agent_settled") {
       s.streaming = false;
       s.runSince = undefined;
