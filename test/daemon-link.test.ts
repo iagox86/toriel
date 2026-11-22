@@ -148,6 +148,15 @@ describe("DaemonLink", () => {
     link.close();
   });
 
+  it("fails a request at once when there is no socket to send it on, instead of after the timeout (ticket 249)", async () => {
+    const { hooks: h } = hooks();
+    const link = new DaemonLink(h, BUILD); // never opened: no socket
+    const started = Date.now();
+    await assert.rejects(link.request({ type: "model", session: 1 }), /the daemon is not connected/);
+    assert.ok(Date.now() - started < 1000);
+    assert.equal(link.send({ type: "list" }), false);
+  });
+
   it("does not reconnect after close", async () => {
     const { hooks: h, seen } = hooks();
     const link = new DaemonLink(h, BUILD);

@@ -65,7 +65,8 @@ export interface Host {
   forgetLineage(): void;
   /** Undo echoPrompt when the send failed. */
   dropEcho(key: string, text: string): void;
-  notify(message: string): void;
+  /** A one-line message on the status line, for `ms` (default 4 seconds). */
+  notify(message: string, ms?: number): void;
   /**
    * Ask for a secret (an API key, a token): the chat box shows a dot per character, the text never reaches the history, the transcript or
    * the daemon. Resolves to what was typed, or undefined when it was cancelled (esc) or left empty.

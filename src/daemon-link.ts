@@ -5,6 +5,7 @@
 import * as net from "node:net";
 import { SOCK } from "./config.ts";
 import { ensureDaemon } from "./lifecycle.ts";
+import { log } from "./log.ts";
 import { type BuildInfo, type ClientCommand, type DaemonMessage, type DistributiveOmit, encodeLine, LineSplitter } from "./shared.ts";
 import { compareDaemon, type DaemonVerdict, type Hello } from "./version-check.ts";
 
@@ -181,18 +182,19 @@ export class DaemonLink {
     this.hooks.gaveUp();
   }
 
-  send(msg: Record<string, unknown>): void {
-    if (!this.socket) {
+  send(msg: Record<string, unknown>): boolean {
+    if (!this.socket || this.socket.destroyed) {
       if (this.down) {
         this.hooks.notify("daemon is not connected - reconnecting");
       }
-      return;
+      return false;
     }
     if (this.blocked && !ALLOWED_WHEN_BLOCKED.has(String(msg.type))) {
       this.hooks.notify(`not sent: ${this.blocked}`);
-      return;
+      return false;
     }
     this.socket.write(encodeLine(msg));
+    return true;
   }
 
   /** Send a command with response correlation. */
@@ -203,10 +205,17 @@ export class DaemonLink {
     const id = `req-${++this.reqSeq}`;
     return new Promise((resolve, reject) => {
       this.responses.set(id, { resolve, reject });
-      this.send({ ...cmd, id });
+      // a request that never left (no socket, a dead one) fails now, not after the timeout, and says so in the log
+      if (!this.send({ ...cmd, id })) {
+        this.responses.delete(id);
+        log(`controller: ${cmd.type} ${id} not sent (${this.socket ? "socket destroyed" : "no socket"})`);
+        reject(new Error("the daemon is not connected"));
+        return;
+      }
       setTimeout(() => {
         if (this.responses.has(id)) {
           this.responses.delete(id);
+          log(`controller: ${cmd.type} ${id} timed out after ${timeoutMs}ms`);
           reject(new Error("daemon request timed out"));
         }
       }, timeoutMs).unref?.();

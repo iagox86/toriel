@@ -135,7 +135,7 @@ describe("permission prompt: toriel's own layout", () => {
     assert.deepEqual(t.sent, [t.sent[0]], "only the No went to pi; the stalled grant answer never does");
   });
 
-  it("answers once when the same row is pressed twice quickly (two stores in flight)", async () => {
+  it("answers once when the same row is pressed twice quickly, and says the second press is waiting", async () => {
     const t = setup({ path: true });
     let release!: (v: unknown) => void;
     const gate = new Promise((resolve) => (release = resolve));
@@ -144,12 +144,54 @@ describe("permission prompt: toriel's own layout", () => {
       return gate.then(() => ({ echo: "granted" }));
     };
     t.sa.dialogKeys(t.view, "3");
-    t.sa.dialogKeys(t.view, "3"); // both stores in flight before either completes
+    t.sa.dialogKeys(t.view, "3"); // the first store is still in flight
+    assert.match(t.notices.at(-1) ?? "", /still keeping the permission grant/);
     release(undefined);
     await settle();
-    assert.equal(t.requests.length, 2, "both stores were armed");
+    assert.equal(t.requests.length, 1, "the grant is stored once");
     const sent = t.sent.filter((cmd) => (cmd.response as { value?: unknown } | undefined)?.value === "Yes");
     assert.equal(sent.length, 1, "one Yes reaches pi");
+  });
+
+  it("says why a key did nothing instead of dropping it silently (ticket 249)", () => {
+    const early = setup({ shownAgoMs: 100 });
+    assert.equal(early.sa.dialogKeys(early.view, "2"), true);
+    assert.match(early.notices.at(-1) ?? "", /held for a moment after a prompt appears/);
+    assert.deepEqual(early.sent, []);
+
+    const missing = setup();
+    assert.equal(missing.sa.dialogKeys(missing.view, "9"), true);
+    assert.match(missing.notices.at(-1) ?? "", /no row 9 \(this prompt has 5\)/);
+    assert.deepEqual(missing.sent, []);
+
+    const elsewhere = setup();
+    (elsewhere.sa as unknown as { h: { metaForPath(k: string): unknown } }).h.metaForPath = () => ({ id: 4, attachedToYou: false });
+    assert.equal(elsewhere.sa.dialogKeys(elsewhere.view, "\r"), false);
+    assert.match(elsewhere.notices.at(-1) ?? "", /only be answered from the controller attached/);
+  });
+
+  it("does not comment on keys that were never answers (typing a letter)", () => {
+    const t = setup();
+    t.sa.dialogKeys(t.view, "x");
+    assert.deepEqual(t.notices, []);
+  });
+
+  it("keeps the prompt open and says how to retry when the grant store fails, for longer than a flash", async () => {
+    const t = setup({ path: true, fail: true });
+    const durations: Array<number | undefined> = [];
+    (t.sa as unknown as { h: { notify(m: string, ms?: number): void } }).h.notify = (m, ms) => {
+      t.notices.push(m);
+      durations.push(ms);
+    };
+    t.sa.dialogKeys(t.view, "3");
+    await settle();
+    assert.match(t.notices.at(-1) ?? "", /press enter to try again/);
+    assert.ok((durations.at(-1) ?? 0) >= 8000);
+    assert.ok(t.view.dialog, "the dialog stays up");
+    assert.deepEqual(t.sent, [], "pi was not answered");
+    t.sa.dialogKeys(t.view, "3");
+    await settle();
+    assert.equal(t.requests.length, 2, "a second press tries the store again");
   });
 
   it("works from the highlighted row with enter", async () => {
