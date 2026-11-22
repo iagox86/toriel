@@ -170,10 +170,19 @@ describe("permission prompt: toriel's own layout", () => {
     assert.match(elsewhere.notices.at(-1) ?? "", /only be answered from the controller attached/);
   });
 
-  it("does not comment on keys that were never answers (typing a letter)", () => {
+  it("does not comment on keys that were never answers (typing a letter, y or n on a select)", () => {
     const t = setup();
-    t.sa.dialogKeys(t.view, "x");
+    for (const key of ["x", "y", "n"]) {
+      t.sa.dialogKeys(t.view, key);
+    }
     assert.deepEqual(t.notices, []);
+  });
+
+  it("does treat y and n as answers on a confirm, so an unattached controller says why", () => {
+    const t = setup({ base: { id: "c1", method: "confirm", title: "Run it?" } });
+    (t.sa as unknown as { h: { metaForPath(k: string): unknown } }).h.metaForPath = () => ({ id: 4, attachedToYou: false });
+    t.sa.dialogKeys(t.view, "y");
+    assert.match(t.notices.at(-1) ?? "", /only be answered from the controller attached/);
   });
 
   it("keeps the prompt open and says how to retry when the grant store fails, for longer than a flash", async () => {

@@ -239,7 +239,7 @@ export class SwitcherActions {
   /** Spawn a session; `firstMessage` is prompted once it is entered. */
   async newSession(firstMessage?: string, name?: string, cwd = this.defaultCwd, agent?: string, model?: string): Promise<void> {
     try {
-      const data = (await this.h.request({ type: "spawn", cwd, name: name ? this.h.uniqueSessionName(name) : name, agent, ...(model ? { model } : {}) })) as { sessionId?: number };
+      const data = (await this.h.request({ type: "spawn", cwd, name: name ? this.h.uniqueSessionName(name) : name, agent, ...(model !== undefined ? { model } : {}) })) as { sessionId?: number };
       if (typeof data?.sessionId === "number") {
         const meta = this.h.sessions.get(data.sessionId);
         if (meta) {

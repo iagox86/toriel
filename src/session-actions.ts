@@ -35,8 +35,8 @@ interface Outgoing {
 /** The daemon stops a command after 10 minutes; wait a little longer than that for its answer. */
 const BANG_TIMEOUT_MS = 11 * 60_000;
 
-/** A key that would answer a permission prompt: enter, a row number, or y/n. */
-const isAnswerKey = (data: string): boolean => matchesKey(data, Key.enter) || /^[1-9yn]$/.test(data);
+/** A key that would answer a prompt: enter or a row number, and y/n only on a confirm (on a select they are just typing). */
+const isAnswerKey = (dialog: DialogRequest, data: string): boolean => matchesKey(data, Key.enter) || /^[1-9]$/.test(data) || (dialog.method === "confirm" && /^[yn]$/.test(data));
 
 export class SessionActions {
   /** Armed: prompting a recently-modified external session (fork warning). */
@@ -403,7 +403,7 @@ export class SessionActions {
     // attached to the parent (tickets 121, 122: two controllers on one parent must not both answer)
     const speaker = ownerKey === this.h.viewing ? meta : this.h.metaForPath(this.h.viewing);
     if (!meta || !speaker?.attachedToYou) {
-      if (isAnswerKey(data)) {
+      if (isAnswerKey(dialog, data)) {
         this.refused(dialog, "this controller is not attached to the session", "this prompt can only be answered from the controller attached to its session");
       }
       return false;
@@ -436,7 +436,7 @@ export class SessionActions {
     }
     const fields = dialogAnswer(dialog, raw, panel.highlighted);
     if (!fields) {
-      if (isAnswerKey(data)) {
+      if (isAnswerKey(dialog, data)) {
         const rows = (dialog.options ?? []).length;
         const digit = /^[1-9]$/.test(data);
         this.refused(
