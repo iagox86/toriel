@@ -42,9 +42,26 @@ export class CompletionSources {
     }
   }
 
-  /** Models the viewed session can switch to. */
-  models(): Promise<string[]> {
-    return this.lookup("models", LONG_MS, () => "", async (m) => ((await this.h.request({ type: "model", session: m.id })) as { models: string[] }).models, []);
+  /** Models the viewed session can switch to; with the switcher up (/new -m), those of any running session, since pi's list is the same for all of them. */
+  async models(): Promise<string[]> {
+    if (this.viewed()) {
+      return this.lookup("models", LONG_MS, () => "", async (m) => ((await this.h.request({ type: "model", session: m.id })) as { models: string[] }).models, []);
+    }
+    const any = [...this.h.sessions.values()].find((m) => m.active);
+    if (!any) {
+      return [];
+    }
+    const hit = this.cache.get("models-any");
+    if (hit && hit.key === String(any.id) && Date.now() - hit.at < LONG_MS) {
+      return hit.value as string[];
+    }
+    try {
+      const value = ((await this.h.request({ type: "model", session: any.id })) as { models: string[] }).models;
+      this.cache.set("models-any", { key: String(any.id), at: Date.now(), value });
+      return value;
+    } catch {
+      return [];
+    }
   }
 
   /** Thinking levels the viewed session's model supports; keyed by model too, since /model changes them. */

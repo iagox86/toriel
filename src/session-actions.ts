@@ -8,6 +8,7 @@ import { answerValue, type DialogRequest, dialogAnswer, editablePattern, grantGu
 import { isPlainLeft } from "./editor.ts";
 import { firstMessageLabel, fmtAge } from "./format.ts";
 import { TRASH_DIR } from "./config.ts";
+import { log } from "./log.ts";
 import { latestClearBackup, type RewindTarget, rewindTargets } from "./rewind.ts";
 import { type CodeSummary, codePlanFor, summarize } from "./rewind-code.ts";
 import { messagesFromFile } from "./transcript.ts";
@@ -34,6 +35,9 @@ interface Outgoing {
 /** The daemon stops a command after 10 minutes; wait a little longer than that for its answer. */
 const BANG_TIMEOUT_MS = 11 * 60_000;
 
+/** A key that would answer a prompt: enter or a row number, and y/n only on a confirm (on a select they are just typing). */
+const isAnswerKey = (dialog: DialogRequest, data: string): boolean => matchesKey(data, Key.enter) || /^[1-9]$/.test(data) || (dialog.method === "confirm" && /^[yn]$/.test(data));
+
 export class SessionActions {
   /** Armed: prompting a recently-modified external session (fork warning). */
   armedFork: string | null = null;
@@ -47,6 +51,8 @@ export class SessionActions {
   private lastEsc = 0;
   /** Dialogs that already got a ui_response; an in-flight grant store must not answer one a second time. */
   private readonly answersSent = new WeakSet<DialogRequest>();
+  /** Dialogs whose grant is being stored right now: a second press waits for the first (ticket 249). */
+  private readonly storing = new WeakSet<DialogRequest>();
 
   constructor(host: Host) {
     this.h = host;
@@ -397,6 +403,9 @@ export class SessionActions {
     // attached to the parent (tickets 121, 122: two controllers on one parent must not both answer)
     const speaker = ownerKey === this.h.viewing ? meta : this.h.metaForPath(this.h.viewing);
     if (!meta || !speaker?.attachedToYou) {
+      if (isAnswerKey(dialog, data)) {
+        this.refused(dialog, "this controller is not attached to the session", "this prompt can only be answered from the controller attached to its session");
+      }
       return false;
     }
     if (isTextDialog(dialog)) {
@@ -427,10 +436,20 @@ export class SessionActions {
     }
     const fields = dialogAnswer(dialog, raw, panel.highlighted);
     if (!fields) {
+      if (isAnswerKey(dialog, data)) {
+        const rows = (dialog.options ?? []).length;
+        const digit = /^[1-9]$/.test(data);
+        this.refused(
+          dialog,
+          digit ? `key ${data} but the prompt has ${rows} rows` : `enter with row ${panel.highlighted + 1} highlighted but the prompt has ${rows} rows`,
+          digit ? `there is no row ${data} (this prompt has ${rows})` : "nothing is highlighted: move with up/down, then enter",
+        );
+      }
       // modal: typing and completion must not reach the message box while a permission is pending
       return isTypingKey(data) || matchesKey(data, Key.enter) || matchesKey(data, Key.tab);
     }
     if (grantGuarded(dialog, fields)) {
+      this.refused(dialog, "arrival guard", "answers that allow something are held for a moment after a prompt appears: press again");
       return true;
     }
     const row = grantRowFor(dialog, fields.value);
@@ -440,6 +459,15 @@ export class SessionActions {
     }
     this.answerDialog(meta.id, view, dialog, { ...fields, ...("value" in fields ? { value: answerValue(dialog, fields.value) } : {}) });
     return true;
+  }
+
+  /**
+   * An answer key that did nothing says why, on the status line and in the log (ticket 249: a prompt that ignored every press
+   * for a minute left no trace of which check swallowed them).
+   */
+  private refused(dialog: DialogRequest, why: string, hint: string): void {
+    log(`controller: answer key not applied on dialog ${dialog.id}: ${why}`);
+    this.h.notify(hint, 6000);
   }
 
   /** Send one ui_response for `dialog`, recording it so no second send ever happens for the same dialog:
@@ -465,6 +493,10 @@ export class SessionActions {
    * answered only once that worked; the other kinds answer at once and store after.
    */
   private answerWithGrant(session: number, view: SessionView, dialog: DialogRequest, life: string, pattern?: string): void {
+    if (this.storing.has(dialog)) {
+      this.refused(dialog, "a grant store is already in flight", "still keeping the permission grant: one moment");
+      return;
+    }
     const answer = (): void => {
       if (this.answersSent.has(dialog)) {
         return; // answered meanwhile: a second in-flight store completed, or another answer won the dialog
@@ -476,7 +508,10 @@ export class SessionActions {
       this.rememberGrants(session, dialog, life, pattern);
       return;
     }
-    void this.storeGrants(session, dialog, life, pattern).then((ok) => (ok ? answer() : undefined));
+    this.storing.add(dialog);
+    void this.storeGrants(session, dialog, life, pattern)
+      .then((ok) => (ok ? answer() : undefined))
+      .finally(() => this.storing.delete(dialog));
   }
 
   /** Store the grant(s) the dialog suggested, lasting `life`; failures are said, not swallowed. */
@@ -493,7 +528,8 @@ export class SessionActions {
         this.h.notify((r as { echo: string }).echo);
       } catch (err) {
         ok = false;
-        this.h.notify(`could not keep the permission grant: ${errText(err)}`);
+        log(`controller: permission_add for dialog ${dialog.id} failed: ${errText(err)}`);
+        this.h.notify(`could not keep the permission grant: ${errText(err)} - the prompt is still open, press enter to try again`, 10_000);
       }
     }
     return ok;

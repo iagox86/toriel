@@ -11,7 +11,7 @@ import { dirCompletions } from "./dir-completion.ts";
 import type { Command } from "commander";
 import type { CommandSpec } from "./cli.ts";
 import { agentCompletions } from "./agents-completion.ts";
-import { matching } from "./completion.ts";
+import { matching, modelFlagCompletions } from "./completion.ts";
 import { mcpCompletions } from "./mcp.ts";
 import { permissionCompletions } from "./permission-commands.ts";
 
@@ -76,15 +76,19 @@ export const SWITCHER_COMMANDS = [
   {
     name: "new",
     description: "start a new session",
-    help: "Starts an empty session and opens it. It runs in the directory toriel was started from (or the one /cd set) unless -C says otherwise.\n\nExamples:\n  /new\n  /new -n \"Mealie import\" -C ~/projects/mealie\n  /new -a explore          (a read-only agent profile; see /agents)",
+    help: "Starts an empty session and opens it. It runs in the directory toriel was started from (or the one /cd set) unless -C says otherwise.\n\nExamples:\n  /new\n  /new -n \"Mealie import\" -C ~/projects/mealie\n  /new -a explore          (a read-only agent profile; see /agents)\n  /new -m litellm/z-ai/glm-5.3-flash   (start on that model; same ids as /model, which also takes words)",
     build: (cmd) => {
       cmd
         .option("-n, --name <name>", "name for the new session")
+        .option("-m, --model <model>", "start it on this model, provider/id (tab completes after -m; replaces an agent profile's model)")
         .option("-C, --cwd <dir>", "working directory for the new session (default: where toriel was started, or the /cd directory)")
         .option("-a, --agent <name>", "start it as an agent profile (see /agents; tab completes the name after -a)");
     },
-    // flags are not completed in general; this one value is worth it
-    complete: (typed, src) => agentCompletions(typed, src.agents()),
+    // flags are not completed in general; these two values are worth it
+    complete: async (typed, src) => {
+      const agents = agentCompletions(typed, src.agents());
+      return agents.length > 0 ? agents : modelFlagCompletions(typed, await src.models());
+    },
   },
   {
     name: "init",

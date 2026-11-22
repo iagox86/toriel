@@ -520,6 +520,8 @@ export function handleUiResponse(
   if (typeof response.id !== "string") {
     throw new Error("ui_response without id");
   }
+  const pending = s.lastDialog?.id;
+  log(`session ${s.id} ui_response ${response.id}${pending === response.id ? "" : ` matches no pending dialog (pending: ${pending ?? "none"}); written to pi anyway`}`);
   if (s.dialogInfo && s.lastDialog?.id === response.id) {
     recordDecision({ ...s.dialogInfo.base, by: "user", answer: answerText(response), waitMs: Date.now() - s.dialogInfo.at });
   }

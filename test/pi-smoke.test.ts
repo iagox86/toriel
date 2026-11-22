@@ -7,7 +7,9 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import { createEditToolDefinition } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_PI_CLI } from "../src/config.ts";
+import { EDIT_SCHEMA } from "../pi/extensions/toriel-files.ts";
 
 const ROOT = join(import.meta.dirname, "..");
 const agentDir = mkdtempSync(join(tmpdir(), "pi-smoke-"));
@@ -46,6 +48,31 @@ describe("the pinned pi", () => {
     const tools = JSON.parse(readFileSync(dump, "utf8")) as Array<{ name: string; replaceAll: boolean }>;
     assert.equal(tools.filter((t) => t.name === "edit").length, 1, "one edit tool, not two");
     assert.equal(tools.find((t) => t.name === "edit")?.replaceAll, true, "and it is the extension's");
+  });
+
+  it("has an edit schema that toriel-files' override still matches apart from replaceAll (ticket 241)", () => {
+    // pi's schema is a typebox object: round-trip it to plain JSON for comparison
+    interface EditSchema {
+      properties: { edits: { items: { required: string[]; properties: Record<string, { type?: string; description?: string }> } } };
+    }
+    const theirs = JSON.parse(JSON.stringify(createEditToolDefinition(process.cwd()).parameters)) as EditSchema;
+    const ours = JSON.parse(JSON.stringify(EDIT_SCHEMA)) as EditSchema;
+    const item = (schema: EditSchema) => schema.properties.edits.items;
+    const hint = "Update EDIT_SCHEMA in pi/extensions/toriel-files.ts to pi's current edit parameters (keeping replaceAll), and check pi's edit.js for behavior changes the override would shadow.";
+
+    // replaceAll is the one addition; it must be optional, a boolean, and nothing else may differ in what is required
+    assert.equal(item(ours).properties.replaceAll?.type, "boolean", "replaceAll is a boolean");
+    assert.ok(!item(ours).required.includes("replaceAll"), "and optional");
+    const withoutAddition = structuredClone(ours);
+    delete item(withoutAddition).properties.replaceAll;
+
+    // the oldText description is ours with a clause about replaceAll appended: it must still START with pi's sentence
+    const theirOld = item(theirs).properties.oldText?.description ?? "";
+    const ourOld = item(withoutAddition).properties.oldText?.description ?? "";
+    assert.ok(ourOld.startsWith(theirOld.replace(/\.$/, "")), `oldText description drifted from pi's: ${theirOld}\n${hint}`);
+    (item(withoutAddition).properties.oldText ?? {}).description = theirOld;
+
+    assert.deepEqual(withoutAddition, theirs, `the edit schema differs from pi's built-in.\n${hint}`);
   });
 
   it("answers a get_state request over RPC (the daemon's handshake with every child)", async () => {

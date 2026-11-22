@@ -52,6 +52,20 @@ describe("switcher group folding", () => {
     assert.match(sw.render(100).map(strip).join("\n"), /\bb\b/);
   });
 
+  it("still folds groups, and still lists empty ones, while only a hidden-sessions note is showing (ticket 248)", () => {
+    const sw = new Switcher();
+    sw.groups = ["Work", "Empty"];
+    sw.sessions = [session("a", undefined), session("b", "Work"), session("c", "Work")];
+    sw.collapsed = new Set(["Work"]);
+    sw.hiddenNote = "3 outside sessions hidden  -  /external show";
+    sw.refresh();
+    const lines = sw.render(100).map(strip);
+    assert.ok(lines.some((l) => l.includes("3 outside sessions hidden")), "the note is shown");
+    assert.match(lines.find((l) => l.includes("Work")) ?? "", /▸ Work\s+2 sessions/);
+    assert.ok(!lines.some((l) => /\bb\b/.test(l) && !l.includes("outside")), "session b is folded away");
+    assert.ok(lines.some((l) => l.includes("Empty")), "an empty group is still listed");
+  });
+
   it("tells whether the highlighted header is folded, and nothing for a session row", () => {
     const sw = build(["Work"]);
     assert.equal(sw.currentHeaderFolded(), undefined); // the cursor starts on session a

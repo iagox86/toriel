@@ -59,7 +59,7 @@ recommended (the permission package and its config), optional features
 keeping a backup). The notice line only shows what matters most and counts the
 rest.
 
-Agent profiles (`/agents`, `/new --agent explore`) are described in [agents/README.md](agents/README.md).
+Agent profiles (`/agents`, `/new --agent explore`) are described in [agents/README.md](agents/README.md). `/new -m provider/id` starts a session on a given model (the same ids and words as `/model`; it replaces a profile's model; with no session running it needs the full provider/id).
 
 ## Run
 

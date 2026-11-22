@@ -51,6 +51,30 @@ describe("command flags", () => {
     assert.deepEqual(opts(SWITCHER_COMMANDS, "/new -n work -C /tmp"), { name: "work", cwd: "/tmp" });
   });
 
+  it("lets /new start on a model with -m or --model (ticket 247)", () => {
+    assert.deepEqual(opts(SWITCHER_COMMANDS, "/new -m litellm/glm-5.3-flash"), { model: "litellm/glm-5.3-flash" });
+    assert.deepEqual(opts(SWITCHER_COMMANDS, "/new -a explore --model fake/fake-big -n x"), { agent: "explore", model: "fake/fake-big", name: "x" });
+    const bare = parseCommandLine(SWITCHER_COMMANDS, "/new -m");
+    assert.equal(bare.kind, "error");
+    if (bare.kind === "error") {
+      assert.match(bare.message, /argument missing/);
+    }
+    const help = parseCommandLine(SWITCHER_COMMANDS, "/new -h");
+    assert.ok(help.kind === "help" && /-m, --model <model>/.test(help.text) && /\/new -m /.test(help.text));
+  });
+
+  it("completes /new's model after -m, and its agent after -a", async () => {
+    const spec = SWITCHER_COMMANDS.find((c) => c.name === "new") as CommandSpec;
+    const src = {
+      models: async () => ["fake/fake-model", "other/big"],
+      agents: () => [{ name: "explore", description: "look around" }],
+    } as unknown as Parameters<NonNullable<CommandSpec["complete"]>>[1];
+    assert.deepEqual(await spec.complete?.("-n x -m fake", src), ["-n x -m fake/fake-model"]);
+    assert.deepEqual(await spec.complete?.("--model ", src), ["--model fake/fake-model", "--model other/big"]);
+    assert.deepEqual(await spec.complete?.("-a ex", src), [{ value: "-a explore", description: "look around" }]);
+    assert.deepEqual(await spec.complete?.("-n x", src), []);
+  });
+
   it("lets /delete skip its confirmation with -y", () => {
     assert.equal(opts(SWITCHER_COMMANDS, "/delete -y")?.yes, true);
     assert.equal(opts(SWITCHER_COMMANDS, "/delete")?.yes, undefined);

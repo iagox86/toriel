@@ -122,8 +122,10 @@ export class Switcher extends Container implements Focusable {
   }
   /** Group titles whose sessions are hidden (ignored while a filter is on, so matches show). */
   collapsed = new Set<string>();
-  /** Shown in the title line while a filter is on; the filter also hides groups with no matching sessions. */
+  /** Shown in the title line while a filter is on; the filter also hides groups with no matching sessions, and while it is set nothing is folded. Only a filter may set it: see hiddenNote. */
   filterNote = "";
+  /** Shown beside the filter note: sessions left out of the list (outside sessions, /external). Not a filter, so folding and empty groups behave as usual (ticket 248). */
+  hiddenNote = "";
   /** With a filter on: whether an empty group's name matches it (such a group still shows). */
   groupMatches?: (title: string) => boolean;
   /** Terminal rows; the controller injects a live provider (resize-safe). */
@@ -317,7 +319,8 @@ export class Switcher extends Container implements Focusable {
 
   render(width: number): string[] {
     const height = Math.max(6, this.heightProvider?.() ?? this.height);
-    const budget = Math.max(4, height - 6 - (this.filterNote ? 1 : 0));
+    const notice = [this.filterNote, this.hiddenNote].filter(Boolean).join("   ");
+    const budget = Math.max(4, height - 6 - (notice ? 1 : 0));
 
     // The session column is fixed at the longest name's width - names are
     // never cut. When the window is too narrow, columns drop in order:
@@ -347,8 +350,8 @@ export class Switcher extends Container implements Focusable {
     const budgetText =
       this.budget.cost > 0 ? ` \u00b7 $${this.budget.cost.toFixed(2)} \u00b7 ${fmtTokens(this.budget.tokens)} tok` : "";
     lines.push(dim(`toriel  ${this.counts.running} running, ${this.counts.waiting} waiting on permission${budgetText}`));
-    if (this.filterNote) {
-      lines.push(attention(truncateToWidth(this.filterNote, width)));
+    if (notice) {
+      lines.push(attention(truncateToWidth(notice, width)));
     }
 
     const labelCells: string[] = ["Session".padEnd(nameWidth), "Age".padEnd(ageW)];

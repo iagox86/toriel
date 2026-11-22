@@ -9,6 +9,7 @@ import { historyOf, sendHistory } from "./daemon-history.ts";
 import type { DaemonSession } from "./daemon-session.ts";
 import { forkSnapshot } from "./fork-snapshot.ts";
 import { forkNote, recordFork } from "./lineage.ts";
+import { matchModel, modelName, modelProblem } from "./model-match.ts";
 import { sessionIdOfFile } from "./session-file.ts";
 import { wasHandled } from "./handled-files.ts";
 import { profileOfSession } from "./session-agents.ts";
@@ -112,6 +113,40 @@ export async function handlePrompt(
   res(true, undefined, { disposition: "started" });
 }
 
+/**
+ * The provider/id a new session should start on, for what /new -m typed: anything /model takes (an exact
+ * provider/id, a bare id, or words that pick one model). Pi's list comes from a running session; with none
+ * running only a full provider/id can be passed on, unchecked, and pi's own error applies.
+ */
+async function modelForSpawn(ctx: DaemonContext, wanted: string): Promise<string> {
+  const text = wanted.trim();
+  if (text === "") {
+    throw new Error("model is empty (use provider/id)");
+  }
+  const lookup = ctx.registry.all().find((x) => x.child)?.child;
+  let models: Array<{ provider: string; id: string }> | undefined;
+  try {
+    models = await lookup?.getAvailableModels();
+  } catch (err) {
+    log(`could not check the new session's model ${text}: ${errText(err)}`);
+  }
+  if (!models) {
+    if (!text.includes("/")) {
+      throw new Error(`no running session to look "${text}" up in: use the full provider/id`);
+    }
+    return text;
+  }
+  const match = matchModel(models, text);
+  if (match.kind === "one") {
+    return modelName(match.model);
+  }
+  if (match.kind === "many") {
+    const shown = match.matches.slice(0, 8).map(modelName).join(", ");
+    throw new Error(`"${text}" matches ${match.matches.length} models: ${shown}${match.matches.length > 8 ? `, +${match.matches.length - 8} more` : ""}`);
+  }
+  throw new Error(modelProblem(models, text) ?? `no model matches "${text}"`);
+}
+
 export async function handleSpawn(
   ctx: DaemonContext,
   cmd: Cmd<"spawn">,
@@ -119,6 +154,11 @@ export async function handleSpawn(
   res: Responder,
 ): Promise<void> {
   const agent = cmd.agent ? findAgent(cmd.agent, cmd.cwd) : undefined;
+  // checked before anything is created: a bad model leaves no half-started session behind
+  if (cmd.model !== undefined && cmd.sessionFile) {
+    throw new Error("a model can only be chosen for a new session (this one has a file; use /model)");
+  }
+  const model = cmd.model !== undefined ? await modelForSpawn(ctx, cmd.model) : undefined;
   const existing = cmd.sessionFile
     ? ctx.registry.byFile(cmd.sessionFile)
     : undefined;
@@ -155,7 +195,7 @@ export async function handleSpawn(
     // Respond as soon as the session is registered (startChild has already
     // broadcast it as spawning) so the controller can open it immediately;
     // prompts arriving before the child is up wait on s.starting.
-    const starting = ctx.children.start(s, { sessionFile: cmd.sessionFile, name: wanted ?? cmd.name, agent }).then(async () => {
+    const starting = ctx.children.start(s, { sessionFile: cmd.sessionFile, name: wanted ?? cmd.name, agent, model }).then(async () => {
       if (wanted !== undefined) {
         ctx.naming.applyInBackground(s);
       }

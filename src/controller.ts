@@ -1012,7 +1012,7 @@ class Controller {
     this.tui.requestRender(true);
   }
 
-  notify(message: string): void {
+  notify(message: string, ms = 4000): void {
     this.flash = message;
     this.renderChrome();
     if (this.flashTimer) {
@@ -1021,7 +1021,7 @@ class Controller {
     this.flashTimer = setTimeout(() => {
       this.flash = "";
       this.renderChrome();
-    }, 4000);
+    }, ms);
   }
 
   forgetLineage(): void {

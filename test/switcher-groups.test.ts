@@ -186,6 +186,17 @@ describe("/cd in the switcher", () => {
     assert.equal(requests[1]?.cwd, "/tmp");
   });
 
+  it("sends /new -m's model (and agent) with the spawn request (ticket 247)", async () => {
+    const { actions, requests } = spawning();
+    await actions.runCommand("/new -m fake/fake-big", undefined);
+    assert.equal(requests[0]?.type, "spawn");
+    assert.equal(requests[0]?.model, "fake/fake-big");
+    await actions.runCommand("/new", undefined);
+    assert.equal(requests[1]?.model, undefined);
+    await actions.runCommand('/new -m ""', undefined);
+    assert.equal(requests[2]?.model, "", "an empty -m reaches the daemon, whose error names it");
+  });
+
   it("starts a typed first message there too", async () => {
     const { actions, requests } = spawning();
     await actions.runCommand(`/cd ${dir}`, undefined);

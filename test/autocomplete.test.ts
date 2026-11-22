@@ -108,6 +108,13 @@ describe("argument completion", () => {
     assert.deepEqual(await suggest({ ...base, sources }, "/model zai flash"), ["zai/glm-5.3-flash"]);
   });
 
+  it("offers models after /new -m or --model in the switcher, keeping the flags before it (ticket 247)", async () => {
+    const ctx = { ...base, switcher: true, sources };
+    assert.deepEqual(await suggest(ctx, "/new -n work -m glm"), ["-n work -m zai/glm-5.3-flash", "-n work -m zai/glm-5.3"]);
+    assert.deepEqual(await suggest(ctx, "/new --model opus"), ["--model anthropic/claude-opus"]);
+    assert.deepEqual(await suggest(ctx, "/new -a ex"), ["-a explore"]);
+  });
+
   it("offers group names after /group in the switcher", async () => {
     assert.deepEqual(await suggest({ ...base, switcher: true, sources }, "/group ho"), ["Home"]);
   });
