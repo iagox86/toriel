@@ -137,7 +137,7 @@ export function touchesProtected(text: string, protectedFiles: readonly string[]
   }));
 }
 
-/** A file-path grant comes only from answering the file-path prompt the daemon holds open for the session, with a pattern that covers what pi asked about. */
+/** A file-path grant comes only from answering the file-path prompt the daemon holds open for the session, with a pattern that covers (at least one of) what pi asked about. */
 function checkPromptFor(ctx: DaemonContext, uuid: string, cmd: Cmd<"permission_add">): void {
   const s = ctx.registry.all().find((x) => x.sessionId === uuid);
   const open = s?.pendingDialog ? s.lastDialog : undefined;
@@ -149,7 +149,9 @@ function checkPromptFor(ctx: DaemonContext, uuid: string, cmd: Cmd<"permission_a
     throw new Error("this prompt is about the permission grants file or pi's own configuration; those are always asked about, so no grant is made for it");
   }
   const asked = ((open.toriel as { grants?: PermissionGrantSpec[] } | undefined)?.grants ?? []).filter((g) => g.surface === cmd.surface);
-  if (asked.length === 0 || !asked.every((g) => coversPattern(cmd.pattern, g.pattern))) {
+  // some, not every: a directory ask is two grants (`D` and `D/*`, so no wildcard also matches a sibling like `D-evil`) and the dialog stores
+  // them one request at a time, each covering its own half. Requiring every ask to be covered refused both halves (ticket 249).
+  if (asked.length === 0 || !asked.some((g) => coversPattern(cmd.pattern, g.pattern))) {
     throw new Error(`"${cmd.pattern}" does not cover what the prompt asked about (${asked.map((g) => JSON.stringify(g.pattern)).join(", ") || "nothing on this surface"})`);
   }
 }

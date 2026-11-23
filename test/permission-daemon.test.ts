@@ -229,6 +229,21 @@ describe("daemon: permission grants", () => {
       assert.equal(ok.grant.source, "dialog");
     });
 
+    it("keeps both halves of a directory ask (the directory and its contents), one request each (ticket 249)", async () => {
+      const h = await start();
+      const { c, session, uuid } = await savedSession(h);
+      const link = await h.connect();
+      const dir = [{ surface: "path_write", pattern: "/p/deep" }, { surface: "path_write", pattern: "/p/deep/*" }];
+      await link.request({ type: "permission_check", uuid, grants: dir, value: "sudo -V" });
+      await c.request({ type: "prompt", session, message: "/ask-select" });
+      await c.waitFor((m) => m.type === "ui_request" && m.request?.id === "ask-select-1");
+      const add = (pattern: string) => c.request({ type: "permission_add", session, surface: "path_write", pattern, for: "1h", source: "dialog", dialog: "ask-select-1" });
+      assert.equal((await add("/p/deep")).grant.pattern, "/p/deep");
+      assert.equal((await add("/p/deep/*")).grant.pattern, "/p/deep/*");
+      await assert.rejects(add("/elsewhere/*"), /does not cover/, "still nothing the ask did not name");
+      await assert.rejects(add("/p/deep-evil/*"), /does not cover/, "and not a sibling");
+    });
+
     it("refuses a file-path grant once the prompt is answered, and from /permissions add", async () => {
       const { c, session } = await pathPrompt();
       await c.request({ type: "ui_response", session, response: { id: "ask-select-1", value: "Yes" } });
