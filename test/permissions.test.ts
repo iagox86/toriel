@@ -307,6 +307,14 @@ describe("answerablePrompt: a file-path prompt the daemon may answer itself", ()
     assert.equal(answerablePrompt(store(), A, request("path_write"), "/p/deep/docs/a.md", PROTECTED)?.length, 1);
   });
 
+  it("answers for a grant the user narrowed to the very file, and only for that file (ticket 249)", () => {
+    const narrowed = make();
+    narrowed.add({ session: A, surface: "path_write", pattern: "/p/deep/docs/a.md", source: "dialog" }, true);
+    assert.equal(answerablePrompt(narrowed, A, request("path_write"), "/p/deep/docs/a.md", PROTECTED)?.length, 1, "the suggestion was /p/deep/docs/*, the file is covered");
+    assert.equal(answerablePrompt(narrowed, A, request("path_write", "Permission Required\ncommand : /p/deep/docs/b.md"), "/p/deep/docs/b.md", PROTECTED), undefined, "another file in the directory still asks");
+    assert.equal(answerablePrompt(narrowed, A, request("path_write", "Permission Required\ncommand : rm a"), "rm a", PROTECTED), undefined, "a command is not a path");
+  });
+
   it("does not answer for another session, an uncovered path, or a prompt without a plain Yes", () => {
     assert.equal(answerablePrompt(store(), B, request("path_write"), "/p/deep/docs/a.md", PROTECTED), undefined);
     assert.equal(answerablePrompt(store(), A, request("path"), "/p/deep/docs/a.md", PROTECTED), undefined, "another surface");

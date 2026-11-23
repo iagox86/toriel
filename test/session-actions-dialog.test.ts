@@ -326,20 +326,18 @@ describe("a file-path prompt: toriel's rows and the pattern edit", () => {
     assert.equal(answered(t.sent[0]), "Yes");
   });
 
-  it("refuses a pattern that would not cover this very ask, and keeps editing", async () => {
+  it("lets the user narrow the pattern: it is stored as typed, and the prompt may come back if it misses (ticket 249)", async () => {
     const t = setup({ path: true });
     down(t, 1);
     t.sa.dialogKeys(t.view, "\t");
     for (let i = 0; i < "/p/deep/docs/*".length; i++) {
       t.sa.dialogKeys(t.view, BACKSPACE);
     }
-    type(t, "/q/*");
+    type(t, "/p/deep/docs/one.md");
     t.sa.dialogKeys(t.view, "\r");
     await settle();
-    assert.deepEqual(t.requests, []);
-    assert.deepEqual(t.sent, []);
-    assert.match(t.notices.at(-1) ?? "", /does not cover "\/p\/deep\/docs\/\*"/);
-    assert.ok(t.view.dialog);
+    assert.equal(t.requests[0]?.pattern, "/p/deep/docs/one.md");
+    assert.equal(answered(t.sent[0]), "Yes");
   });
 
   it("leaves bash grants as they were: pi answered at once, no prompt id sent", async () => {

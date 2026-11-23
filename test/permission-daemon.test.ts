@@ -217,13 +217,13 @@ describe("daemon: permission grants", () => {
       assert.deepEqual(dialog.request.toriel, { grants: [ask] });
     });
 
-    it("makes a grant only from the open prompt, with a pattern that covers what pi asked about", async () => {
+    it("makes a grant only from the open prompt, for a surface it asked about, with whatever pattern the user chose", async () => {
       const { c, session } = await pathPrompt();
       const add = (extra: Record<string, unknown>) => c.request({ type: "permission_add", session, surface: "path_write", for: "1h", source: "dialog", ...extra });
       await assert.rejects(add({ pattern: "/p/*" }), /answering the file-path prompt/, "no prompt named");
       await assert.rejects(add({ pattern: "/p/*", dialog: "some-other-prompt" }), /answering the file-path prompt/, "not the prompt that is open");
-      await assert.rejects(add({ pattern: "/elsewhere/*", dialog: "ask-select-1" }), /does not cover/, "a pattern that would not cover this ask");
-      await assert.rejects(c.request({ type: "permission_add", session, surface: "external_directory", pattern: "/p/*", dialog: "ask-select-1" }), /does not cover/, "another surface than the one asked");
+      await assert.rejects(c.request({ type: "permission_add", session, surface: "external_directory", pattern: "/p/*", dialog: "ask-select-1" }), /asked about nothing on "external_directory"/, "another surface than the one asked");
+      assert.equal((await add({ pattern: "/p/deep/docs/one.md", dialog: "ask-select-1" })).grant.pattern, "/p/deep/docs/one.md", "narrower than the suggestion is the user's call");
       const ok = await add({ pattern: "/p/*", dialog: "ask-select-1" });
       assert.equal(ok.grant.surface, "path_write");
       assert.equal(ok.grant.source, "dialog");
@@ -240,8 +240,7 @@ describe("daemon: permission grants", () => {
       const add = (pattern: string) => c.request({ type: "permission_add", session, surface: "path_write", pattern, for: "1h", source: "dialog", dialog: "ask-select-1" });
       assert.equal((await add("/p/deep")).grant.pattern, "/p/deep");
       assert.equal((await add("/p/deep/*")).grant.pattern, "/p/deep/*");
-      await assert.rejects(add("/elsewhere/*"), /does not cover/, "still nothing the ask did not name");
-      await assert.rejects(add("/p/deep-evil/*"), /does not cover/, "and not a sibling");
+      await assert.rejects(c.request({ type: "permission_add", session, surface: "path_read", pattern: "/p/deep", for: "1h", source: "dialog", dialog: "ask-select-1" }), /asked about nothing/, "but only on a surface the prompt asked about");
     });
 
     it("refuses a file-path grant once the prompt is answered, and from /permissions add", async () => {

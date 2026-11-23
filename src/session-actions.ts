@@ -3,7 +3,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Key, matchesKey } from "@earendil-works/pi-tui";
-import { coversPattern, isCappedSurface } from "./permissions.ts";
+import { isCappedSurface } from "./permissions.ts";
 import { answerValue, type DialogRequest, dialogAnswer, editablePattern, grantGuarded, grantRowFor, isTextDialog, isTypingKey, optionTakesReason } from "./dialogs.ts";
 import { isPlainLeft } from "./editor.ts";
 import { firstMessageLabel, fmtAge } from "./format.ts";
@@ -579,11 +579,6 @@ export class SessionActions {
         // editing a grant pattern: pi just hears "Yes"; the grant is toriel's own record, consulted by the grants link on later asks
         if (reason === "") {
           this.h.notify("a grant pattern cannot be empty - type one, or esc to go back");
-          return true;
-        }
-        const suggested = dialog.toriel?.grants?.[0]?.pattern;
-        if (suggested !== undefined && !coversPattern(reason, suggested)) {
-          this.h.notify(`"${reason}" does not cover ${JSON.stringify(suggested)}, so this prompt would come straight back - widen it, or esc to go back`);
           return true;
         }
         panel.edit(null);
