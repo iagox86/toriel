@@ -51,8 +51,9 @@ const USAGE = `usage: toriel              open the switcher (starts the daemon i
        toriel doctor       check the setup and say how to fix what is wrong (--fix applies the safe fixes)
        toriel kill-server  stop the daemon and every session it owns
        toriel update       what is behind (pi, the bundled packages, yours); \`toriel update all|<name>\` bumps them
+       toriel feedback     the /feedback bundles: \`toriel feedback list\` shows them, \`prune [--keep N] [--older-than 30d]\`, \`export <bundle>\`
 
-       toriel --isolated [name] [doctor|kill-server]
+       toriel --isolated [name] [doctor|kill-server|update|feedback]
                            run a separate instance (own daemon, socket, data and log) for trying out
                            a branch without touching the real one; the name defaults to the checkout's folder name`;
 
@@ -67,7 +68,7 @@ export function applyIsolated(argv: string[], env: NodeJS.ProcessEnv = process.e
     return;
   }
   const next = argv[at + 1];
-  const named = next !== undefined && !next.startsWith("-") && next !== "doctor" && next !== "kill-server" && next !== "update";
+  const named = next !== undefined && !next.startsWith("-") && next !== "doctor" && next !== "kill-server" && next !== "update" && next !== "feedback";
   argv.splice(at, named ? 2 : 1);
   env.TORIEL_PROFILE = named ? next : basename(root).replace(/[^A-Za-z0-9._-]/g, "-");
 }
@@ -80,11 +81,11 @@ export function preflight(argv: string[] = process.argv): void {
     process.stdout.write(`${USAGE}\n`);
     process.exit(0);
   }
-  if (arg !== undefined && arg !== "kill-server" && arg !== "doctor" && arg !== "update") {
+  if (arg !== undefined && arg !== "kill-server" && arg !== "doctor" && arg !== "update" && arg !== "feedback") {
     process.stderr.write(`toriel: unknown argument "${arg}"\n${USAGE}\n`);
     process.exit(2);
   }
-  if (arg === "kill-server" || arg === "doctor" || arg === "update") {
+  if (arg === "kill-server" || arg === "doctor" || arg === "update" || arg === "feedback") {
     return; // doctor runs its own checks, so it can say what is wrong instead of stopping at the first thing
   }
   const problems = startupProblems();
