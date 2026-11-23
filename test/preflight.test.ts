@@ -66,6 +66,31 @@ describe("toriel entry point", () => {
     assert.equal(r.status, 0);
     assert.match(r.stdout, /toriel kill-server/);
     assert.match(r.stdout, /toriel doctor/);
+    assert.match(r.stdout, /toriel feedback/);
+  });
+
+  /** An isolated data directory, so the feedback command reads a private (empty) bundle store, not the real one. */
+  const runFeedback = (...args: string[]) => {
+    const data = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-fb-"));
+    try {
+      const r = spawnSync(process.execPath, [ENTRY, ...args], { encoding: "utf8", env: { ...process.env, XDG_RUNTIME_DIR: "/run/user/1", XDG_DATA_HOME: path.join(data, "share") } });
+      return r;
+    } finally {
+      fs.rmSync(data, { recursive: true, force: true });
+    }
+  };
+
+  it("lets the feedback command through preflight (it was refused, ticket 240)", () => {
+    const r = runFeedback("feedback", "list");
+    assert.equal(r.status, 0);
+    assert.match(r.stdout, /no bundles/,
+      "preflight must not reject the subcommand it was shipped with (preflight.ts's whitelist)");
+  });
+
+  it("still refuses an unknown argument", () => {
+    const r = run("frobnicate");
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /unknown argument "frobnicate"/);
   });
 
   it("runs doctor, whose --help needs no daemon and no pi setup", () => {
