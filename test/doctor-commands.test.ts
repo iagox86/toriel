@@ -85,7 +85,7 @@ describe("/doctor", () => {
     assert.match(t.notices[0] ?? "", /changed .*config\.json \(original kept at .*config\.json\.bak-\d{8}-\d{6}\)/);
     assert.deepEqual(JSON.parse(fs.readFileSync(s.config, "utf8")).authorizerChain, ["toriel-grants"]);
     assert.equal(fs.readdirSync(path.dirname(s.config)).filter((f) => f.includes(".bak-")).length, 1);
-    assert.match(t.panels.at(-1) ?? "", /Required: all 5 ok[\s\S]*Optional features: all 18 ok[\s\S]*Hardening: all 2 ok[\s\S]*Everything checks out\./, "the fix no longer seeds an allow, so the re-check is clean");
+    assert.match(t.panels.at(-1) ?? "", /Required: all 5 ok[\s\S]*Optional features[\s\S]*skipped {2}the \/feedback bundles do not take much disk[\s\S]*run `toriel doctor` in a terminal to check[\s\S]*\(17 ok\)[\s\S]*Hardening: all 2 ok[\s\S]*Everything checks out\./, "the fix no longer seeds an allow, so the re-check is clean; the bundle-size check never ran here, so it shows skipped (ticket 240)");
   });
 
   it("with --fix says when nothing is automatic, and offers no fix for a config of an unusual shape", () => {

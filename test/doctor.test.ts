@@ -92,9 +92,11 @@ describe("the settings file", () => {
 
 describe("doctor checks", () => {
   it("finds nothing wrong with a complete setup", () => {
-    const { opts } = setup();
-    assert.deepEqual(collectFindings(opts), []);
-    const checks = runDoctor(opts);
+    const { opts, agentDir } = setup();
+    fs.mkdirSync(path.join(agentDir, "feedback"), { recursive: true });
+    const all = { ...opts, feedbackDir: path.join(agentDir, "feedback") };
+    assert.deepEqual(collectFindings(all), []);
+    const checks = runDoctor(all);
     assert.equal(exitCode(checks), 0);
     assert.ok(checks.every((c) => c.state === "ok"));
     assert.match(renderDoctor(checks), /Everything checks out\./);
@@ -415,7 +417,7 @@ describe("doctor checks", () => {
 
   it("skips the checks that need the permission package when it is not there, and says so", () => {
     const checks = runDoctor(setup({ noPackage: true }).opts);
-    assert.deepEqual(checks.filter((c) => c.state === "skipped").map((c) => c.id), ["grants-chain", "grants-path-rule", "scope-guard-short-circuit"]);
+    assert.deepEqual(checks.filter((c) => c.state === "skipped").map((c) => c.id), ["grants-chain", "feedback-size", "grants-path-rule", "scope-guard-short-circuit"]);
     assert.match(renderDoctor(checks), /skipped {2}permission grants are switched on[\s\S]*needs pi-permission-system/);
   });
 
@@ -524,9 +526,15 @@ describe("doctor report", () => {
     assert.match(text, /systemd-inhibit is not on PATH[^\n]*\[manual: installing systemd is a system package install/);
     assert.match(text, /\[fixable: add "toriel-grants" to "authorizerChain"\]/);
     assert.match(text, /3 problems, 2 fixable automatically \(toriel doctor --fix, or \/doctor --fix\), 1 needs you \(see "manual" above\)\.$/);
-    // nothing in the report is left without one of the two labels
-    for (const line of text.split("\n").filter((l) => /^ {11}\S/.test(l))) {
-      assert.match(line, /\[(fixable|manual): /, line);
+    // every line a PROBLEM entry indents must carry one of the two labels (a skipped entry's note must not)
+    let last = "";
+    for (const line of text.split("\n")) {
+      const tag = /^ {2}(ok|skipped|PROBLEM) {2}/.exec(line);
+      if (tag) {
+        last = tag[1];
+      } else if (/^ {11}\S/.test(line) && last === "PROBLEM") {
+        assert.match(line, /\[(fixable|manual): /, line);
+      }
     }
   });
 
@@ -544,7 +552,7 @@ describe("doctor report", () => {
     assert.match(text, /Required: all 5 ok/);
     assert.match(text, /Recommended: all 5 ok/);
     assert.doesNotMatch(text, / ok {7}/);
-    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(17 ok\)/);
+    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(16 ok\)/);
   });
 });
 
@@ -573,7 +581,7 @@ describe("doctor report colours", () => {
   it("colours the compact report too, with the passing checks' count dim", () => {
     const coloured = renderDoctor(checks(), { compact: true, style: ANSI_STYLE });
     assert.match(coloured, /Required\x1b\[22m: \x1b\[32mall 5 ok\x1b\[39m/);
-    assert.match(coloured, /\x1b\[2m {2}\(17 ok\)\x1b\[22m/);
+    assert.match(coloured, /\x1b\[2m {2}\(16 ok\)\x1b\[22m/);
   });
 });
 

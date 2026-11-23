@@ -497,6 +497,10 @@ export function runDoctor(opts: DoctorOptions = {}): Check[] {
     if (noPackage && entry.needsPermissionPackage) {
       return { ...entry, state: "skipped", findings: [], note: "needs pi-permission-system (see above)" };
     }
+    // the bundle folder is a CLI input (ticket 240); without it the size check has not run, so it does not count as ok (like the probe checks)
+    if (entry.id === "feedback-size" && opts.feedbackDir === undefined) {
+      return { ...entry, state: "skipped", findings: [], note: "run `toriel doctor` in a terminal to check" };
+    }
     if (entry.needsProbe !== undefined && opts.probeLitellm === undefined) {
       const kind = entry.needsProbe;
       const cache = readRoutesCache(opts.litellmCacheFile);
