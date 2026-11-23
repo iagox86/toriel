@@ -222,7 +222,8 @@ describe("doctor checks", () => {
         const s = setup({});
         const bundle = path.join(s.agentDir, "feedback", "2026-11-22T22-45-23-015Z-abcd1234");
         fs.mkdirSync(bundle, { recursive: true });
-        fs.truncateSync(fs.openSync(path.join(bundle, "session.jsonl"), "w") && path.join(bundle, "session.jsonl"), 3 * 1024 ** 3);
+        fs.writeFileSync(path.join(bundle, "session.jsonl"), "");
+        fs.truncateSync(path.join(bundle, "session.jsonl"), 3 * 1024 ** 3);
         return { ...s.opts, feedbackDir: path.join(s.agentDir, "feedback"), startup: [] };
       })(),
       setup({ mcpExtra: { broken: { exposure: "direct" } } }).opts,
