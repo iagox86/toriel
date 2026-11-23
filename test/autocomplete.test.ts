@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, it } from "node:test";
 import { CommandAutocomplete, commandsFor, type AutocompleteContext } from "../src/autocomplete.ts";
 import { SESSION_COMMANDS, SWITCHER_COMMANDS } from "../src/commands.ts";
@@ -113,6 +116,68 @@ describe("argument completion", () => {
     assert.deepEqual(await suggest(ctx, "/new -n work -m glm"), ["-n work -m zai/glm-5.3-flash", "-n work -m zai/glm-5.3"]);
     assert.deepEqual(await suggest(ctx, "/new --model opus"), ["--model anthropic/claude-opus"]);
     assert.deepEqual(await suggest(ctx, "/new -a ex"), ["-a explore"]);
+  });
+
+  describe("with Tab (an explicit request) after the command name, ticket 247", () => {
+    // pi-tui sends Tab on a line with a space to FILE completion unless the provider downgrades the request
+    const tab = async (ctx: AutocompleteContext, text: string) => {
+      const p = new CommandAutocomplete(() => ctx);
+      const r = await p.getSuggestions([text], 0, text.length, { signal: new AbortController().signal, force: true });
+      return r?.items.map((i) => i.value) ?? [];
+    };
+
+    it("completes /new's model after -m or --model, in the switcher", async () => {
+      const ctx = { ...base, switcher: true, sources };
+      assert.deepEqual(await tab(ctx, "/new -m glm"), ["-m zai/glm-5.3-flash", "-m zai/glm-5.3"]);
+      assert.deepEqual(await tab(ctx, "/new --model opus"), ["--model anthropic/claude-opus"]);
+      assert.deepEqual(await tab(ctx, "/new -m "), ["-m zai/glm-5.3-flash", "-m zai/glm-5.3", "-m anthropic/claude-opus"]);
+      assert.deepEqual(await tab(ctx, "/new -a ex"), ["-a explore"]);
+    });
+
+    it("completes from a bare trailing flag, before the space is typed", async () => {
+      const ctx = { ...base, switcher: true, sources };
+      assert.deepEqual(await tab(ctx, "/new -m"), ["-m zai/glm-5.3-flash", "-m zai/glm-5.3", "-m anthropic/claude-opus"]);
+      assert.deepEqual(await tab(ctx, "/new -n x --model"), ["-n x --model zai/glm-5.3-flash", "-n x --model zai/glm-5.3", "-n x --model anthropic/claude-opus"]);
+      assert.deepEqual(await tab(ctx, "/new -a"), ["-a explore"]);
+      assert.deepEqual(await suggest(ctx, "/new -m"), ["-m zai/glm-5.3-flash", "-m zai/glm-5.3", "-m anthropic/claude-opus"], "and without Tab");
+    });
+
+    it("does not treat a longer flag or a flag inside a word as -m", async () => {
+      const ctx = { ...base, switcher: true, sources };
+      assert.deepEqual(await tab(ctx, "/new -mx"), []);
+      assert.deepEqual(await tab(ctx, "/new -n foo-m"), []);
+    });
+
+    it("makes /model's Tab use its own completer in a session", async () => {
+      assert.deepEqual(await tab({ ...base, sources }, "/model zai flash"), ["zai/glm-5.3-flash"]);
+    });
+
+    it("keeps /cd completing directories through its own completer", async () => {
+      const out = await tab({ ...base, switcher: true, sources }, "/cd /tm");
+      assert.ok(out.includes("/tmp/"), `got ${JSON.stringify(out)}`);
+    });
+
+    it("leaves Tab to file completion for a command with no completer of its own, and for text that is not a command", async () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-ac-"));
+      try {
+        fs.writeFileSync(path.join(dir, "zzfile.txt"), "x");
+        const ctx = { ...base, cwd: dir, sources };
+        assert.ok((await tab(ctx, "/doctor zz")).some((v) => v.includes("zzfile.txt")), "/doctor has no completer: files");
+        assert.ok((await tab(ctx, "look at zz")).some((v) => v.includes("zzfile.txt")), "plain text: files");
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("does not downgrade without live sources, or for a command the highlighted header cannot use", async () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-ac-"));
+      try {
+        fs.writeFileSync(path.join(dir, "zzfile.txt"), "x");
+        assert.ok((await tab({ ...base, cwd: dir }, "/model zz")).some((v) => v.includes("zzfile.txt")), "no sources: files, as before");
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   it("offers group names after /group in the switcher", async () => {

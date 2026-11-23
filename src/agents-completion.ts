@@ -1,6 +1,7 @@
 // Tab completion and listing for agent profiles.
 import type { AgentProfile } from "./agents.ts";
 import type { Choice } from "./cli.ts";
+import { flagValueAt } from "./completion.ts";
 
 /**
  * After "/new ... -a " or "--agent ": the agent names that start with what was
@@ -8,14 +9,13 @@ import type { Choice } from "./cli.ts";
  * after the command, like the other completers.
  */
 export function agentCompletions(typed: string, agents: ReadonlyArray<{ name: string; description: string }>): Choice[] {
-  const m = /^(.*?(?:^|\s)(?:-a|--agent)[ =])(\S*)$/.exec(typed);
-  if (!m) {
+  const at = flagValueAt(typed, "a", "agent");
+  if (!at) {
     return [];
   }
-  const [, head = "", prefix = ""] = m;
   return agents
-    .filter((a) => a.name.startsWith(prefix.toLowerCase()))
-    .map((a) => ({ value: `${head}${a.name}`, description: a.description }));
+    .filter((a) => a.name.startsWith(at.prefix.toLowerCase()))
+    .map((a) => ({ value: `${at.head}${a.name}`, description: a.description }));
 }
 
 /** The /agents panel. */

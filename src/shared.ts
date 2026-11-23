@@ -122,6 +122,8 @@ export interface SessionMeta {
   scheduleLines?: string[];
   /** The agent's task list (ticket 228), drawn above the editor and listed by /tasks; undefined when it has none. */
   tasks?: Todo[];
+  /** While the session works and the list still has open items: when the list last changed or this run began, whichever is later (epoch ms), so a controller can say the list has gone stale (ticket 251). */
+  tasksStaleSince?: number;
   /** Plan mode is on (ticket 229): the session can only look. */
   plan?: boolean;
   /** Active permission grants in this session, the soonest expiry among the timed ones (epoch ms), and saved grants waiting for /permissions restore. */

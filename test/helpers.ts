@@ -191,3 +191,15 @@ export class Client {
     this.socket.destroy();
   }
 }
+
+/**
+ * Wait (up to `ms`) until `cond` is true, polling every 10 ms; resolves either way, so the assertion that follows is what fails with
+ * a message. Use it where a test reads the result of real IO (a file write, an HTTP round trip) instead of sleeping a fixed time,
+ * which races a loaded machine (ticket 252).
+ */
+export async function until(cond: () => boolean, ms = 3000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!cond() && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}

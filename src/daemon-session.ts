@@ -71,6 +71,9 @@ export interface DaemonSession {
   denyTimer?: NodeJS.Timeout;
   /** The agent's task list (ticket 228), as its toriel-tasks extension last reported it; in memory only, the session file is the record. */
   tasks?: Todo[];
+  /** When the list was last reported (ticket 251), and when the run in progress began; memory only. */
+  tasksAt?: number;
+  runSince?: number;
   /** Plan mode (ticket 229), as the daemon last set it or the toriel-plan extension reported it; the marker file is the truth. */
   plan?: boolean;
   /** The write scope this session's child started with (undefined = unscoped), kept for the permission decision log and the feedback snapshot (ticket 239). */

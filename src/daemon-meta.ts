@@ -46,6 +46,7 @@ function metaFor(s: DaemonSession, socket: net.Socket, presence: Presence, usage
     nextFire: s.sessionId && scheduler ? scheduler.soonest(s.sessionId) : undefined,
     auto: autoOn(s) ? true : undefined,
     tasks: s.child ? s.tasks : undefined,
+    tasksStaleSince: s.child && s.streaming && s.tasks?.some((t) => t.status !== "completed") ? Math.max(s.tasksAt ?? 0, s.runSince ?? 0) || undefined : undefined,
     plan: s.child && s.plan ? true : undefined,
     autoUntil: autoOn(s) && typeof s.autoUntil === "number" ? s.autoUntil : undefined,
     grants: granted > 0 ? granted : undefined,
