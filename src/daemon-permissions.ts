@@ -8,7 +8,7 @@ import { mcpYamlFile } from "./config-dir.ts";
 import type { Cmd, DaemonContext, Responder } from "./daemon-context.ts";
 import { scopeOf } from "./daemon-schedule.ts";
 import { log } from "./log.ts";
-import { coversPattern, type Grant, type GrantStore, isCappedSurface } from "./permissions.ts";
+import { type Grant, type GrantStore, isCappedSurface } from "./permissions.ts";
 import { piAgentDir } from "./pi-dir.ts";
 import type { GrantView, PermissionGrantSpec } from "./shared.ts";
 import { fmtClock, parseDurationText } from "./when.ts";
