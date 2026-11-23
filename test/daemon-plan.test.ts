@@ -52,6 +52,29 @@ describe("daemon: plan mode (ticket 229)", () => {
     await c.waitFor((m) => m.type === "sessions" && m.sessions.some((s: { id: number; plan?: boolean }) => s.id === session && s.plan === undefined));
   });
 
+  it("changes quietly when asked, and mode_notice then says the mode it settled on once (ticket 236)", async () => {
+    harness = await startDaemon();
+    const { c, session, marker } = await savedSession(harness);
+    c.messages.length = 0;
+    await c.request({ type: "auto_mode", session, on: true, quiet: true });
+    await c.request({ type: "auto_mode", session, on: false, quiet: true });
+    await c.request({ type: "plan_mode", session, on: true, quiet: true });
+    assert.equal(fs.existsSync(marker), true, "applied at once");
+    await c.waitFor((m) => m.type === "sessions" && m.sessions.some((s: { id: number; plan?: boolean }) => s.id === session && s.plan === true));
+    assert.deepEqual(c.messages.filter((m) => m.type === "notice"), [], "quiet changes say nothing");
+
+    await c.request({ type: "mode_notice", session });
+    const said = c.messages.filter((m) => m.type === "notice");
+    assert.equal(said.length, 1);
+    assert.match(said[0]?.text, /^plan mode ON/);
+
+    c.messages.length = 0;
+    await c.request({ type: "plan_mode", session, on: false, quiet: true });
+    await c.request({ type: "mode_notice", session });
+    assert.match(c.messages.filter((m) => m.type === "notice").map((m) => m.text).join("|"), /^normal mode/);
+    await assert.rejects(c.request({ type: "mode_notice", session: 9999 }), /no session/);
+  });
+
   it("follows the agent when it enters or leaves plan mode itself, and says so once", async () => {
     harness = await startDaemon();
     const { c, session } = await savedSession(harness);

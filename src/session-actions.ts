@@ -59,6 +59,11 @@ export class SessionActions {
     this.commands = new SessionCommands(host);
   }
 
+  /** Shutdown: drop a pending mode notice (ticket 236). */
+  dispose(): void {
+    this.commands.modeNotice.cancel();
+  }
+
   /** Start the viewed session because a /command or !command is being typed into it (ticket 68). */
   wakeForTyping(): Promise<void> {
     return this.commands.wakeForTyping();

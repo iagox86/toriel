@@ -369,6 +369,7 @@ class Controller {
 
   dispose(): void {
     this.link.close(); // first: a closing socket must not start a reconnect
+    this.session.dispose();
     process.stdout.write(OSC_RESET_BG);
     try {
       this.tui.stop();

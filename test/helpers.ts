@@ -77,7 +77,8 @@ export async function startDaemon(extraEnv: Record<string, string> = {}): Promis
   started.add(proc);
   proc.once("exit", () => started.delete(proc));
   const clients: Client[] = [];
-  const deadline = Date.now() + 10_000;
+  // a budget, not a delay: a daemon starts in well under a second idle, but a busy machine (a full parallel suite, other agents) can take many seconds
+  const deadline = Date.now() + 30_000;
   while (!fs.existsSync(sock)) {
     if (Date.now() > deadline) {
       proc.kill("SIGKILL");
@@ -134,12 +135,27 @@ export class Client {
     });
   }
 
-  static connect(sock: string): Promise<Client> {
-    return new Promise((resolve, reject) => {
-      const socket = net.connect(sock);
-      socket.once("connect", () => resolve(new Client(socket)));
-      socket.once("error", reject);
-    });
+  /**
+   * The socket file appears when the daemon binds it, a moment before it listens (longer on a busy machine), so a refused connect is
+   * retried for a while (ticket 253). Any other error is a real one.
+   */
+  static async connect(sock: string, budgetMs = 10_000): Promise<Client> {
+    const deadline = Date.now() + budgetMs;
+    for (;;) {
+      try {
+        return await new Promise<Client>((resolve, reject) => {
+          const socket = net.connect(sock);
+          socket.once("connect", () => resolve(new Client(socket)));
+          socket.once("error", reject);
+        });
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if ((code !== "ECONNREFUSED" && code !== "ENOENT") || Date.now() > deadline) {
+          throw err;
+        }
+        await new Promise((r) => setTimeout(r, 25));
+      }
+    }
   }
 
   send(msg: Msg): void {
@@ -158,7 +174,7 @@ export class Client {
   }
 
   /** Resolve with the first message (already received or future) matching. */
-  async waitFor(pred: (m: Msg) => boolean, timeoutMs = 8000): Promise<Msg> {
+  async waitFor(pred: (m: Msg) => boolean, timeoutMs = 20_000): Promise<Msg> {
     const deadline = Date.now() + timeoutMs;
     let from = 0;
     for (;;) {
