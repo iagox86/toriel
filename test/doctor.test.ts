@@ -218,6 +218,13 @@ describe("doctor checks", () => {
         fs.writeFileSync(path.join(s.agentDir, "models.json"), JSON.stringify({ providers: { bifrost: { baseUrl: "https://b.example/v1", models: [{ id: "a/b", contextWindow: 1 }] } } }));
         return { ...s.opts, probeLitellm: () => ({ routes: { "a/b": { contextWindow: 2 } } }) as never };
       })(),
+      (() => {
+        const s = setup({});
+        const bundle = path.join(s.agentDir, "feedback", "2026-11-22T22-45-23-015Z-abcd1234");
+        fs.mkdirSync(bundle, { recursive: true });
+        fs.truncateSync(fs.openSync(path.join(bundle, "session.jsonl"), "w") && path.join(bundle, "session.jsonl"), 3 * 1024 ** 3);
+        return { ...s.opts, feedbackDir: path.join(s.agentDir, "feedback"), startup: [] };
+      })(),
       setup({ mcpExtra: { broken: { exposure: "direct" } } }).opts,
       setup({ piMcpJson: { mcpServers: { freecad: { url: "http://127.0.0.1:39280/mcp" } } } }).opts,
       setup({ config: { authorizerChain: ["toriel-grants"], permission: { "*": "allow", external_directory_write: { "/tmp/*": "allow" }, path: { "*": "ask", [GRANTS_RULE]: "ask" } } }, settings: JSON.stringify({ scopeGuardAcceptedAllows: [{ surface: "external_directory_write", pattern: "/tmp/*" }, { surface: "*", pattern: "*" }] }) }).opts,
@@ -315,6 +322,27 @@ describe("doctor checks", () => {
     assert.deepEqual(finding(undefined, "RGB"), [], "tmux could not say which terminal");
     assert.deepEqual(finding("xterm-kitty", "RGB", {}), [], "not under tmux");
     assert.deepEqual(finding("xterm-kitty", "RGB", inTmux, false), [], "not a real terminal");
+  });
+
+  it("feedback-size: names the bundle folders once they pass 2 GB, and only when asked to look (ticket 240)", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-fbsize-"));
+    try {
+      const bundle = path.join(dir, "2026-11-22T22-45-23-015Z-abcd1234");
+      fs.mkdirSync(bundle);
+      const big = path.join(bundle, "session.jsonl");
+      fs.closeSync(fs.openSync(big, "w"));
+      const find = (feedbackDir?: string) => collectFindings({ ...setup({}).opts, startup: [], feedbackDir }).filter((f) => f.id === "feedback-size");
+      fs.truncateSync(big, 1024 ** 3);
+      assert.deepEqual(find(dir), [], "1 GB is fine");
+      fs.truncateSync(big, 2 * 1024 ** 3 + 1);
+      const found = find(dir);
+      assert.equal(found.length, 1);
+      assert.match(found[0]?.message ?? "", /use 2\.0 GB[\s\S]*toriel feedback prune --older-than 30d/);
+      assert.ok(found[0]?.manual && !found[0]?.fix, "deleting feedback is never automatic");
+      assert.deepEqual(find(undefined), [], "not asked to look: skipped");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("mcp-yaml: an entry of mcp.yaml that cannot be used is named, with why (ticket 216)", () => {
@@ -515,7 +543,7 @@ describe("doctor report", () => {
     assert.match(text, /Required: all 5 ok/);
     assert.match(text, /Recommended: all 5 ok/);
     assert.doesNotMatch(text, / ok {7}/);
-    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(16 ok\)/);
+    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(17 ok\)/);
   });
 });
 
@@ -544,7 +572,7 @@ describe("doctor report colours", () => {
   it("colours the compact report too, with the passing checks' count dim", () => {
     const coloured = renderDoctor(checks(), { compact: true, style: ANSI_STYLE });
     assert.match(coloured, /Required\x1b\[22m: \x1b\[32mall 5 ok\x1b\[39m/);
-    assert.match(coloured, /\x1b\[2m {2}\(16 ok\)\x1b\[22m/);
+    assert.match(coloured, /\x1b\[2m {2}\(17 ok\)\x1b\[22m/);
   });
 });
 
