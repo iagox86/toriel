@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { modeOf, nextMode, switches } from "../src/mode-cycle.ts";
+import { ModeNoticeDebounce, modeOf, nextMode, switches } from "../src/mode-cycle.ts";
 
 describe("mode cycle (ticket 233)", () => {
   it("names the mode a session is in, plan outranking auto", () => {
@@ -33,5 +33,76 @@ describe("mode cycle (ticket 233)", () => {
       { flag: "auto", on: false },
     ]);
     assert.deepEqual(switches({ auto: true }, "auto"), []);
+  });
+});
+
+describe("the shift+tab notice debounce (ticket 236)", () => {
+  /** A clock the test moves by hand, in place of setTimeout. */
+  function fakeClock() {
+    let now = 0;
+    let next = 1;
+    const pending = new Map<number, { at: number; fn: () => void }>();
+    const set = ((fn: () => void, ms: number) => {
+      const id = next++;
+      pending.set(id, { at: now + ms, fn });
+      return Object.assign(id as unknown as NodeJS.Timeout, { unref: () => undefined });
+    }) as unknown as typeof setTimeout;
+    const clear = ((t: unknown) => {
+      const id = Number(t);
+      pending.delete(id);
+    }) as unknown as typeof clearTimeout;
+    const advance = (ms: number) => {
+      now += ms;
+      for (const [id, t] of [...pending]) {
+        if (t.at <= now) {
+          pending.delete(id);
+          t.fn();
+        }
+      }
+    };
+    return { set, clear, advance, pending };
+  }
+
+  const make = () => {
+    const clock = fakeClock();
+    const said: number[] = [];
+    const d = new ModeNoticeDebounce((s) => said.push(s), 700, { set: clock.set, clear: clock.clear });
+    return { d, said, clock };
+  };
+
+  it("announces once, for the settled mode, after a burst of presses", () => {
+    const { d, said, clock } = make();
+    for (let i = 0; i < 6; i++) {
+      d.poke(7);
+      clock.advance(300);
+    }
+    assert.deepEqual(said, [], "still pressing: nothing yet");
+    clock.advance(700);
+    assert.deepEqual(said, [7]);
+    clock.advance(5000);
+    assert.deepEqual(said, [7], "and not again");
+  });
+
+  it("announces a single press after the wait, and two bursts apart twice", () => {
+    const { d, said, clock } = make();
+    d.poke(7);
+    clock.advance(699);
+    assert.deepEqual(said, []);
+    clock.advance(1);
+    assert.deepEqual(said, [7]);
+    d.poke(7);
+    clock.advance(700);
+    assert.deepEqual(said, [7, 7]);
+  });
+
+  it("announces an earlier session at once when a press lands on another, and drops everything on cancel", () => {
+    const { d, said, clock } = make();
+    d.poke(7);
+    d.poke(8);
+    assert.deepEqual(said, [7]);
+    d.cancel();
+    clock.advance(5000);
+    assert.deepEqual(said, [7], "cancelled: the pending one never fires");
+    assert.equal(clock.pending.size, 0, "no timer is left behind");
   });
 });

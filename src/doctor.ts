@@ -8,6 +8,7 @@
 // audit in resources.ts), a test, and a line in docs/reference.md "Doctor". When a requirement
 // changes or goes away, change or remove its check. test/doctor.test.ts fails when a finding
 // carries an id the catalog does not list.
+import { bundlesBytes, fmtBytes } from "./feedback-admin.ts";
 import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, readFileSync, renameSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -82,6 +83,7 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: "tmux-hyperlinks", level: "feature", title: "tmux passes clickable links (OSC 8 hyperlinks) through to the terminal (terminal-features)" },
   { id: "kitty-shift-enter", level: "feature", title: "kitty sends Shift+Enter distinctly under tmux (kitty.conf mapping)" },
   { id: "truecolor", level: "feature", title: "the terminal shows toriel's theme as intended (truecolor)" },
+  { id: "feedback-size", level: "feature", title: "the /feedback bundles do not take much disk (toriel feedback prune clears them)" },
   { id: "grants-path-rule", level: "hardening", title: "an agent cannot edit the permission grants file unasked (a path rule)", needsPermissionPackage: true },
   { id: "scope-guard-short-circuit", level: "hardening", title: 'no config allow short-circuits the scope guard for directory-scoped sessions (external_directory_write, the bare external_directory, the "*" fallback)', needsPermissionPackage: true },
 ];
@@ -123,7 +125,12 @@ export interface DoctorOptions extends AuditOptions {
   mcpFile?: string;
   /** The text of kitty's config, including what it includes (default: read from kitty's config directory; tests inject). */
   kittyConfig?: string;
+  /** The /feedback bundle folders (ticket 240). Not set: the size check is skipped (`toriel doctor` passes the real one). */
+  feedbackDir?: string;
 }
+
+/** Past this much disk, the bundle folders are worth a word (each holds a full copy of a session). */
+export const FEEDBACK_SIZE_WARN_BYTES = 2 * 1024 ** 3;
 
 /** What `probeTmux` learned; a field is undefined when tmux could not be asked. */
 export interface TmuxKeys {
@@ -441,6 +448,12 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
   } else if (display === "x11" && !onPath("xclip", dirs)) {
     out.push({ id: "clipboard", level: "feature", message: "xclip is not on PATH, so paste and /btw's copy have no clipboard (install xclip; copying may still work through the terminal)", manual: "installing xclip is a system package install" });
   }
+  if (opts.feedbackDir !== undefined) {
+    const bytes = bundlesBytes(opts.feedbackDir);
+    if (bytes > FEEDBACK_SIZE_WARN_BYTES) {
+      out.push({ id: "feedback-size", level: "feature", message: `the /feedback bundles in ${opts.feedbackDir} use ${fmtBytes(bytes)} (each holds a full copy of a session); \`toriel feedback list\` shows them and \`toriel feedback prune --older-than 30d\` clears the old ones`, manual: "deleting feedback is your call, so prune is explicit (toriel feedback prune); nothing deletes it for you" });
+    }
+  }
   if (opts.tty === true) {
     const term = `${env.COLORTERM ?? ""} ${env.TERM ?? ""}`;
     if (!/truecolor|24bit/i.test(term) && !/kitty|ghostty|wezterm|contour|foot/i.test(term)) {
@@ -483,6 +496,10 @@ export function runDoctor(opts: DoctorOptions = {}): Check[] {
     }
     if (noPackage && entry.needsPermissionPackage) {
       return { ...entry, state: "skipped", findings: [], note: "needs pi-permission-system (see above)" };
+    }
+    // the bundle folder is a CLI input (ticket 240); without it the size check has not run, so it does not count as ok (like the probe checks)
+    if (entry.id === "feedback-size" && opts.feedbackDir === undefined) {
+      return { ...entry, state: "skipped", findings: [], note: "run `toriel doctor` in a terminal to check" };
     }
     if (entry.needsProbe !== undefined && opts.probeLitellm === undefined) {
       const kind = entry.needsProbe;

@@ -122,9 +122,12 @@ matching); a project config overlay (above).
   - a file-path grant is only made as the answer to the file-path prompt that is open for
     the session (`permission_add` names its id, and the daemon checks it against the prompt it
     holds), so it cannot be added from `/permissions add`, an agent tool or a stray socket
-    line without one; it is never `spawn` or `command` sourced, and it must cover the
-    patterns pi suggested for that very prompt (otherwise the prompt would come straight
-    back);
+    line without one; it is never `spawn` or `command` sourced, and the prompt
+    must have asked about that surface, and the pattern is the user's choice: narrower than
+    pi's suggestion is allowed (`/etc/passwd` for a suggested `/etc/*`), and a grant that
+    misses only brings the prompt back (ticket 249). The daemon judges such a prompt against
+    the path asked about too (`toriel.value` on the dialog, `GrantStore.covers`'s `value`),
+    so the narrowed grant answers the next ask for that file;
   - only grants from a prompt answer ever cover a file-path ask, in the stored file too
     (dormant until `/permissions restore`, like all grants);
   - the grants file and pi's own config (`~/.pi/agent`) are never answered from a grant,
@@ -334,9 +337,9 @@ its life. The editor has a cursor (ticket 196): left, right, home, end, delete a
 work at it, up and down leave the edit and the highlighted row alone. Empty is refused; esc
 leaves the editor without answering. Offered only when the ask carries exactly one suggested
 grant (nothing single to edit otherwise), and never on the once, No or reason rows. A typed
-pattern must cover the suggested one (the controller says so and stays in the editor otherwise,
-the daemon checks it again for file-path grants); beyond that it is toriel's own record,
-glob-matched, on the surface the row appeared for. For a file-path ask the grant is stored
+pattern is stored as typed, narrower than the suggestion included (ticket 249: the user knows
+which file they mean); one that misses what was asked only makes the prompt come back. It is
+toriel's own record, glob-matched, on the surface the row appeared for. For a file-path ask the grant is stored
 first, against the open prompt, and pi is answered "Yes" only once the daemon accepted it.
 
 **Who answers (tickets 121, 122).** A subagent's prompt is shown in its parent's view and

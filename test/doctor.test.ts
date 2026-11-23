@@ -92,9 +92,11 @@ describe("the settings file", () => {
 
 describe("doctor checks", () => {
   it("finds nothing wrong with a complete setup", () => {
-    const { opts } = setup();
-    assert.deepEqual(collectFindings(opts), []);
-    const checks = runDoctor(opts);
+    const { opts, agentDir } = setup();
+    fs.mkdirSync(path.join(agentDir, "feedback"), { recursive: true });
+    const all = { ...opts, feedbackDir: path.join(agentDir, "feedback") };
+    assert.deepEqual(collectFindings(all), []);
+    const checks = runDoctor(all);
     assert.equal(exitCode(checks), 0);
     assert.ok(checks.every((c) => c.state === "ok"));
     assert.match(renderDoctor(checks), /Everything checks out\./);
@@ -218,6 +220,14 @@ describe("doctor checks", () => {
         fs.writeFileSync(path.join(s.agentDir, "models.json"), JSON.stringify({ providers: { bifrost: { baseUrl: "https://b.example/v1", models: [{ id: "a/b", contextWindow: 1 }] } } }));
         return { ...s.opts, probeLitellm: () => ({ routes: { "a/b": { contextWindow: 2 } } }) as never };
       })(),
+      (() => {
+        const s = setup({});
+        const bundle = path.join(s.agentDir, "feedback", "2026-11-22T22-45-23-015Z-abcd1234");
+        fs.mkdirSync(bundle, { recursive: true });
+        fs.writeFileSync(path.join(bundle, "session.jsonl"), "");
+        fs.truncateSync(path.join(bundle, "session.jsonl"), 3 * 1024 ** 3);
+        return { ...s.opts, feedbackDir: path.join(s.agentDir, "feedback"), startup: [] };
+      })(),
       setup({ mcpExtra: { broken: { exposure: "direct" } } }).opts,
       setup({ piMcpJson: { mcpServers: { freecad: { url: "http://127.0.0.1:39280/mcp" } } } }).opts,
       setup({ config: { authorizerChain: ["toriel-grants"], permission: { "*": "allow", external_directory_write: { "/tmp/*": "allow" }, path: { "*": "ask", [GRANTS_RULE]: "ask" } } }, settings: JSON.stringify({ scopeGuardAcceptedAllows: [{ surface: "external_directory_write", pattern: "/tmp/*" }, { surface: "*", pattern: "*" }] }) }).opts,
@@ -317,6 +327,27 @@ describe("doctor checks", () => {
     assert.deepEqual(finding("xterm-kitty", "RGB", inTmux, false), [], "not a real terminal");
   });
 
+  it("feedback-size: names the bundle folders once they pass 2 GB, and only when asked to look (ticket 240)", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-fbsize-"));
+    try {
+      const bundle = path.join(dir, "2026-11-22T22-45-23-015Z-abcd1234");
+      fs.mkdirSync(bundle);
+      const big = path.join(bundle, "session.jsonl");
+      fs.closeSync(fs.openSync(big, "w"));
+      const find = (feedbackDir?: string) => collectFindings({ ...setup({}).opts, startup: [], feedbackDir }).filter((f) => f.id === "feedback-size");
+      fs.truncateSync(big, 1024 ** 3);
+      assert.deepEqual(find(dir), [], "1 GB is fine");
+      fs.truncateSync(big, 2 * 1024 ** 3 + 1);
+      const found = find(dir);
+      assert.equal(found.length, 1);
+      assert.match(found[0]?.message ?? "", /use 2\.0 GB[\s\S]*toriel feedback prune --older-than 30d/);
+      assert.ok(found[0]?.manual && !found[0]?.fix, "deleting feedback is never automatic");
+      assert.deepEqual(find(undefined), [], "not asked to look: skipped");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("mcp-yaml: an entry of mcp.yaml that cannot be used is named, with why (ticket 216)", () => {
     const found = collectFindings({ ...setup({ mcpExtra: { broken: { exposure: "direct" }, odd: { command: "x", lifecycle: "lazy" } } }).opts, startup: [] }).filter((f) => f.id === "mcp-yaml");
     assert.equal(found.length, 2);
@@ -386,7 +417,7 @@ describe("doctor checks", () => {
 
   it("skips the checks that need the permission package when it is not there, and says so", () => {
     const checks = runDoctor(setup({ noPackage: true }).opts);
-    assert.deepEqual(checks.filter((c) => c.state === "skipped").map((c) => c.id), ["grants-chain", "grants-path-rule", "scope-guard-short-circuit"]);
+    assert.deepEqual(checks.filter((c) => c.state === "skipped").map((c) => c.id), ["grants-chain", "feedback-size", "grants-path-rule", "scope-guard-short-circuit"]);
     assert.match(renderDoctor(checks), /skipped {2}permission grants are switched on[\s\S]*needs pi-permission-system/);
   });
 
@@ -495,9 +526,15 @@ describe("doctor report", () => {
     assert.match(text, /systemd-inhibit is not on PATH[^\n]*\[manual: installing systemd is a system package install/);
     assert.match(text, /\[fixable: add "toriel-grants" to "authorizerChain"\]/);
     assert.match(text, /3 problems, 2 fixable automatically \(toriel doctor --fix, or \/doctor --fix\), 1 needs you \(see "manual" above\)\.$/);
-    // nothing in the report is left without one of the two labels
-    for (const line of text.split("\n").filter((l) => /^ {11}\S/.test(l))) {
-      assert.match(line, /\[(fixable|manual): /, line);
+    // every line a PROBLEM entry indents must carry one of the two labels (a skipped entry's note must not)
+    let last = "";
+    for (const line of text.split("\n")) {
+      const tag = /^ {2}(ok|skipped|PROBLEM) {2}/.exec(line);
+      if (tag) {
+        last = tag[1];
+      } else if (/^ {11}\S/.test(line) && last === "PROBLEM") {
+        assert.match(line, /\[(fixable|manual): /, line);
+      }
     }
   });
 

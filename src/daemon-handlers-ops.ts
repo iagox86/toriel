@@ -134,14 +134,9 @@ export function handleAutoMode(ctx: DaemonContext, cmd: Cmd<"auto_mode">, res: R
   }
   const until = typeof s.autoUntil === "number" ? s.autoUntil : undefined;
   log(`auto mode ${on ? "on" : "off"} for session ${s.id}${until !== undefined ? ` until ${new Date(until).toISOString()}` : ""}`);
-  ctx.hub.broadcast({
-    type: "notice",
-    session: s.id,
-    text: on
-      ? `auto mode ON${until !== undefined ? ` until ${fmtClock(until, new Date())}` : ""}: permission prompts are allowed without asking, except the ones that always ask (credentials, destructive commands, pushes, writes outside the directory); /auto off ends it (shift+tab moves on to the next mode)`
-      : "auto mode OFF: permission prompts ask again",
-    durable: true,
-  });
+  if (cmd.quiet !== true) {
+    ctx.hub.broadcast({ type: "notice", session: s.id, text: autoNotice(on, until), durable: true });
+  }
   ctx.hub.broadcastSessions();
   res(true, undefined, { on, until });
 }
@@ -162,14 +157,34 @@ export function handlePlanMode(ctx: DaemonContext, cmd: Cmd<"plan_mode">, res: R
   setPlanOn(PLAN_DIR, s.sessionId, on);
   s.plan = on;
   log(`plan mode ${on ? "on" : "off"} for session ${s.id}`);
-  ctx.hub.broadcast({
-    type: "notice",
-    session: s.id,
-    text: on ? "plan mode ON: the agent can only look (no writes, no edits, commands run read-only) until you approve a plan; /plan off ends it" : "plan mode OFF: the agent can change things again",
-    durable: true,
-  });
+  if (cmd.quiet !== true) {
+    ctx.hub.broadcast({ type: "notice", session: s.id, text: planNotice(on), durable: true });
+  }
   ctx.hub.broadcastSessions();
   res(true, undefined, { on });
+}
+
+const autoNotice = (on: boolean, until: number | undefined): string =>
+  on
+    ? `auto mode ON${until !== undefined ? ` until ${fmtClock(until, new Date())}` : ""}: permission prompts are allowed without asking, except the ones that always ask (credentials, destructive commands, pushes, writes outside the directory); /auto off ends it (shift+tab moves on to the next mode)`
+    : "auto mode OFF: permission prompts ask again";
+
+const planNotice = (on: boolean): string =>
+  on ? "plan mode ON: the agent can only look (no writes, no edits, commands run read-only) until you approve a plan; /plan off ends it" : "plan mode OFF: the agent can change things again";
+
+/**
+ * Say which mode the session is in (ticket 236): the one line a burst of quiet shift+tab changes leaves. Plan wins over auto, as
+ * `modeOf` has it; neither is the normal mode, said with both switches' "off" so a reader sees what ended.
+ */
+export function handleModeNotice(ctx: DaemonContext, cmd: Cmd<"mode_notice">, res: Responder): void {
+  const s = ctx.registry.get(cmd.session);
+  if (!s) {
+    throw new Error(`no session #${cmd.session}`);
+  }
+  const plan = s.plan === true;
+  const text = plan ? planNotice(true) : autoOn(s) ? autoNotice(true, typeof s.autoUntil === "number" ? s.autoUntil : undefined) : "normal mode: permission prompts ask again and the agent can change things again (shift+tab: auto, then plan)";
+  ctx.hub.broadcast({ type: "notice", session: s.id, text, durable: true });
+  res(true, undefined, { plan, auto: autoOn(s) });
 }
 
 /**

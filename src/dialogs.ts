@@ -22,7 +22,7 @@ export interface DialogRequest {
    * What the daemon knows about this ask (docs/permissions.md): the grants pi would record for it, or `protectedAsk` when
    * it is about the grants file or pi's own configuration, which no grant ever covers.
    */
-  toriel?: { grants?: Array<{ surface: string; pattern: string }>; protectedAsk?: boolean; denyAt?: number };
+  toriel?: { grants?: Array<{ surface: string; pattern: string }>; protectedAsk?: boolean; denyAt?: number; value?: string };
   /** toriel's own "allow for ..." rows, among `options` (see withOwnLayout). */
   extraRows?: GrantRow[];
   /** When toriel relabelled the options: what pi is told for each label, since pi only understands its own wording. */

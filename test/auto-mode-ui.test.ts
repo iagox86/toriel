@@ -38,20 +38,33 @@ describe("shift+tab", () => {
   };
 
   it("cycles normal, auto, plan and back for the viewed session (ticket 233)", async () => {
-    assert.deepEqual(await press({ id: 7, sessionId: "u" }), [{ type: "auto_mode", session: 7, on: true }], "normal -> auto");
+    assert.deepEqual(await press({ id: 7, sessionId: "u" }), [{ type: "auto_mode", session: 7, on: true, quiet: true }], "normal -> auto");
     assert.deepEqual(await press({ id: 7, sessionId: "u", auto: true }), [
-      { type: "plan_mode", session: 7, on: true },
-      { type: "auto_mode", session: 7, on: false },
+      { type: "plan_mode", session: 7, on: true, quiet: true },
+      { type: "auto_mode", session: 7, on: false, quiet: true },
     ], "auto -> plan: the two are exclusive");
-    assert.deepEqual(await press({ id: 7, sessionId: "u", plan: true }), [{ type: "plan_mode", session: 7, on: false }], "plan -> normal");
+    assert.deepEqual(await press({ id: 7, sessionId: "u", plan: true }), [{ type: "plan_mode", session: 7, on: false, quiet: true }], "plan -> normal");
     assert.deepEqual(await press({ id: 7, sessionId: "u", plan: true, auto: true }), [
-      { type: "plan_mode", session: 7, on: false },
-      { type: "auto_mode", session: 7, on: false },
+      { type: "plan_mode", session: 7, on: false, quiet: true },
+      { type: "auto_mode", session: 7, on: false, quiet: true },
     ], "both on (set by commands) -> normal");
   });
 
+  it("asks the daemon to say the mode once the presses stop, not per press (ticket 236)", async () => {
+    const fh = fakeHost({ attachedToYou: true, id: 7, sessionId: "u" });
+    const sa = new SessionActions(fh.host);
+    sa.keys(SHIFT_TAB);
+    sa.keys(SHIFT_TAB);
+    await new Promise((r) => setTimeout(r, 5));
+    assert.deepEqual(fh.requests.map((r) => r.type), ["auto_mode", "auto_mode"], "no notice request yet");
+    (sa as unknown as { commands: { modeNotice: { flush(): void } } }).commands.modeNotice.flush();
+    assert.deepEqual(fh.requests.map((r) => r.type), ["auto_mode", "auto_mode", "mode_notice"], "one, after the burst");
+    assert.deepEqual(fh.requests.at(-1), { type: "mode_notice", session: 7 });
+    sa.dispose();
+  });
+
   it("skips plan for a session that has no id yet, since plan mode is named by it", async () => {
-    assert.deepEqual(await press({ id: 7, auto: true }), [{ type: "auto_mode", session: 7, on: false }]);
+    assert.deepEqual(await press({ id: 7, auto: true }), [{ type: "auto_mode", session: 7, on: false, quiet: true }]);
   });
 
   it("stays the editor's while a completion popup is open, and when there is no session yet", () => {

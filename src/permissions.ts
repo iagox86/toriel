@@ -83,6 +83,11 @@ export interface Suggestion {
 /** A suggestion older than this does not belong to the dialog that just arrived. */
 export const SUGGESTION_TTL_MS = 60_000;
 
+/** Whether an ask's value is a bare file path (not a command): what a grant is judged against once the user has narrowed it. */
+export function isPathLike(value: string | undefined): value is string {
+  return value !== undefined && /^(\/|~\/)/.test(value) && !/[\n]/.test(value);
+}
+
 /**
  * A pi `select` dialog carrying the grant it could record, as `toriel: { grants }`, when
  * the remembered suggestion is fresh and the dialog's title names the same value (pi wraps
@@ -97,7 +102,7 @@ export function withSuggestion(dialog: Record<string, unknown>, suggestion: Sugg
   if (typeof dialog.title !== "string" || !squash(dialog.title).includes(squash(suggestion.value))) {
     return dialog;
   }
-  return { ...dialog, toriel: { grants: suggestion.grants } };
+  return { ...dialog, toriel: { grants: suggestion.grants, ...(isPathLike(suggestion.value) ? { value: suggestion.value } : {}) } };
 }
 
 /** The reason for the ask that a dialog is about, from the remembered suggestion: fresh, and the title names the same value. Undefined when it does not belong to this dialog or was not reported. */
@@ -270,7 +275,7 @@ export class GrantStore {
    * never covered, and neither is a capped surface unless `withPaths`: only the daemon answering a file-path
    * prompt itself asks that way (pi would downgrade a link's allow there, so the link never does).
    */
-  covers(session: string, asked: readonly GrantSpec[], withPaths = false): Grant[] | undefined {
+  covers(session: string, asked: readonly GrantSpec[], withPaths = false, value?: string): Grant[] | undefined {
     if (asked.length === 0) {
       return undefined;
     }
@@ -281,7 +286,10 @@ export class GrantStore {
         return undefined;
       }
       // a file-path grant counts only when it came from a prompt answer, whatever else a store file might hold
-      const hit = live.find((g) => g.surface === a.surface && (g.source === "dialog" || !isCappedSurface(g.surface)) && coversPattern(g.pattern, a.pattern));
+      // a grant the user narrowed (`/etc/passwd` where pi suggested `/etc/*`) is not wider than the suggestion but covers the path itself
+      const hit = live.find(
+        (g) => g.surface === a.surface && (g.source === "dialog" || !isCappedSurface(g.surface)) && (coversPattern(g.pattern, a.pattern) || (withPaths && isCappedSurface(g.surface) && isPathLike(value) && coversPattern(g.pattern, value))),
+      );
       if (!hit) {
         return undefined;
       }

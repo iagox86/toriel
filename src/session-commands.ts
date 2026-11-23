@@ -8,7 +8,7 @@ import { fmtTokens } from "./format.ts";
 import { detachFromParent, loadLineage } from "./lineage.ts";
 import { relationOf } from "./session-tree.ts";
 import { piAgentDir } from "./pi-dir.ts";
-import { nextMode, switches } from "./mode-cycle.ts";
+import { ModeNoticeDebounce, nextMode, switches } from "./mode-cycle.ts";
 import { probeEntry, parseStatusDetailed, readConfigs, statusReport } from "./mcp-doctor.ts";
 import { addMcpServer, readMcpYaml, removeMcpServer, setMcpServerHeaders } from "./mcp-config.ts";
 import { bearerEnvHeader, bearerTokenHeader, MCP_ACTIONS, type McpAuthOptions, type McpEntry, mcpConfigFile, mcpEntry, mcpListLines, mcpServerConnected, parseHeaderArg, withHeaders } from "./mcp.ts";
@@ -64,8 +64,12 @@ export class SessionCommands {
   /** The throwaway analysis run; injectable so tests do not spawn pi. */
   private readonly runPerf: typeof runPerformance;
 
-  constructor(host: Host, runPerf: typeof runPerformance = runPerformance) {
+  /** The one "which mode" line after a burst of shift+tab presses (ticket 236). */
+  readonly modeNotice: ModeNoticeDebounce;
+
+  constructor(host: Host, runPerf: typeof runPerformance = runPerformance, modeNotice?: ModeNoticeDebounce) {
     this.h = host;
+    this.modeNotice = modeNotice ?? new ModeNoticeDebounce((session) => this.announceMode(session));
     this.runPerf = runPerf;
   }
 
@@ -361,13 +365,22 @@ export class SessionCommands {
       return;
     }
     try {
+      // quiet: the mode applies now, the line saying so waits until the presses stop (one line for the mode settled on, ticket 236)
       for (const change of switches(meta, nextMode(meta))) {
-        await this.h.request(change.flag === "plan" ? { type: "plan_mode", session: meta.id, on: change.on } : { type: "auto_mode", session: meta.id, on: change.on }, 5000);
+        await this.h.request(change.flag === "plan" ? { type: "plan_mode", session: meta.id, on: change.on, quiet: true } : { type: "auto_mode", session: meta.id, on: change.on, quiet: true }, 5000);
+        this.modeNotice.poke(meta.id);
       }
     } catch (err) {
       const stale = err instanceof Error && /timed out|unknown command/i.test(err.message);
       this.h.notify(stale ? "mode: no answer from the daemon (is it older than this toriel? restart it: toriel kill-server)" : `mode change failed: ${errText(err)}`);
     }
+  }
+
+  private announceMode(session: number): void {
+    this.h.request({ type: "mode_notice", session }, 5000).catch((err: unknown) => {
+      const stale = err instanceof Error && /timed out|unknown command/i.test(err.message);
+      this.h.notify(stale ? "mode: no answer from the daemon (is it older than this toriel? restart it: toriel kill-server)" : `mode notice failed: ${errText(err)}`);
+    });
   }
 
   /** `/deny-after <duration|off|default|status>` (ticket 88). */
