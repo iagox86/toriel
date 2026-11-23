@@ -16,8 +16,9 @@ if (process.argv[2] === "doctor") {
     const found = await probeDaemon();
     return found.up ? describeDaemon(local, found.hello, compareDaemon(local, found.hello)) : undefined;
   };
-  const { FEEDBACK_DIR } = await import("./src/config.ts");
-  process.exit(await doctorMain(process.argv.slice(3), realIo(), { feedbackDir: FEEDBACK_DIR }, daemonReport));
+  // the feedback-size check needs the bundle directory; with the setup broken the module may not be there, and doctor must still explain itself
+  const feedbackDir = await import("./src/config.ts").then((c) => c.FEEDBACK_DIR, () => undefined);
+  process.exit(await doctorMain(process.argv.slice(3), realIo(), { feedbackDir }, daemonReport));
 }
 if (process.argv[2] === "update") {
   const { updateMain, realEnv } = await import("./src/update-cli.ts");
