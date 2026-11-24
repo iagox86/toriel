@@ -263,6 +263,14 @@ describe("toriel-plan extension", () => {
     assert.equal(r.details.approved, true);
   });
 
+  it("exit_plan_mode also puts the whole plan in the tool output, which scrolls (ticket 254)", async () => {
+    const { tools, ctx } = load({ select: REJECT });
+    setPlanOn(dir, "sess-1", true);
+    const shown: string[] = [];
+    await tools[EXIT_TOOL].execute("c", { plan: "1. the whole plan" }, undefined, (u: { content: Array<{ text: string }> }) => shown.push(u.content[0].text), ctx);
+    assert.match(shown.join("\n"), /1\. the whole plan/);
+  });
+
   it("keeps the mode on for a request for changes (with the user's words), a rejection and a dialog nobody answered", async () => {
     for (const [answers, expect] of [
       [{ select: REVISE, input: "also cover the tests" }, /wants the plan changed: also cover the tests/],

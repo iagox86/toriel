@@ -78,6 +78,7 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: "mcp-json", level: "recommended", title: "pi's own mcp.json holds no servers (toriel keeps them in mcp.yaml and pi would start the old ones itself)" },
   { id: "sandbox-bwrap", level: "feature", title: 'bubblewrap works (needed only when the "sandbox" setting is "bwrap": scoped sessions run each bash command sandboxed)' },
   { id: "sleep-lock", level: "feature", title: "the machine is kept awake for scheduled runs (systemd-inhibit)" },
+  { id: "notify-send", level: "feature", title: "desktop notifications for prompts in background sessions (notify-send)" },
   { id: "clipboard", level: "feature", title: "clipboard tools for paste and copy (wl-clipboard on Wayland, xclip on X11)" },
   { id: "tmux-keys", level: "feature", title: "tmux passes Shift+Enter through (extended-keys)" },
   { id: "tmux-hyperlinks", level: "feature", title: "tmux passes clickable links (OSC 8 hyperlinks) through to the terminal (terminal-features)" },
@@ -443,6 +444,9 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
     out.push({ id: "sleep-lock", level: "feature", message: 'systemd-inhibit is not on PATH, so the machine can sleep through a scheduled run (install systemd, or set "preventSleep": false in the toriel settings to stop asking)', manual: "installing systemd is a system package install; the alternative setting turns off a feature you may want" });
   }
   const display = env.WAYLAND_DISPLAY ? "wayland" : env.DISPLAY ? "x11" : undefined;
+  if (display !== undefined && loaded.settings.permissionNotifications !== false && !onPath("notify-send", dirs)) {
+    out.push({ id: "notify-send", level: "feature", message: 'notify-send is not on PATH, so a permission prompt in a background session cannot ping the desktop (install libnotify, or set "permissionNotifications": false in the toriel settings to stop asking)', manual: "installing libnotify is a system package install (dnf install libnotify); the alternative setting turns off a feature you may want" });
+  }
   if (display === "wayland" && !(onPath("wl-paste", dirs) && onPath("wl-copy", dirs))) {
     out.push({ id: "clipboard", level: "feature", message: "wl-clipboard is not on PATH, so paste and /btw's copy have no clipboard (install wl-clipboard; copying may still work through the terminal)", manual: "installing wl-clipboard is a system package install" });
   } else if (display === "x11" && !onPath("xclip", dirs)) {

@@ -59,6 +59,8 @@ describe("the settings template", () => {
       preventSleep: true,
       showExternalSessions: false,
       fileFreshness: true,
+      permissionNotifications: true,
+      permissionNotificationsCritical: false,
       trashRetentionDays: DEFAULT_TRASH_RETENTION_DAYS,
       scheduleUsagePause: DEFAULT_USAGE_PAUSE,
       scheduleDailyLimit: DEFAULT_LIMITS.dailyFires,

@@ -51,6 +51,10 @@ export interface TorielSettings {
   permissionGrantDurations?: string[];
   /** Deny a permission prompt nobody answers within this long (a duration such as "10m"; unset = wait forever, the default). A session's /deny-after overrides it. */
   permissionDenyAfter?: string;
+  /** Send a desktop notification (notify-send) when a permission prompt or plan approval waits in a session that is not on screen (default true; a failed send is only logged). */
+  permissionNotifications?: boolean;
+  /** Make those notifications critical urgency, which most desktops keep on screen until dismissed (default false). */
+  permissionNotificationsCritical?: boolean;
   /** Config allows the scope-guard doctor check treats as deliberate and does not flag: {surface, pattern} entries (surface "external_directory_write", "external_directory" or "*"; pattern a config glob). */
   scopeGuardAcceptedAllows?: Array<{ surface: string; pattern: string }>;
   /** Warn when pi-permission-system is not installed or has no usable config (default true). */
@@ -115,7 +119,7 @@ export function settingsMtime(file: string = settingsFile()): number | null {
 }
 
 const NUMBER_KEYS = ["summaryIntervalMinutes", "summaryMinNewMessages", "scheduleUsagePause", "scheduleDailyLimit", "permissionGrantLimit", "trashRetentionDays", "subagentMaxConcurrent", "subagentMaxDepth", "subagentMaxSpawns", "subagentBudgetTokens", "subagentKeepMinutes", "subagentIdleMinutes", "subagentMaxMinutes"] as const;
-const BOOLEAN_KEYS = ["warnNoPermissionSystem", "preventSleep", "showExternalSessions", "autoName", "fileFreshness"] as const;
+const BOOLEAN_KEYS = ["warnNoPermissionSystem", "preventSleep", "showExternalSessions", "autoName", "fileFreshness", "permissionNotifications", "permissionNotificationsCritical"] as const;
 /** Number settings where 0 is a meaningful "off". */
 const ZERO_OK: readonly string[] = ["summaryIntervalMinutes", "scheduleUsagePause", "trashRetentionDays", "subagentKeepMinutes", "subagentIdleMinutes", "subagentMaxMinutes"];
 /** The shortest and longest a prompt may wait before it is denied for nobody answering it (ticket 88). */

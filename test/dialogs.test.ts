@@ -56,6 +56,45 @@ describe("dialog rendering", () => {
     assert.match(text, /2\. Yes, allow bash "sudo -V" for this session/);
   });
 
+  it("cuts long text to the room it has and keeps every answer row (ticket 254)", () => {
+    const plan = { id: "9", method: "select", title: `Plan mode: approve this plan?\n\n${Array.from({ length: 80 }, (_, i) => `step ${i + 1}`).join("\n")}`, options: ["Approve", "Keep planning", "Reject"] };
+    const lines = dialogLines(plan as DialogRequest, 0, 100, null, 0, 20);
+    const text = lines.join("\n");
+    assert.ok(lines.length <= 20, String(lines.length));
+    assert.match(text, /more lines not shown here/);
+    assert.match(text, /1\. Approve/);
+    assert.match(text, /3\. Reject/);
+    assert.match(text, /step 1\b/);
+    assert.doesNotMatch(text, /step 80\b/);
+    assert.equal(dialogLines(plan as DialogRequest, 0, 100).length > 80, true, "no limit, no cut");
+    assert.doesNotMatch(dialogLines(perm, 0, 100, null, 0, 20).join("\n"), /not shown here/, "short text is whole");
+  });
+
+  it("the cut lands exactly on the room it has, whatever the footer ate (ticket 254, review)", () => {
+    // lead (1) + footer (4 options) = 5, so maxRows 6 leaves room 1: the note takes the last body row, the total is exactly 6
+    const longBody = `T\n${Array.from({ length: 20 }, (_, i) => `body ${i + 1}`).join("\n")}`;
+    const four = { id: "a", method: "select", title: longBody, options: ["w", "x", "y", "z"] } as DialogRequest;
+    const lines = dialogLines(four, 0, 100, null, 0, 6);
+    assert.equal(lines.length, 6, lines.join("\n"));
+    assert.match(lines.join("\n"), /\.\.\. 20 more lines not shown here/);
+    assert.doesNotMatch(lines.join("\n"), /body /);
+    // lead (1) + footer (5 options) = 6 = maxRows: no room at all, the body is dropped whole rather than overflowing
+    const five = { id: "b", method: "select", title: longBody, options: ["w", "x", "y", "z", "v"] } as DialogRequest;
+    const none = dialogLines(five, 0, 100, null, 0, 6);
+    assert.equal(none.length, 6, none.join("\n"));
+    assert.doesNotMatch(none.join("\n"), /not shown here|body /);
+  });
+
+
+  it("the panel limits itself to the terminal's height", () => {
+    const panel = new DialogPanel();
+    panel.heightProvider = () => 24;
+    panel.sync({ id: "9", method: "select", title: `T\n${"line\n".repeat(100)}`, options: ["Approve", "Reject"] } as DialogRequest);
+    const rows = panel.render(100);
+    assert.ok(rows.length <= 24 - 6, String(rows.length));
+    assert.match(rows.join("\n"), /2\. Reject/);
+  });
+
   it("numbers its rows once when the options already carry their own numbering (ask_user_question pre-numbers them, ticket 245)", () => {
     // the package's rpc fallback sends every line as "N. <label> - <description>" and "N. Type something."
     const qa = { id: "8", method: "select", title: "Pick one", options: ["1. Solarized - dark", "2. Nord - cool", "3. 1.5 release - pending", "4. Type something."] };
