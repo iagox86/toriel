@@ -1,13 +1,13 @@
 // `toriel --timing` (ticket 225): an opt-in log of the moments that felt slow, so the next one explains itself. Off, every call here is
 // a cheap no-op. On, an event that takes longer than the threshold (150 ms, TORIEL_TIMING_MS) becomes one JSON line in timing.jsonl in the
-// state directory, with what else was going on: items on screen, whether the session was streaming, how late the event loop ran, the
+// state directory, with what else was going on: items on screen, whether the session was streaming, the
 // load average and the CPU the process used meanwhile. That is what separates "the session is big" from "a run was streaming" from
 // "the machine was busy" (the 2026-11-15 slowdown that was gone minutes later). The controller and the daemon both write to the file
 // (`proc` says which); the flag sets TORIEL_TIMING=1, which the daemon the controller starts inherits.
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { monitorEventLoopDelay, performance } from "node:perf_hooks";
+import { performance } from "node:perf_hooks";
 import { STATE_DIR } from "./config.ts";
 
 export const DEFAULT_THRESHOLD_MS = 150;
@@ -43,8 +43,6 @@ export class Timing {
   private readonly pending: Pending[] = [];
   private stampAt = -Infinity;
   private lastRenderLog = -Infinity;
-  /** Started once by the first logged event and left running (a diagnostic, not cleaned up); lag_ms is the worst delay since the previous logged line, reset as it is read. */
-  private loop?: ReturnType<typeof monitorEventLoopDelay>;
   /** Rotation is checked on this process's first write only: a mid-run write past the limit keeps appending until the next start. */
   private rotated = false;
 
@@ -103,11 +101,13 @@ export class Timing {
     if (!this.enabled) {
       return;
     }
-    for (const p of this.pending.splice(0)) {
+    const closed = this.pending.splice(0);
+    for (const p of closed) {
       this.finish({ ...p, fields: { ...p.fields, ...fields, render_ms: round(renderMs) } });
     }
     const t = this.now();
-    if (renderMs >= this.opts.thresholdMs && t - this.lastRenderLog >= RENDER_EVERY_MS) {
+    // A frame that closed an event is already in the log as that event (with render_ms); it gets no line of its own.
+    if (closed.length === 0 && renderMs >= this.opts.thresholdMs && t - this.lastRenderLog >= RENDER_EVERY_MS) {
       this.lastRenderLog = t;
       this.write({ event: "render", ms: round(renderMs), ...fields, ...this.around(process.cpuUsage(), renderMs) });
     }
@@ -120,20 +120,13 @@ export class Timing {
     }
   }
 
-  /** What else was going on: CPU used by this process during the event, event-loop lateness, load average, memory. */
+  /** What else was going on: CPU used by this process during the event, load average, memory (event-loop lateness was tried and dropped: a stalled loop reports it only after the event is over, and it read its ~20 ms floor through 2 s stalls). */
   private around(cpu: NodeJS.CpuUsage, _ms: number): Record<string, number> {
     if (this.opts.context) {
       return this.opts.context();
     }
     const used = process.cpuUsage(cpu);
-    this.loop ??= (() => {
-      const h = monitorEventLoopDelay({ resolution: 20 });
-      h.enable();
-      return h;
-    })();
-    const lag = this.loop.max / 1e6;
-    this.loop.reset();
-    return { cpu_ms: round((used.user + used.system) / 1000), lag_ms: round(Number.isFinite(lag) ? lag : 0), load1: round(os.loadavg()[0] ?? 0), rss_mb: Math.round(process.memoryUsage.rss() / 1024 ** 2) };
+    return { cpu_ms: round((used.user + used.system) / 1000), load1: round(os.loadavg()[0] ?? 0), rss_mb: Math.round(process.memoryUsage.rss() / 1024 ** 2) };
   }
 
   private write(record: Record<string, unknown>): void {

@@ -10,7 +10,6 @@
 // Run: node controller.ts
 import * as fs from "node:fs";
 import {
-  Container,
   isKeyRelease,
   Key,
   matchesKey,
@@ -69,6 +68,7 @@ import { clearTransient, viewFromHistory } from "./resync.ts";
 import { buildStatusLine, fleetStats, bridgeNotice, settingsNotice } from "./status.ts";
 import { ActivityLine } from "./activity.ts";
 import { Dimmed } from "./components.ts";
+import { WindowedContainer } from "./windowed-container.ts";
 import { ChoicePanel } from "./choice-panel.ts";
 import { Attachments } from "./attachments.ts";
 import { ClipboardActions } from "./clipboard-actions.ts";
@@ -116,7 +116,7 @@ const timing = getTiming("controller");
 
 class Controller {
   tui: TuiAltScreen;
-  chatRoot = new Container();
+  chatRoot = new WindowedContainer();
   chatLayout: VStack;
   switcherLayout: VStack;
   scroll: ScrollView;
@@ -245,6 +245,9 @@ class Controller {
       this.instrumentTiming();
     }
     this.scroll = new ScrollView(this.chatRoot, { follow: "end", primary: true, overscroll: "chain", scrollbar: "auto" });
+    // the transcript draws only what is in view (ticket 225); ScrollView knows where that is from the previous frame
+    this.chatRoot.viewport = () => ({ top: this.scroll.scrollTop, height: this.scroll.viewportHeight, following: this.scroll.isFollowingEnd });
+    this.chatRoot.onShift = (lines) => this.scroll.scrollBy(lines);
     this.editor = new InputEditor(this.tui, editorTheme, { paddingX: 1 });
     this.editor.setAutocompleteMaxVisible(autocompleteMaxVisible());
     // looked up at every redraw: a leading `!` (a shell command, not a message) turns the border to the warning colour as it is typed

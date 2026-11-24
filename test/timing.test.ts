@@ -5,11 +5,12 @@ import * as path from "node:path";
 import { describe, it } from "node:test";
 import { applyTiming } from "../src/preflight.ts";
 import { MAX_BYTES, Timing, timingFromEnv } from "../src/timing.ts";
+import { withoutSessionEnv } from "./helpers.ts";
 
 function harness(enabled = true, thresholdMs = 150) {
   let t = 1000;
   const lines: Array<Record<string, unknown>> = [];
-  const timing = new Timing({ enabled, file: "unused", thresholdMs, proc: "controller", now: () => t, write: (l) => lines.push(JSON.parse(l)), context: () => ({ load1: 2, lag_ms: 5 }) });
+  const timing = new Timing({ enabled, file: "unused", thresholdMs, proc: "controller", now: () => t, write: (l) => lines.push(JSON.parse(l)), context: () => ({ load1: 2 }) });
   return { timing, lines, advance: (ms: number) => {
       t += ms;
     } };
@@ -22,7 +23,7 @@ describe("timing (ticket 225)", () => {
     assert.deepEqual(lines, []);
     timing.time("history", { messages: 8000 }, () => advance(200));
     assert.equal(lines.length, 1);
-    assert.deepEqual({ ...(lines[0] as object), at: undefined, pid: undefined }, { at: undefined, proc: "controller", pid: undefined, event: "history", ms: 200, messages: 8000, load1: 2, lag_ms: 5 });
+    assert.deepEqual({ ...(lines[0] as object), at: undefined, pid: undefined }, { at: undefined, proc: "controller", pid: undefined, event: "history", ms: 200, messages: 8000, load1: 2 });
   });
 
   it("times an async step, and logs it even when it throws", async () => {
@@ -42,8 +43,8 @@ describe("timing (ticket 225)", () => {
     timing.begin("toggle_tools", { items: 900 });
     advance(260); // the frame
     timing.rendered(260, { streaming: false });
-    assert.equal(lines.length >= 1, true);
-    assert.deepEqual(lines[0], { at: lines[0]?.at, proc: "controller", pid: lines[0]?.pid, event: "toggle_tools", ms: 300, items: 900, streaming: false, render_ms: 260, load1: 2, lag_ms: 5 });
+    assert.equal(lines.length, 1, "the frame that closed the toggle is not logged a second time as a render");
+    assert.deepEqual(lines[0], { at: lines[0]?.at, proc: "controller", pid: lines[0]?.pid, event: "toggle_tools", ms: 300, items: 900, streaming: false, render_ms: 260, load1: 2 });
   });
 
   it("a quick toggle logs nothing, and an old key press is not where it began", () => {
@@ -123,5 +124,10 @@ describe("timing (ticket 225)", () => {
     const clean: NodeJS.ProcessEnv = {};
     applyTiming(none, clean);
     assert.equal(clean.TORIEL_TIMING, undefined);
+  });
+
+  it("a test run inside a --timing session does not hand the switches to its test daemons (they would write to the real log)", () => {
+    const env = withoutSessionEnv({ TORIEL_TIMING: "1", TORIEL_TIMING_MS: "0", TORIEL_TIMING_FILE: "/x", PATH: "/bin" });
+    assert.deepEqual(env, { PATH: "/bin" });
   });
 });
