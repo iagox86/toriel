@@ -120,7 +120,7 @@ export default function (pi: Pi): void {
       required: ["plan"],
       additionalProperties: false,
     },
-    async execute(_id, params, _signal, _onUpdate, ctx) {
+    async execute(_id, params, _signal, onUpdate, ctx) {
       const plan = typeof (params as { plan?: unknown } | undefined)?.plan === "string" ? ((params as { plan: string }).plan).trim() : "";
       if (!on(ctx)) {
         return text("Plan mode is not on, so there is nothing to approve. Go ahead.");
@@ -130,6 +130,14 @@ export default function (pi: Pi): void {
       }
       if (!ctx.hasUI || !ctx.ui?.select) {
         return text("There is no user to approve a plan here, so plan mode stays on.");
+      }
+      // The popup only has room for the start of a long plan (ticket 254); the whole of it goes into the tool's output, which scrolls with the transcript.
+      if (typeof onUpdate === "function") {
+        try {
+          (onUpdate as (r: ToolResult) => void)(text(`The plan, for the user to decide on:\n\n${plan}`));
+        } catch {
+          // showing it twice is a convenience; the popup still asks
+        }
       }
       const answer = await ctx.ui.select(approvalTitle(plan), [APPROVE, REVISE, REJECT]);
       if (answer === APPROVE) {

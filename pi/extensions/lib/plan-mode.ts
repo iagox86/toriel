@@ -128,7 +128,8 @@ export const PLAN_ON_NOTE = [
 
 export const PLAN_OFF_NOTE = "[PLAN MODE ENDED]\nPlan mode is off: you may change files and run commands again. If a plan was approved, carry it out.";
 
-/** The text exit_plan_mode asks the user to decide on: the plan, capped so a runaway one does not fill the screen. */
+/** The text exit_plan_mode asks the user to decide on: the plan, capped so a runaway one does not fill the screen
+ * (the popup also cuts what does not fit the terminal; the whole plan is in the tool output above it). */
 export function approvalTitle(plan: string, cap = 4000): string {
   const text = plan.trim();
   return `Plan mode: approve this plan?\n\n${text.length > cap ? `${text.slice(0, cap)}\n... (the plan is ${text.length} characters; the rest is in the tool call)` : text}`;

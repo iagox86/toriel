@@ -227,17 +227,31 @@ function leadFor(options: string[], i: number): string {
 }
 
 /** `reason` non-null = the highlighted option is being edited inline, with the cursor at `cursor` (default: the end). */
-export function dialogLines(d: DialogRequest, index: number, width: number, reason: string | null = null, cursor = reason?.length ?? 0): string[] {
-  const out: string[] = [];
+export function dialogLines(d: DialogRequest, index: number, width: number, reason: string | null = null, cursor = reason?.length ?? 0, maxRows = Infinity): string[] {
   const title = (d.title ?? d.method).split("\n");
   const head = d.origin ? `${d.origin}: ` : "";
-  out.push(...wrapRows(`${head}${title[0]}`, width).map(attention));
+  const lead = wrapRows(`${head}${title[0]}`, width).map(attention);
+  const body: string[] = [];
   for (const line of title.slice(1)) {
-    out.push(...wrapRows(line, width));
+    body.push(...wrapRows(line, width));
   }
   if (d.message) {
-    out.push(...wrapRows(d.message, width));
+    body.push(...wrapRows(d.message, width));
   }
+  const rest = dialogFooter(d, index, width, reason, cursor);
+  // Long text (a plan, a long message) must not push the answer rows off the screen (ticket 254): the text is cut to what fits, the rows stay.
+  const room = maxRows - lead.length - rest.length;
+  if (body.length > room) {
+    const keep = Math.max(1, room - 1);
+    const hidden = body.length - keep;
+    return [...lead, ...body.slice(0, keep), dim(` ... ${hidden} more line${hidden === 1 ? "" : "s"} not shown here`), ...rest];
+  }
+  return [...lead, ...body, ...rest];
+}
+
+/** The rows below a dialog's text: its answer rows (or box hints) and the toriel notes. */
+function dialogFooter(d: DialogRequest, index: number, width: number, reason: string | null, cursor: number): string[] {
+  const out: string[] = [];
   if (d.method === "confirm") {
     out.push(dim(" [y]es  [n]o"));
     return out;
@@ -344,8 +358,12 @@ export class DialogPanel implements Component {
     this.index = Math.max(0, Math.min(Math.max(0, n - 1), this.index + delta));
   }
 
+  /** The terminal's height: a dialog's text is cut so the panel, the input box and a line of transcript still fit. */
+  heightProvider?: () => number;
+
   render(width: number): string[] {
-    return this.dialog ? panel(dialogLines(this.dialog, this.index, panelInnerWidth(width), this.reason, this.cursor), width) : [];
+    const maxRows = this.heightProvider ? Math.max(8, this.heightProvider() - 10) : Infinity;
+    return this.dialog ? panel(dialogLines(this.dialog, this.index, panelInnerWidth(width), this.reason, this.cursor, maxRows), width) : [];
   }
 
   invalidate(): void {}
