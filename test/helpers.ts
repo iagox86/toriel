@@ -35,6 +35,8 @@ export interface Harness {
 /**
  * What a daemon hands its children, plus the `toriel --timing` switches (a daemon inherits those from the controller); a test run from
  * inside a toriel session inherits them and must not act on them (test daemons would write to the real timing.jsonl, ticket 225).
+ * Spawned daemons get their env through `withoutSessionEnv`; `npm test` strips the three switches from the test process itself
+ * (`env -u` in package.json), because unit tests import src modules whose `getTiming` reads the environment at import time.
  */
 export const SESSION_ENV = ["TORIEL_SOCK", "TORIEL_CAN_SPAWN", "TORIEL_AGENT_TYPES", "TORIEL_PROFILE", "TORIEL_SESSION_ID", "TORIEL_CHILD", "TORIEL_TIMING", "TORIEL_TIMING_MS", "TORIEL_TIMING_FILE"] as const;
 
