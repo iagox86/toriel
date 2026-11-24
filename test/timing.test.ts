@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { describe, it } from "node:test";
 import { applyTiming } from "../src/preflight.ts";
 import { MAX_BYTES, Timing, timingFromEnv } from "../src/timing.ts";
+import { withoutSessionEnv } from "./helpers.ts";
 
 function harness(enabled = true, thresholdMs = 150) {
   let t = 1000;
@@ -123,5 +124,10 @@ describe("timing (ticket 225)", () => {
     const clean: NodeJS.ProcessEnv = {};
     applyTiming(none, clean);
     assert.equal(clean.TORIEL_TIMING, undefined);
+  });
+
+  it("a test run inside a --timing session does not hand the switches to its test daemons (they would write to the real log)", () => {
+    const env = withoutSessionEnv({ TORIEL_TIMING: "1", TORIEL_TIMING_MS: "0", TORIEL_TIMING_FILE: "/x", PATH: "/bin" });
+    assert.deepEqual(env, { PATH: "/bin" });
   });
 });
