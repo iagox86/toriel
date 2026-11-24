@@ -3,7 +3,10 @@ import * as fs from "node:fs";
 import type * as net from "node:net";
 import type { DaemonContext } from "./daemon-context.ts";
 import type { DaemonSession } from "./daemon-session.ts";
+import { getTiming } from "./timing.ts";
 import { messagesFromFile } from "./transcript.ts";
+
+const timing = getTiming("daemon");
 
 /**
  * pi's in-context messages, except that once the session has been compacted the
@@ -13,12 +16,13 @@ import { messagesFromFile } from "./transcript.ts";
  * message being written.
  */
 export async function historyOf(s: DaemonSession): Promise<unknown[]> {
-  const live = await (s.child as NonNullable<DaemonSession["child"]>).getMessages();
+  const live = await timing.timeAsync("daemon_get_messages", { session: s.id }, () => (s.child as NonNullable<DaemonSession["child"]>).getMessages());
   if (s.streaming || !s.sessionFile) {
     return live;
   }
+  const file = s.sessionFile;
   try {
-    const fromFile = messagesFromFile(s.sessionFile);
+    const fromFile = timing.time("daemon_file_history", { session: s.id }, () => messagesFromFile(file));
     return fromFile.some((m) => (m as { role?: string }).role === "compactionSummary") ? fromFile : live;
   } catch {
     return live;

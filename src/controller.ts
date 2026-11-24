@@ -30,6 +30,7 @@ import { buildInfo } from "./build-id.ts";
 import { explainMcpFailure } from "./mcp.ts";
 import { performanceReviewSeed } from "./session-commands.ts";
 import { PermissionNotifier, notifySend } from "./permission-notify.ts";
+import { getTiming } from "./timing.ts";
 import { DIALOG_METHODS, HISTORY_FILE, KEY_LOG, LITELLM_CACHE_FILE, PROFILE } from "./config.ts";
 import { DaemonLink } from "./daemon-link.ts";
 import { buildLayouts } from "./layout.ts";
@@ -111,6 +112,7 @@ function markLatestRun(view: SessionView): void {
 const SWITCHER_HISTORY = "<switcher>";
 // How long a reason typed on the select waits for the chained input dialog.
 const REASON_FRESH_MS = 10_000;
+const timing = getTiming("controller");
 
 class Controller {
   tui: TuiAltScreen;
@@ -161,6 +163,8 @@ class Controller {
   private readonly completions: CompletionSources;
   /** Path key of the session on screen; null = none (switcher behind). */
   viewing: string | null = null;
+  /** The session the timing log last saw on screen (a change is a "switch" event). */
+  private timedViewing: string | null = null;
 
   switching: SwitcherActions;
   session: SessionActions;
@@ -229,6 +233,9 @@ class Controller {
         openUrl: (url) => openUrl(url, (text) => this.notify(text)),
       }),
     );
+    if (timing.enabled) {
+      this.instrumentTiming();
+    }
     this.scroll = new ScrollView(this.chatRoot, { follow: "end", primary: true, overscroll: "chain", scrollbar: "auto" });
     this.editor = new InputEditor(this.tui, editorTheme, { paddingX: 1 });
     this.editor.setAutocompleteMaxVisible(autocompleteMaxVisible());
@@ -495,13 +502,38 @@ class Controller {
     if (!key) {
       return;
     }
-    const old = this.views.get(key);
-    const items = itemsFromMessages(messages, this.tui, this.metaForPath(key)?.cwd ?? "");
-    const fresh = viewFromHistory(old, items, this.staleViews.delete(key), messages.length);
-    this.views.set(key, fresh);
-    if (key === this.viewing) {
-      this.rebuildChat();
-    }
+    timing.time("history", { messages: messages.length, viewed: key === this.viewing }, () => {
+      const old = this.views.get(key);
+      const items = itemsFromMessages(messages, this.tui, this.metaForPath(key)?.cwd ?? "");
+      const fresh = viewFromHistory(old, items, this.staleViews.delete(key), messages.length);
+      this.views.set(key, fresh);
+      if (key === this.viewing) {
+        this.rebuildChat();
+      }
+    });
+  }
+
+  /** What the timing log (`toriel --timing`) records about the screen with each event. */
+  private timingFields(): Record<string, unknown> {
+    const view = this.viewing ? this.views.get(this.viewing) : undefined;
+    const meta = this.viewing ? this.metaForPath(this.viewing) : undefined;
+    return { items: view?.items.length ?? 0, sessions_loaded: this.views.size, streaming: meta?.streaming === true };
+  }
+
+  /** `--timing`: close the events the user caused when the frame they led to is drawn, and stamp key presses as where those began. */
+  private instrumentTiming(): void {
+    const tui = this.tui as unknown as { doRender(): void; handleTerminalInput(data: string): void };
+    const render = tui.doRender.bind(tui);
+    tui.doRender = () => {
+      const start = performance.now();
+      render();
+      timing.rendered(performance.now() - start, this.timingFields());
+    };
+    const input = tui.handleTerminalInput.bind(tui);
+    tui.handleTerminalInput = (data) => {
+      timing.stamp();
+      input(data);
+    };
   }
 
   private onUiRequest(sessionId: number, request: DialogRequest | undefined): void {
@@ -898,12 +930,14 @@ class Controller {
 
   /** Show/hide thinking blocks (ctrl-t); applies to all sessions. */
   toggleThinking(): void {
+    timing.begin("toggle_thinking", this.timingFields());
     this.thinkingHidden = !this.thinkingHidden;
     this.redisplay();
   }
 
   /** Expand/collapse every tool run (ctrl-o); applies to all sessions. */
   toggleTools(): void {
+    timing.begin("toggle_tools", this.timingFields());
     this.toolsExpanded = !this.toolsExpanded;
     this.redisplay();
   }
@@ -1075,6 +1109,10 @@ class Controller {
   dialogOpen = (): boolean => this.openDialog(this.viewing) !== undefined;
 
   renderChrome(): void {
+    if (timing.enabled && this.viewing !== this.timedViewing) {
+      this.timedViewing = this.viewing;
+      timing.begin("switch", this.timingFields());
+    }
     this.syncActivity();
     this.dialogPanel.sync(this.openDialog(this.viewing));
     const width = this.tui.terminal.columns || process.stdout.columns || 80;
