@@ -29,6 +29,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { buildInfo } from "./build-id.ts";
 import { explainMcpFailure } from "./mcp.ts";
 import { performanceReviewSeed } from "./session-commands.ts";
+import { PermissionNotifier, notifySend } from "./permission-notify.ts";
 import { DIALOG_METHODS, HISTORY_FILE, KEY_LOG, LITELLM_CACHE_FILE, PROFILE } from "./config.ts";
 import { DaemonLink } from "./daemon-link.ts";
 import { buildLayouts } from "./layout.ts";
@@ -126,6 +127,8 @@ class Controller {
   private lineageCache: { at: number; data: Lineage } = { at: 0, data: {} };
   activityLine = new ActivityLine();
   dialogPanel = new DialogPanel();
+  /** Pings the desktop for a prompt in a session that is not on screen; tests replace the sender. */
+  permissionNotifier = new PermissionNotifier(notifySend((line) => (KEY_LOG ? fs.appendFileSync(KEY_LOG, `${line}\n`) : undefined)));
   infoPanel = new InfoPanel();
   choicePanel = new ChoicePanel();
   rewindPicker = new RewindPicker();
@@ -518,7 +521,18 @@ class Controller {
         });
       } else {
         // Name the session that is blocked, so the dialog says who is asking.
-        view.dialog = withOwnLayout(withOrigin(request, sessionId, this.sessions.get(sessionId)?.sessionName, this.sessions.get(sessionId)?.subagent ? "Subagent" : "Session"), loadSettings().settings.permissionGrantDurations ?? DEFAULT_GRANT_DURATIONS);
+        const settings = loadSettings().settings;
+        view.dialog = withOwnLayout(withOrigin(request, sessionId, this.sessions.get(sessionId)?.sessionName, this.sessions.get(sessionId)?.subagent ? "Subagent" : "Session"), settings.permissionGrantDurations ?? DEFAULT_GRANT_DURATIONS);
+        // a prompt in a session nobody is looking at waits for ever otherwise (ticket 234)
+        const meta = this.sessions.get(sessionId);
+        const name = meta?.sessionName || `session ${sessionId}`;
+        this.permissionNotifier.consider(request, {
+          focused: key === this.viewing || this.dialogOwnerKey(this.viewing) === key,
+          session: sessionId,
+          who: meta?.subagent ? `Subagent: ${name}` : name,
+          enabled: settings.permissionNotifications !== false,
+          critical: settings.permissionNotificationsCritical === true,
+        });
       }
     } else if (request && request.method === "notify") {
       const message = String(request.message ?? "notification");

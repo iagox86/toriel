@@ -287,6 +287,23 @@ describe("doctor checks", () => {
     assert.deepEqual(finding({ DISPLAY: ":0" }, [bin]), [], "xclip present");
   });
 
+  it("notify-send: only with a display, only when notifications are on, only when the tool is missing (ticket 234)", () => {
+    const { opts } = setup({});
+    const base = path.dirname(opts.agentDir as string);
+    const nothing = fs.mkdtempSync(path.join(base, "empty-"));
+    const have = fs.mkdtempSync(path.join(base, "have-"));
+    fs.writeFileSync(path.join(have, "notify-send"), "#!/bin/sh\n", { mode: 0o755 });
+    const finding = (env: NodeJS.ProcessEnv, dirs: string, settings?: string) => {
+      const o = settings === undefined ? opts : setup({ settings }).opts;
+      return collectFindings({ ...o, env, startup: [], pathDirs: [dirs] }).filter((f) => f.id === "notify-send");
+    };
+    assert.deepEqual(finding({}, nothing), [], "no display (ssh, a tty): nothing to notify");
+    assert.equal(finding({ WAYLAND_DISPLAY: "wayland-0" }, nothing).length, 1);
+    assert.match(finding({ WAYLAND_DISPLAY: "wayland-0" }, nothing)[0]?.manual ?? "", /dnf install libnotify/);
+    assert.deepEqual(finding({ WAYLAND_DISPLAY: "wayland-0" }, have), [], "present");
+    assert.deepEqual(finding({ WAYLAND_DISPLAY: "wayland-0" }, nothing, '{"permissionNotifications":false}'), [], "switched off");
+  });
+
   it("truecolor: only for a real terminal without a truecolor signal", () => {
     const finding = (env: NodeJS.ProcessEnv, tty?: boolean) => collectFindings({ ...setup({}).opts, tty, env, startup: [] }).filter((f) => f.id === "truecolor");
     assert.deepEqual(finding({ TERM: "xterm-256color" }), [], "not a real terminal: skipped");
@@ -552,7 +569,7 @@ describe("doctor report", () => {
     assert.match(text, /Required: all 5 ok/);
     assert.match(text, /Recommended: all 5 ok/);
     assert.doesNotMatch(text, / ok {7}/);
-    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(16 ok\)/);
+    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(17 ok\)/);
   });
 });
 
@@ -581,7 +598,7 @@ describe("doctor report colours", () => {
   it("colours the compact report too, with the passing checks' count dim", () => {
     const coloured = renderDoctor(checks(), { compact: true, style: ANSI_STYLE });
     assert.match(coloured, /Required\x1b\[22m: \x1b\[32mall 5 ok\x1b\[39m/);
-    assert.match(coloured, /\x1b\[2m {2}\(16 ok\)\x1b\[22m/);
+    assert.match(coloured, /\x1b\[2m {2}\(17 ok\)\x1b\[22m/);
   });
 });
 

@@ -44,6 +44,8 @@ export const SETTINGS_TEMPLATE: readonly Group[] = [
       { key: "preventSleep", value: true, comment: ["Keep the machine from sleeping while a session is working or a scheduled run is near (needs systemd-inhibit)."] },
       { key: "showExternalSessions", value: false, comment: ["List sessions toriel never ran (plain pi, other instances) in the switcher. /external flips it for one run."] },
       { key: "fileFreshness", value: true, comment: ["Refuse an edit or write of a file the agent has not read, or that changed since it did (read when a session starts). false = pi's own behavior."] },
+      { key: "permissionNotifications", value: true, comment: ["Send a desktop notification (notify-send) when a permission prompt or a plan approval waits in a session that is not on screen.", "A failed send is only logged."] },
+      { key: "permissionNotificationsCritical", value: false, comment: ["Send those notifications as critical urgency, which most desktops keep on screen until dismissed."] },
       { key: "trashRetentionDays", value: 90, comment: ["Deleted sessions, and rewind and clear backups, stay in the trash this many days. 0 = keep forever."] },
     ],
   },
