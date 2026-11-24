@@ -8,7 +8,7 @@ import { fmtTokens } from "./format.ts";
 import { detachFromParent, loadLineage } from "./lineage.ts";
 import { relationOf } from "./session-tree.ts";
 import { piAgentDir } from "./pi-dir.ts";
-import { ModeNoticeDebounce, nextMode, switches } from "./mode-cycle.ts";
+import { ModeNoticeDebounce, modeOf, nextMode, switches } from "./mode-cycle.ts";
 import { probeEntry, parseStatusDetailed, readConfigs, statusReport } from "./mcp-doctor.ts";
 import { addMcpServer, readMcpYaml, removeMcpServer, setMcpServerHeaders } from "./mcp-config.ts";
 import { bearerEnvHeader, bearerTokenHeader, MCP_ACTIONS, type McpAuthOptions, type McpEntry, mcpConfigFile, mcpEntry, mcpListLines, mcpServerConnected, parseHeaderArg, withHeaders } from "./mcp.ts";
@@ -365,10 +365,12 @@ export class SessionCommands {
       return;
     }
     try {
-      // quiet: the mode applies now, the line saying so waits until the presses stop (one line for the mode settled on, ticket 236)
-      for (const change of switches(meta, nextMode(meta))) {
+      // quiet: the mode applies now, the line saying so waits until the presses stop (one line for the mode settled on, ticket 236);
+      // the before/after pair tells the debounce which bursts wrapped back to the mode they started in, which announce nothing
+      const target = nextMode(meta);
+      for (const change of switches(meta, target)) {
         await this.h.request(change.flag === "plan" ? { type: "plan_mode", session: meta.id, on: change.on, quiet: true } : { type: "auto_mode", session: meta.id, on: change.on, quiet: true }, 5000);
-        this.modeNotice.poke(meta.id);
+        this.modeNotice.poke(meta.id, { before: modeOf(meta), after: target });
       }
     } catch (err) {
       const stale = err instanceof Error && /timed out|unknown command/i.test(err.message);
