@@ -43,7 +43,9 @@ export class Timing {
   private readonly pending: Pending[] = [];
   private stampAt = -Infinity;
   private lastRenderLog = -Infinity;
+  /** Started once by the first logged event and left running (a diagnostic, not cleaned up); lag_ms is the worst delay since the previous logged line, reset as it is read. */
   private loop?: ReturnType<typeof monitorEventLoopDelay>;
+  /** Rotation is checked on this process's first write only: a mid-run write past the limit keeps appending until the next start. */
   private rotated = false;
 
   constructor(opts: TimingOptions) {
