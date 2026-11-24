@@ -18,29 +18,39 @@ export function modeOf(m: ModeMeta): Mode {
 
 /**
  * Holds back the one line that says which mode a shift+tab burst settled on (ticket 236): every press restarts the wait, and only
- * when the keys stop does `announce` run, for the session of the last press. The mode itself is applied at once, outside this.
+ * when the keys stop does `announce` run, for the session of the last press - skipped when a burst's pressing landed back on the mode
+ * it started in ({@link poke} takes both; a wrap that changed nothing says nothing). The mode itself is applied at once, outside this.
  * The clock is injectable so tests need no real wait.
  */
 export class ModeNoticeDebounce {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private session: number | undefined;
+  /** The mode the burst started in, taken from the first press; a burst that ends back here announces nothing. */
+  private since: Mode | undefined;
+  /** The mode the most recent press moved to. */
+  private settled: Mode | undefined;
 
   private readonly announce: (session: number) => void;
   private readonly waitMs: number;
   private readonly timers: { set: typeof setTimeout; clear: typeof clearTimeout };
 
-  constructor(announce: (session: number) => void, waitMs = 700, timers: { set: typeof setTimeout; clear: typeof clearTimeout } = { set: setTimeout, clear: clearTimeout }) {
+  constructor(announce: (session: number) => void, waitMs = 5000, timers: { set: typeof setTimeout; clear: typeof clearTimeout } = { set: setTimeout, clear: clearTimeout }) {
     this.announce = announce;
     this.waitMs = waitMs;
     this.timers = timers;
   }
 
-  /** A press for `session` changed the mode: (re)start the wait. A press for another session announces the earlier one first. */
-  poke(session: number): void {
+  /** A press for `session` moved it from `move.before` to `move.after`: (re)start the wait. A press for another session announces the
+   * earlier one first. The mode is what the burst started in on the first poke of a fresh window (ticket 236, live check). */
+  poke(session: number, move: { before: Mode; after: Mode }): void {
     if (this.session !== undefined && this.session !== session) {
       this.flush();
     }
+    if (this.session === undefined || this.session !== session) {
+      this.since = move.before;
+    }
     this.session = session;
+    this.settled = move.after;
     if (this.timer !== undefined) {
       this.timers.clear(this.timer);
     }
@@ -48,15 +58,18 @@ export class ModeNoticeDebounce {
     this.timer.unref?.();
   }
 
-  /** Announce now if a notice is pending. */
+  /** Announce now if a notice is pending - not when the presses wrapped back to the starting mode. */
   flush(): void {
     if (this.timer !== undefined) {
       this.timers.clear(this.timer);
       this.timer = undefined;
     }
     const session = this.session;
+    const said = this.since !== undefined && this.since === this.settled;
     this.session = undefined;
-    if (session !== undefined) {
+    this.since = undefined;
+    this.settled = undefined;
+    if (session !== undefined && !said) {
       this.announce(session);
     }
   }
@@ -68,6 +81,8 @@ export class ModeNoticeDebounce {
     }
     this.timer = undefined;
     this.session = undefined;
+    this.since = undefined;
+    this.settled = undefined;
   }
 }
 
