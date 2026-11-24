@@ -81,4 +81,18 @@ describe("notifySend", () => {
     child.emit("error", new Error("spawn notify-send ENOENT"));
     assert.deepEqual(logs, ["notify-send failed: EACCES", "notify-send failed: spawn notify-send ENOENT"]);
   });
+
+  it("a log callback that fails itself is swallowed (KEY_LOG may be unwritable; nothing takes the controller down)", () => {
+    const boom = () => {
+      throw new Error("EACCES on the log append");
+    };
+    const quiet = notifySend(boom, (() => {
+      throw new Error("EACCES");
+    }) as never);
+    quiet({ summary: "s", body: "b", critical: false }); // the spawn-failure path
+    const child = Object.assign(new EventEmitter(), { unref() {} });
+    const loud = notifySend(boom, (() => child) as never);
+    loud({ summary: "s", body: "b", critical: false });
+    child.emit("error", new Error("spawn notify-send ENOENT")); // the child-error path, inside the listener
+  });
 });

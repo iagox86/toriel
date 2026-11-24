@@ -70,6 +70,22 @@ describe("dialog rendering", () => {
     assert.doesNotMatch(dialogLines(perm, 0, 100, null, 0, 20).join("\n"), /not shown here/, "short text is whole");
   });
 
+  it("the cut lands exactly on the room it has, whatever the footer ate (ticket 254, review)", () => {
+    // lead (1) + footer (4 options) = 5, so maxRows 6 leaves room 1: the note takes the last body row, the total is exactly 6
+    const longBody = `T\n${Array.from({ length: 20 }, (_, i) => `body ${i + 1}`).join("\n")}`;
+    const four = { id: "a", method: "select", title: longBody, options: ["w", "x", "y", "z"] } as DialogRequest;
+    const lines = dialogLines(four, 0, 100, null, 0, 6);
+    assert.equal(lines.length, 6, lines.join("\n"));
+    assert.match(lines.join("\n"), /\.\.\. 20 more lines not shown here/);
+    assert.doesNotMatch(lines.join("\n"), /body /);
+    // lead (1) + footer (5 options) = 6 = maxRows: no room at all, the body is dropped whole rather than overflowing
+    const five = { id: "b", method: "select", title: longBody, options: ["w", "x", "y", "z", "v"] } as DialogRequest;
+    const none = dialogLines(five, 0, 100, null, 0, 6);
+    assert.equal(none.length, 6, none.join("\n"));
+    assert.doesNotMatch(none.join("\n"), /not shown here|body /);
+  });
+
+
   it("the panel limits itself to the terminal's height", () => {
     const panel = new DialogPanel();
     panel.heightProvider = () => 24;

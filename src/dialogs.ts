@@ -241,8 +241,12 @@ export function dialogLines(d: DialogRequest, index: number, width: number, reas
   const rest = dialogFooter(d, index, width, reason, cursor);
   // Long text (a plan, a long message) must not push the answer rows off the screen (ticket 254): the text is cut to what fits, the rows stay.
   const room = maxRows - lead.length - rest.length;
+  if (room <= 0) {
+    // the head and the answer rows already fill (or overfill) the budget: the answer rows stay, the text shows nothing
+    return [...lead, ...rest];
+  }
   if (body.length > room) {
-    const keep = Math.max(1, room - 1);
+    const keep = room - 1; // the last body row goes to the truncation note, so a cut always lands on exactly `maxRows` rows
     const hidden = body.length - keep;
     return [...lead, ...body.slice(0, keep), dim(` ... ${hidden} more line${hidden === 1 ? "" : "s"} not shown here`), ...rest];
   }

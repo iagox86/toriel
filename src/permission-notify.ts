@@ -37,14 +37,22 @@ export function bodyOf(d: DialogRequest): string {
 
 /** The real sender: `notify-send`, detached, its failure logged once per failure and otherwise ignored. */
 export function notifySend(log: (line: string) => void = () => {}, run: typeof spawn = spawn): Notifier {
+  // the log must never take the controller down: a failing append (KEY_LOG unwritable, disk full) is quieter than a crash in onUiRequest
+  const say = (line: string): void => {
+    try {
+      log(line);
+    } catch {
+      // ignore the log failure itself
+    }
+  };
   return (n) => {
     try {
       const args = ["--app-name=toriel", `--urgency=${n.critical ? "critical" : "normal"}`, "--", n.summary, n.body];
       const child = run("notify-send", args, { stdio: "ignore", detached: true });
-      child.on("error", (err) => log(`notify-send failed: ${err.message}`));
+      child.on("error", (err) => say(`notify-send failed: ${err.message}`));
       child.unref();
     } catch (err) {
-      log(`notify-send failed: ${err instanceof Error ? err.message : String(err)}`);
+      say(`notify-send failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 }
