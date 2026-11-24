@@ -161,10 +161,18 @@ class Controller {
   readonly attachments = new Attachments();
   private readonly clip: ClipboardActions;
   private readonly completions: CompletionSources;
-  /** Path key of the session on screen; null = none (switcher behind). */
-  viewing: string | null = null;
-  /** The session the timing log last saw on screen (a change is a "switch" event). */
-  private timedViewing: string | null = null;
+  /** Path key of the session on screen; null = none (switcher behind). A change is where a "switch" begins for `toriel --timing` (ticket 225). */
+  private _viewing: string | null = null;
+  get viewing(): string | null {
+    return this._viewing;
+  }
+  /** Every assignment (switcher, fork, spawn resolve, key migration) begins the switch here, so its whole work span is timed, keyed or not. */
+  set viewing(key: string | null) {
+    if (timing.enabled && key !== this._viewing) {
+      timing.begin("switch", { session: key ?? undefined, ...this.timingFields(key) });
+    }
+    this._viewing = key;
+  }
 
   switching: SwitcherActions;
   session: SessionActions;
@@ -502,7 +510,7 @@ class Controller {
     if (!key) {
       return;
     }
-    timing.time("history", { messages: messages.length, viewed: key === this.viewing }, () => {
+    timing.time("history", { messages: messages.length, session: key, viewed: key === this.viewing }, () => {
       const old = this.views.get(key);
       const items = itemsFromMessages(messages, this.tui, this.metaForPath(key)?.cwd ?? "");
       const fresh = viewFromHistory(old, items, this.staleViews.delete(key), messages.length);
@@ -514,26 +522,36 @@ class Controller {
   }
 
   /** What the timing log (`toriel --timing`) records about the screen with each event. */
-  private timingFields(): Record<string, unknown> {
-    const view = this.viewing ? this.views.get(this.viewing) : undefined;
-    const meta = this.viewing ? this.metaForPath(this.viewing) : undefined;
-    return { items: view?.items.length ?? 0, sessions_loaded: this.views.size, streaming: meta?.streaming === true };
+  private timingFields(viewing: string | null = this._viewing): Record<string, unknown> {
+    const view = viewing ? this.views.get(viewing) : undefined;
+    const meta = viewing ? this.metaForPath(viewing) : undefined;
+    return { session: viewing ?? undefined, items: view?.items.length ?? 0, sessions_loaded: this.views.size, streaming: meta?.streaming === true };
   }
 
   /** `--timing`: close the events the user caused when the frame they led to is drawn, and stamp key presses as where those began. */
   private instrumentTiming(): void {
-    const tui = this.tui as unknown as { doRender(): void; handleTerminalInput(data: string): void };
-    const render = tui.doRender.bind(tui);
-    tui.doRender = () => {
-      const start = performance.now();
-      render();
-      timing.rendered(performance.now() - start, this.timingFields());
-    };
-    const input = tui.handleTerminalInput.bind(tui);
-    tui.handleTerminalInput = (data) => {
-      timing.stamp();
-      input(data);
-    };
+    // pi-tui's doRender (protected abstract) and handleTerminalInput (private) are runtime-private, so this reaches them through a cast that
+    // nothing checks at build time. If an upgrade renames either, the diagnostic turns off with a line in the log instead of failing startup.
+    const tui = this.tui as unknown as { doRender?(): void; handleTerminalInput?(data: string): void };
+    if (typeof tui.doRender === "function") {
+      const render = tui.doRender.bind(tui);
+      tui.doRender = () => {
+        const start = performance.now();
+        render();
+        timing.rendered(performance.now() - start, this.timingFields());
+      };
+    } else {
+      log("timing: pi-tui has no doRender any more; frames and what they close are not timed");
+    }
+    if (typeof tui.handleTerminalInput === "function") {
+      const input = tui.handleTerminalInput.bind(tui);
+      tui.handleTerminalInput = (data) => {
+        timing.stamp();
+        input(data);
+      };
+    } else {
+      log("timing: pi-tui has no handleTerminalInput any more; events start at their own begin, not at the key press");
+    }
   }
 
   private onUiRequest(sessionId: number, request: DialogRequest | undefined): void {
@@ -1109,10 +1127,6 @@ class Controller {
   dialogOpen = (): boolean => this.openDialog(this.viewing) !== undefined;
 
   renderChrome(): void {
-    if (timing.enabled && this.viewing !== this.timedViewing) {
-      this.timedViewing = this.viewing;
-      timing.begin("switch", this.timingFields());
-    }
     this.syncActivity();
     this.dialogPanel.sync(this.openDialog(this.viewing));
     const width = this.tui.terminal.columns || process.stdout.columns || 80;
