@@ -2,7 +2,9 @@
 // every line of the transcript and slices out the visible rows afterwards, so a session of 8,000 items re-parsed and re-wrapped
 // 140,000-350,000 lines (1.7-3.4 s) to show about 50, on every toggle and on the first frame after a switch. This container asks
 // only the items in (or near) the window for their lines; the others are blank lines of the height last measured, or an estimate
-// when never measured. Heights of unseen items are therefore approximate until they have been on screen once; the scrollbar is
+// when never measured. The window itself is covered in real lines: scrolling, it draws forward past the estimated window until
+// the screen and a margin of real lines are covered, so items shorter than the estimate never show up as blank rows. Heights of
+// unseen items are therefore approximate until they have been on screen once; the scrollbar is
 // proportional to the estimate and corrects itself as they are seen.
 import { Container, type Component } from "@earendil-works/pi-tui";
 
@@ -69,8 +71,10 @@ export class WindowedContainer extends Container {
       outs[i] = out;
       return out;
     };
-    // the item the viewer is looking at first, and where the estimates put it: what to keep in place when heights change
+    // where the window anchor sits in the estimates, its start, and how far drawn items above it moved from those estimates
     let anchor = -1;
+    let anchorStart = 0;
+    let shifted = 0;
     const estimated = heights.slice();
     if (vp.following) {
       // pinned to the end: draw backwards from the last item until a screen and a margin of real lines are covered
@@ -86,17 +90,37 @@ export class WindowedContainer extends Container {
         const h = estimated[i] as number;
         if (anchor === -1 && offset + h > vp.top) {
           anchor = i;
+          anchorStart = offset;
         }
         if (offset + h > from && offset < to) {
           draw(i);
         }
         offset += h;
       }
+      if (anchor !== -1) {
+        // Drawn items above the anchor may not be where the estimates put them: their real height replaced the estimate at
+        // draw time, and the child output moves with them, so the window content sits at anchorStart plus the difference
+        // (reported by onShift below, so the scroll can follow). The estimated window can also fall short of the screen
+        // when the items beyond it are shorter than estimated, so: draw forward from the anchor in real lines until the
+        // screen and its margin are covered, and shorter items never show up as blank rows.
+        for (let i = 0; i < anchor; i++) {
+          const out = outs[i];
+          if (out) {
+            shifted += out.length - (estimated[i] as number);
+          }
+        }
+        let pos = anchorStart + shifted;
+        for (let i = anchor; i < n && pos < vp.top + shifted + vp.height + margin; i++) {
+          if (outs[i] === undefined) {
+            draw(i);
+          }
+          pos += outs[i]?.length ?? (heights[i] as number);
+        }
+      }
     }
 
     const lines: string[] = [];
     const layout: Array<{ component: Component; height: number }> = [];
-    let shifted = 0; // how much the items above the anchor changed height
     for (let i = 0; i < n; i++) {
       const out = outs[i];
       if (out) {
@@ -104,9 +128,6 @@ export class WindowedContainer extends Container {
           lines.push(line);
         }
         layout.push({ component: children[i] as Component, height: out.length });
-        if (anchor !== -1 && i < anchor) {
-          shifted += out.length - (estimated[i] as number);
-        }
       } else {
         const h = heights[i] as number;
         for (let k = 0; k < h; k++) {

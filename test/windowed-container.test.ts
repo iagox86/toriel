@@ -78,6 +78,38 @@ describe("WindowedContainer (ticket 225)", () => {
     assert.ok(shifts.some((s) => s > 0), `expected a positive correction, got ${JSON.stringify(shifts)}`);
   });
 
+  it("the shift correction is exact, so what the viewer was reading stays on the same screen row", () => {
+    const { box, items, shifts, look } = build(100, { top: 0, height: 20, following: true }, 5);
+    box.render(80); // unknown heights are pinned at the default 6 before anything is drawn
+    look({ top: 300, height: 20, following: false }); // the viewer is on item 50, the first line of the window
+    for (const item of items) {
+      item.height = 7; // items above turn out 1 line taller, once drawn
+    }
+    const lines = box.render(80);
+    // items 46-49 were drawn above the anchor: 4 x (7-6) = the correction. The scroll follows it, top 300 -> 304, and the
+    // child output put item 50 at 46 x 6 estimated + 4 x 7 real lines = 304, so line 0 of the window is still item 50 line 0
+    assert.deepEqual(shifts, [4]);
+    assert.equal(lines[304], "item 50 line 0");
+    assert.equal(lines[305], "item 50 line 1");
+  });
+
+  it("draws forward in real lines until the screen is covered, so items shorter than the estimate are not blank rows", () => {
+    const { box, items, shifts, look } = build(200, { top: 0, height: 20, following: true }, 5);
+    box.render(80); // estimates pinned at 6 except the drawn tail at 5
+    look({ top: 400, height: 20, following: false }); // the estimated window is items 63..73, the anchor item 66
+    for (const item of items) {
+      item.height = 1; // every item is 5 lines shorter than estimated
+    }
+    const lines = box.render(80);
+    // the drawn items above moved the content up 3 x 5 = 15 lines, so the screen shows lines 385-405; the estimated
+    // window only reaches item 73 (9 real lines from 381) and the rest of the screen would be blank without the settle
+    assert.equal(shifts[0], -15);
+    const window = lines.slice(385, 405);
+    assert.equal(window.every((l) => l !== ""), true, `blank rows on screen: ${window.map((l, i) => (l === "" ? i : -1)).filter((i) => i >= 0).join(",")}`);
+    assert.ok(items[109]?.renders === 1, "the settle pass drew forward to cover the screen");
+    assert.equal(items[110]?.renders, 0, "...and stopped once it was");
+  });
+
   it("a toggle that invalidates everything costs only the items in view", () => {
     const { box, items, look } = build(2000, { top: 0, height: 30, following: true });
     box.render(80);
