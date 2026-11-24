@@ -24,6 +24,9 @@ import { sessionIdOfFile } from "./session-file.ts";
 import { mayDelegate, type SubagentLimits } from "./subagents.ts";
 import { profileOfSession, saveSessionAgent } from "./session-agents.ts";
 import { log } from "./log.ts";
+import { getTiming } from "./timing.ts";
+
+const timing = getTiming("daemon");
 import { type AskRule, AUTO_ANSWERED_NOTICE, AUTO_DENIED_NOTICE, AUTO_DISMISSED_NOTICE, encodeLine, GRANT_ANSWERED_NOTICE, type UsageReport } from "./shared.ts";
 import { floorReason, isPermissionPrompt, promptSubject } from "./auto-mode.ts";
 import { type ChildConfig, loadSettings, resolveChildConfig, settingsMtime } from "./settings.ts";
@@ -256,7 +259,7 @@ export class ChildManager {
     try {
       const { args, cfg } = this.startArgs(s, opts);
       s.sessionBridge = undefined;
-      s.child = await this.launch(s, args, cfg);
+      s.child = await timing.timeAsync("daemon_launch", { session: s.id }, () => this.launch(s, args, cfg));
       s.dead = false;
       // launch() hooks the exit event, but s.child is only set now: a process that died in between (during the steering-mode call) was missed
       const proc = (s.child as unknown as { process?: { exitCode?: number | null; signalCode?: string | null } }).process;
@@ -264,7 +267,7 @@ export class ChildManager {
         this.markDead(s, "the session's process exited", exitNote(proc.exitCode, proc.signalCode, s.child.getStderr()));
         this.hub.broadcastSessions();
       }
-      await this.refreshMeta(s);
+      await timing.timeAsync("daemon_first_meta", { session: s.id }, () => this.refreshMeta(s));
       await this.detectBridge(s);
       if (opts.agent && s.sessionId) {
         saveSessionAgent(s.sessionId, opts.agent);

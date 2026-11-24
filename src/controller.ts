@@ -30,6 +30,7 @@ import { buildInfo } from "./build-id.ts";
 import { explainMcpFailure } from "./mcp.ts";
 import { performanceReviewSeed } from "./session-commands.ts";
 import { PermissionNotifier, notifySend } from "./permission-notify.ts";
+import { getTiming } from "./timing.ts";
 import { DIALOG_METHODS, HISTORY_FILE, KEY_LOG, LITELLM_CACHE_FILE, PROFILE } from "./config.ts";
 import { DaemonLink } from "./daemon-link.ts";
 import { buildLayouts } from "./layout.ts";
@@ -111,6 +112,7 @@ function markLatestRun(view: SessionView): void {
 const SWITCHER_HISTORY = "<switcher>";
 // How long a reason typed on the select waits for the chained input dialog.
 const REASON_FRESH_MS = 10_000;
+const timing = getTiming("controller");
 
 class Controller {
   tui: TuiAltScreen;
@@ -159,8 +161,18 @@ class Controller {
   readonly attachments = new Attachments();
   private readonly clip: ClipboardActions;
   private readonly completions: CompletionSources;
-  /** Path key of the session on screen; null = none (switcher behind). */
-  viewing: string | null = null;
+  /** Path key of the session on screen; null = none (switcher behind). A change is where a "switch" begins for `toriel --timing` (ticket 225). */
+  private _viewing: string | null = null;
+  get viewing(): string | null {
+    return this._viewing;
+  }
+  /** Every assignment (switcher, fork, spawn resolve, key migration) begins the switch here, so its whole work span is timed, keyed or not. */
+  set viewing(key: string | null) {
+    if (timing.enabled && key !== this._viewing) {
+      timing.begin("switch", { session: key ?? undefined, ...this.timingFields(key) });
+    }
+    this._viewing = key;
+  }
 
   switching: SwitcherActions;
   session: SessionActions;
@@ -229,6 +241,9 @@ class Controller {
         openUrl: (url) => openUrl(url, (text) => this.notify(text)),
       }),
     );
+    if (timing.enabled) {
+      this.instrumentTiming();
+    }
     this.scroll = new ScrollView(this.chatRoot, { follow: "end", primary: true, overscroll: "chain", scrollbar: "auto" });
     this.editor = new InputEditor(this.tui, editorTheme, { paddingX: 1 });
     this.editor.setAutocompleteMaxVisible(autocompleteMaxVisible());
@@ -495,12 +510,47 @@ class Controller {
     if (!key) {
       return;
     }
-    const old = this.views.get(key);
-    const items = itemsFromMessages(messages, this.tui, this.metaForPath(key)?.cwd ?? "");
-    const fresh = viewFromHistory(old, items, this.staleViews.delete(key), messages.length);
-    this.views.set(key, fresh);
-    if (key === this.viewing) {
-      this.rebuildChat();
+    timing.time("history", { messages: messages.length, session: key, viewed: key === this.viewing }, () => {
+      const old = this.views.get(key);
+      const items = itemsFromMessages(messages, this.tui, this.metaForPath(key)?.cwd ?? "");
+      const fresh = viewFromHistory(old, items, this.staleViews.delete(key), messages.length);
+      this.views.set(key, fresh);
+      if (key === this.viewing) {
+        this.rebuildChat();
+      }
+    });
+  }
+
+  /** What the timing log (`toriel --timing`) records about the screen with each event. */
+  private timingFields(viewing: string | null = this._viewing): Record<string, unknown> {
+    const view = viewing ? this.views.get(viewing) : undefined;
+    const meta = viewing ? this.metaForPath(viewing) : undefined;
+    return { session: viewing ?? undefined, items: view?.items.length ?? 0, sessions_loaded: this.views.size, streaming: meta?.streaming === true };
+  }
+
+  /** `--timing`: close the events the user caused when the frame they led to is drawn, and stamp key presses as where those began. */
+  private instrumentTiming(): void {
+    // pi-tui's doRender (protected abstract) and handleTerminalInput (private) are runtime-private, so this reaches them through a cast that
+    // nothing checks at build time. If an upgrade renames either, the diagnostic turns off with a line in the log instead of failing startup.
+    const tui = this.tui as unknown as { doRender?(): void; handleTerminalInput?(data: string): void };
+    if (typeof tui.doRender === "function") {
+      const render = tui.doRender.bind(tui);
+      tui.doRender = () => {
+        const start = performance.now();
+        render();
+        timing.rendered(performance.now() - start, this.timingFields());
+      };
+    } else {
+      log("timing: pi-tui has no doRender any more; frames and what they close are not timed");
+    }
+    if (typeof tui.handleTerminalInput === "function") {
+      const input = tui.handleTerminalInput.bind(tui);
+      tui.handleTerminalInput = (data) => {
+        timing.stamp();
+        input(data);
+      };
+    } else {
+      log("timing: pi-tui has no handleTerminalInput any more; events start at their own begin, not at the key press");
     }
   }
 
@@ -898,12 +948,14 @@ class Controller {
 
   /** Show/hide thinking blocks (ctrl-t); applies to all sessions. */
   toggleThinking(): void {
+    timing.begin("toggle_thinking", this.timingFields());
     this.thinkingHidden = !this.thinkingHidden;
     this.redisplay();
   }
 
   /** Expand/collapse every tool run (ctrl-o); applies to all sessions. */
   toggleTools(): void {
+    timing.begin("toggle_tools", this.timingFields());
     this.toolsExpanded = !this.toolsExpanded;
     this.redisplay();
   }
