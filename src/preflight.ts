@@ -55,7 +55,10 @@ const USAGE = `usage: toriel              open the switcher (starts the daemon i
 
        toriel --isolated [name] [doctor|kill-server|update|feedback]
                            run a separate instance (own daemon, socket, data and log) for trying out
-                           a branch without touching the real one; the name defaults to the checkout's folder name`;
+                           a branch without touching the real one; the name defaults to the checkout's folder name
+
+       toriel --timing     log what is slow (toggles, switching, opening, daemon start) to timing.jsonl in the
+                           state directory, with the load at the time; kill-server first to time the daemon too`;
 
 /**
  * Take `--isolated [name]` off the arguments and turn it into TORIEL_PROFILE, which config.ts reads. Done here, before
@@ -73,9 +76,22 @@ export function applyIsolated(argv: string[], env: NodeJS.ProcessEnv = process.e
   env.TORIEL_PROFILE = named ? next : basename(root).replace(/[^A-Za-z0-9._-]/g, "-");
 }
 
+/**
+ * Take `--timing` off the arguments and turn it into TORIEL_TIMING=1 (src/timing.ts), which the daemon this toriel starts
+ * inherits. A daemon that is already running keeps what it had: `toriel kill-server` first to time its side as well.
+ */
+export function applyTiming(argv: string[], env: NodeJS.ProcessEnv = process.env): void {
+  const at = argv.indexOf("--timing", 2);
+  if (at !== -1) {
+    argv.splice(at, 1);
+    env.TORIEL_TIMING = "1";
+  }
+}
+
 /** Exit with a message when the setup or the arguments are wrong. */
 export function preflight(argv: string[] = process.argv): void {
   applyIsolated(argv);
+  applyTiming(argv);
   const arg = argv[2];
   if (arg === "--help" || arg === "-h") {
     process.stdout.write(`${USAGE}\n`);
