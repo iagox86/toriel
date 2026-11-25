@@ -23,6 +23,7 @@ import { setSessionFileCwd } from "./session-header.ts";
 import { encodeLine } from "./shared.ts";
 import { fmtClock, fmtDuration, parseDurationText } from "./when.ts";
 import { MAX_DENY_MS, minDenyMs } from "./settings.ts";
+import { cleanSource } from "./util.ts";
 
 /** The longest one stretch of timed auto mode (a forgotten one should not outlive the day). */
 const MAX_AUTO_MS = 24 * 3_600_000;
@@ -196,7 +197,7 @@ export function handlePublish(ctx: DaemonContext, cmd: Cmd<"publish">, res: Resp
   res(true, undefined, { published: on });
 }
 
-const autoNotice =(on: boolean, until: number | undefined): string =>
+const autoNotice = (on: boolean, until: number | undefined): string =>
   on
     ? `auto mode ON${until !== undefined ? ` until ${fmtClock(until, new Date())}` : ""}: permission prompts are allowed without asking, except the ones that always ask (credentials, destructive commands, pushes, writes outside the directory); /auto off ends it (shift+tab moves on to the next mode)`
     : "auto mode OFF: permission prompts ask again";
@@ -607,16 +608,17 @@ export function handleUiResponse(
     log(`session ${s.id} ui_response ${response.id} refused: already answered or gone (pending: ${typeof pending === "string" ? pending : "none"})`);
     throw new Error("already answered");
   }
-  log(`session ${s.id} ui_response ${response.id}${cmd.source ? ` from ${cmd.source}` : ""}`);
+  const source = cleanSource(cmd.source);
+  log(`session ${s.id} ui_response ${response.id}${source ? ` from ${source}` : ""}`);
   if (s.dialogInfo) {
-    recordDecision({ ...s.dialogInfo.base, by: "user", ...(cmd.source ? { source: cmd.source } : {}), answer: answerText(response), waitMs: Date.now() - s.dialogInfo.at });
+    recordDecision({ ...s.dialogInfo.base, by: "user", ...(source ? { source } : {}), answer: answerText(response), waitMs: Date.now() - s.dialogInfo.at });
   }
   s.dialogInfo = undefined;
   s.pendingDialog = false;
   s.lastDialog = undefined;
   clearTimeout(s.denyTimer);
   s.denyTimer = undefined;
-  ctx.hub.broadcast({ type: "ui_resolved", session: s.id, id: response.id, by: "user", ...(cmd.source ? { source: cmd.source } : {}) });
+  ctx.hub.broadcast({ type: "ui_resolved", session: s.id, id: response.id, by: "user", ...(source ? { source } : {}) });
   ctx.hub.broadcastSessions();
   // Write raw: RpcClient.send() overwrites the record's id with its own
   // correlation id, which would break the dialog reply matching, and it

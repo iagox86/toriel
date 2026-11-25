@@ -38,6 +38,22 @@ export function crashReason(lines: readonly string[]): string | undefined {
   return [...real].reverse().find((l) => /\b\w*Error\b|error:|refused|cannot|failed/i.test(l)) ?? real.at(-1);
 }
 
+const KEPT_ENV = /^(PATH|HOME|USER|LOGNAME|SHELL|LANG|LANGUAGE|LC_[A-Z_]+|TZ|TMPDIR|TERM|NODE_[A-Z_]+|SSL_CERT_(FILE|DIR)|(HTTPS?|ALL|NO)_PROXY|XDG_[A-Z_]+|TORIEL_[A-Z_]+)$/i;
+
+/**
+ * The environment the bridge gets: what node and the settings file need, the variable the token is read from (`tokenEnv`), and the
+ * socket to the daemon; not the rest of the daemon's, which may hold keys the bridge has no use for.
+ */
+export function bridgeEnv(env: NodeJS.ProcessEnv, tokenEnv?: string): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(env)) {
+    if (v !== undefined && (KEPT_ENV.test(k) || k === tokenEnv)) {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
 export class ChatSupervisor {
   private child?: ChildProcess;
   private timer?: NodeJS.Timeout;
@@ -63,19 +79,24 @@ export class ChatSupervisor {
     } catch {
       // validChatto has checked the URL; an odd one only costs the host in /publish's report
     }
-    this.launch();
+    this.launch(settings.chatto?.tokenEnv);
   }
 
   stop(): void {
     this.stopped = true;
     clearTimeout(this.timer);
-    this.child?.kill("SIGTERM");
+    const child = this.child;
+    child?.kill("SIGTERM");
+    // it clears its channels for up to ten seconds; one that is still there after fifteen is hung
+    const hard = setTimeout(() => child?.kill("SIGKILL"), 15_000);
+    hard.unref();
+    child?.once("exit", () => clearTimeout(hard));
   }
 
-  private launch(): void {
+  private launch(tokenEnv?: string): void {
     const startedAt = Date.now();
     // the bridge's environment: the daemon's own plus the socket to talk to; tokenEnv, when used, is read from it
-    const child = spawn(process.execPath, ["--disable-warning=ExperimentalWarning", MAIN], { env: { ...process.env, TORIEL_SOCK: SOCK }, stdio: ["ignore", "ignore", "pipe"] });
+    const child = spawn(process.execPath, ["--disable-warning=ExperimentalWarning", MAIN], { env: { ...bridgeEnv(process.env, tokenEnv), TORIEL_SOCK: SOCK }, stdio: ["ignore", "ignore", "pipe"] });
     this.child = child;
     let tail = "";
     const recent: string[] = [];
@@ -94,6 +115,10 @@ export class ChatSupervisor {
     child.once("error", (err) => log(`chat bridge could not start: ${err.message}`));
     child.once("exit", (code, signal) => {
       this.child = undefined;
+      if (tail.trim()) {
+        log(`chat bridge: ${tail}`); // a last line with no newline
+        recent.push(tail);
+      }
       // why it went away, for the status line of the sessions it was showing (the last thing it said, which is its reason when it died of one)
       const why = !this.stopped && (code !== 0 || signal) ? (crashReason(recent) ?? `exited (${signal ?? code})`) : undefined;
       if (this.ctx.published.bridgeUp || this.ctx.published.problem !== why) {
@@ -113,7 +138,7 @@ export class ChatSupervisor {
         this.delay = FIRST_DELAY_MS;
       }
       log(`chat bridge exited (${signal ?? code}); restarting in ${Math.round(this.delay / 1000)}s`);
-      this.timer = setTimeout(() => this.launch(), this.delay);
+      this.timer = setTimeout(() => this.launch(tokenEnv), this.delay);
       this.timer.unref();
       this.delay = Math.min(this.delay * 2, MAX_DELAY_MS);
     });

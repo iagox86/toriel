@@ -370,6 +370,30 @@ describe("touchesProtected: every spelling of a protected file", () => {
     }
   });
 
+  it("protects the chat bridge's token file wherever the setting puts it, and nothing else of that directory", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "token-protect-"));
+    const saved = process.env.XDG_CONFIG_HOME;
+    try {
+      process.env.XDG_CONFIG_HOME = dir;
+      fs.mkdirSync(path.join(dir, "toriel"), { recursive: true });
+      assert.equal(protectedPaths().some((p) => p.endsWith(".token")), false, "no chatto setting, no token file");
+      fs.writeFileSync(path.join(dir, "toriel", "settings.yaml"), "chatto:\n  url: https://chat.example.com\n  tokenFile: ~/secrets/bot.key\n  allowedUser: u1\n");
+      const token = path.join(os.homedir(), "secrets", "bot.key");
+      assert.ok(protectedPaths().includes(token));
+      assert.equal(touchesProtected(`cat ${token}`), true);
+      assert.equal(touchesProtected("cat ~/secrets/bot.key"), true);
+      assert.equal(touchesProtected("cat ../secrets/bot.key"), true, "the last two segments, as for the other files");
+      assert.equal(touchesProtected("cat ~/secrets/other.txt"), false);
+    } finally {
+      if (saved === undefined) {
+        delete process.env.XDG_CONFIG_HOME;
+      } else {
+        process.env.XDG_CONFIG_HOME = saved;
+      }
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("sees relative spellings, which still contain the tail of the path", () => {
     assert.equal(touches("../.pi/agent/mcp.json"), true);
     assert.equal(touches("x/../.pi/agent/mcp.json"), true);

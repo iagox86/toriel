@@ -4,7 +4,7 @@
 import * as path from "node:path";
 import { DATA_DIR, SOCK } from "../config.ts";
 import { loadSettings } from "../settings.ts";
-import { Bridge } from "./bridge.ts";
+import { Bridge, SetupError } from "./bridge.ts";
 import { connectChatto } from "./chatto-adapter.ts";
 import { connectDaemon } from "./daemon-client.ts";
 import { readToken } from "./token.ts";
@@ -37,7 +37,7 @@ async function main(): Promise<void> {
   };
   daemon.onClose(() => leave("the daemon went away: clearing the channels and exiting"));
   const adapter = await connectChatto({ url: settings.chatto.url, token: token.token });
-  bridge = new Bridge({ adapter, daemon, settings: settings.chatto, stateFile: path.join(DATA_DIR, "toriel", "chat-bridge.json"), log: say });
+  bridge = new Bridge({ adapter, daemon, settings: settings.chatto, stateFile: path.join(DATA_DIR, "toriel", "chat-bridge.json"), log: say, ...(settings.permissionGrantDurations ? { grantDurations: settings.permissionGrantDurations } : {}) });
   await bridge.start();
   process.on("SIGTERM", () => leave("told to stop: clearing the channels and exiting"));
   process.on("SIGINT", () => leave("interrupted: clearing the channels and exiting"));
@@ -45,5 +45,5 @@ async function main(): Promise<void> {
 
 main().catch((err: unknown) => {
   say(`bridge failed: ${err instanceof Error ? err.message : String(err)}`);
-  process.exit(1);
+  process.exit(err instanceof SetupError ? 2 : 1); // a setup problem is not retried in a loop
 });

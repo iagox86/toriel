@@ -189,7 +189,7 @@ export function commandFloor(text: string): string | undefined {
 
 /** Files that hold secrets; asking about reading or writing one always reaches the user. */
 const CREDENTIAL_FILES =
-  /(^|[/\s"'=:~])(\.ssh|\.gnupg|\.aws|\.netrc|\.git-credentials|\.npmrc|\.pypirc|\.docker\/config\.json|\.kube\/config|id_(rsa|dsa|ecdsa|ed25519)|auth\.json|mcp-auth\.json|models\.json|(credentials|secrets?)\.(json|ya?ml|env|toml)|\.env(\.[\w-]+)?)(?![\w-])|\/etc\/(shadow|sudoers|gshadow)|\.(pem|p12|pfx|keystore|kdbx)(?![\w-])/i;
+  /(^|[/\s"'=:~])(\.ssh|\.gnupg|\.aws|\.netrc|\.git-credentials|\.npmrc|\.pypirc|\.docker\/config\.json|\.kube\/config|id_(rsa|dsa|ecdsa|ed25519)|auth\.json|mcp-auth\.json|models\.json|(credentials|secrets?)\.(json|ya?ml|env|toml)|\.env(\.[\w-]+)?|chatto[\w-]*\.token)(?![\w-])|\/etc\/(shadow|sudoers|gshadow)|\.(pem|p12|pfx|keystore|kdbx)(?![\w-])/i;
 
 export interface FloorInput {
   /** The dialog's text (title and message). */

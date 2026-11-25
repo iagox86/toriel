@@ -15,6 +15,8 @@ interface Server {
   createMessage(dest: { roomId: string; threadRootId: string }, body: string, opts?: { inReplyTo?: string }): Promise<{ id: string }>;
   addReaction(msg: { roomId: string; messageId: string }, emoji: string): Promise<void>;
   refreshTyping(dest: { roomId: string; threadRootId: string }): Promise<void>;
+  /** 'connected' | 'connecting' | 'dormant' | 'disconnected' (the client reconnects by itself). */
+  status: string;
   roomList: { rooms: Array<{ id: string; name: string; description?: string | null }>; roomGroups: Array<{ id: string; name: string; roomIds: string[] }> };
 }
 
@@ -88,6 +90,20 @@ export async function connectChatto(opts: ChattoConnect): Promise<ChatAdapter> {
       setTimeout(() => rediff(e.actorId, change), 300);
     }
   });
+  // the client reconnects on its own and says nothing: look at its state, and call a connection that has not been 'connected' for 15 s down
+  let notConnected = 0;
+  let down = false;
+  const watch = setInterval(() => {
+    notConnected = server.status === "connected" ? 0 : notConnected + 1;
+    const nowDown = notConnected >= 5;
+    if (nowDown !== down) {
+      down = nowDown;
+      for (const l of statusListeners) {
+        l(!down);
+      }
+    }
+  }, 3000);
+  watch.unref();
   const rooms$ = () => server.service(types.RoomService);
   const messages$ = () => server.service(types.MessageService);
   const types_directory = () => server.service(types.RoomDirectoryService);
@@ -209,6 +225,7 @@ export async function connectChatto(opts: ChattoConnect): Promise<ChatAdapter> {
           body: String(m.body ?? ""),
           inReplyTo: m.inReplyTo || undefined,
           threadRootId: m.threadRootEventId || undefined,
+          ...(Array.isArray(m.attachments) && m.attachments.length > 0 ? { attachments: (m.attachments as Payload[]).map((a) => ({ id: String(a.id), name: String(a.filename ?? ""), mimeType: String(a.contentType ?? "") })) } : {}),
         };
         return [message];
       });
@@ -217,6 +234,7 @@ export async function connectChatto(opts: ChattoConnect): Promise<ChatAdapter> {
       await server.refreshTyping({ roomId, threadRootId: "" });
     },
     close() {
+      clearInterval(watch);
       api.close();
     },
   };
