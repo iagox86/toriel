@@ -164,7 +164,39 @@ export function handlePlanMode(ctx: DaemonContext, cmd: Cmd<"plan_mode">, res: R
   res(true, undefined, { on });
 }
 
-const autoNotice = (on: boolean, until: number | undefined): string =>
+/**
+ * Publish a session to chat, or stop (ticket 269). Keyed by UUID and only a flag: it never wakes a sleeping session, and the chat
+ * bridge (when there is one) reacts to the change. Chat itself has no way to publish.
+ */
+export function handlePublish(ctx: DaemonContext, cmd: Cmd<"publish">, res: Responder): void {
+  if (cmd.unpark) {
+    // /park -u: publish again only if the session was published when it was parked
+    const back = ctx.published.takeResume(cmd.sessionId);
+    if (back) {
+      log(`session ${cmd.sessionId} unparked: published to chat again`);
+      ctx.hub.broadcastSessions();
+    }
+    res(true, undefined, { published: ctx.published.has(cmd.sessionId) });
+    return;
+  }
+  if (cmd.on === false && cmd.resume) {
+    // /park: unpublish, but remember it, so using the session again publishes it again
+    if (ctx.published.park(cmd.sessionId)) {
+      log(`session ${cmd.sessionId} parked: no longer published until it is used again`);
+      ctx.hub.broadcastSessions();
+    }
+    res(true, undefined, { published: false });
+    return;
+  }
+  const on = cmd.on ?? !ctx.published.has(cmd.sessionId);
+  if (ctx.published.set(cmd.sessionId, on)) {
+    log(`session ${cmd.sessionId} ${on ? "published to chat" : "no longer published"}`);
+    ctx.hub.broadcastSessions();
+  }
+  res(true, undefined, { published: on });
+}
+
+const autoNotice =(on: boolean, until: number | undefined): string =>
   on
     ? `auto mode ON${until !== undefined ? ` until ${fmtClock(until, new Date())}` : ""}: permission prompts are allowed without asking, except the ones that always ask (credentials, destructive commands, pushes, writes outside the directory); /auto off ends it (shift+tab moves on to the next mode)`
     : "auto mode OFF: permission prompts ask again";
@@ -437,6 +469,8 @@ export async function handleClear(
   );
   ctx.hub.broadcastSessions();
   await sendHistory(ctx, socket, s);
+  // the other controllers (the chat bridge) hear that the conversation went; the one that asked flashes its own line
+  ctx.hub.broadcast({ type: "notice", session: s.id, text: "conversation cleared: same session, empty conversation (the old contents are in the trash)" });
   res(true, undefined, { removed: result.removed });
 }
 
@@ -524,6 +558,26 @@ export async function handleRestoreCode(ctx: DaemonContext, cmd: Cmd<"restore_co
   res(true, undefined, { code: codeResult(file, target.ts, false) });
 }
 
+/**
+ * Start or stop sending this controller every session's dialogs, attached or not (ticket 270). The dialogs open right now are sent
+ * at once, so a bridge that connects while a prompt waits still shows it. Needs a controller connection.
+ */
+export function handleObserveDialogs(ctx: DaemonContext, cmd: Cmd<"observe_dialogs">, socket: net.Socket, res: Responder): void {
+  if (!ctx.hub.isController(socket)) {
+    throw new Error("observe_dialogs comes from a controller connection");
+  }
+  const on = cmd.on !== false;
+  ctx.hub.observe(socket, on);
+  if (on) {
+    for (const s of ctx.registry.all()) {
+      if (s.child && s.pendingDialog && s.lastDialog && s.attachedTo !== socket) {
+        ctx.hub.send(socket, { type: "ui_request", session: s.id, request: s.lastDialog });
+      }
+    }
+  }
+  res(true, undefined, { observing: on });
+}
+
 /** Deliver the user's answer to a dialog the child asked for. */
 export function handleUiResponse(
   ctx: DaemonContext,
@@ -535,16 +589,22 @@ export function handleUiResponse(
   if (typeof response.id !== "string") {
     throw new Error("ui_response without id");
   }
+  // first answer wins (ticket 270): any controller may answer, and the later one finds the dialog gone; nothing reaches pi twice
   const pending = s.lastDialog?.id;
-  log(`session ${s.id} ui_response ${response.id}${pending === response.id ? "" : ` matches no pending dialog (pending: ${pending ?? "none"}); written to pi anyway`}`);
-  if (s.dialogInfo && s.lastDialog?.id === response.id) {
-    recordDecision({ ...s.dialogInfo.base, by: "user", answer: answerText(response), waitMs: Date.now() - s.dialogInfo.at });
+  if (pending !== response.id) {
+    log(`session ${s.id} ui_response ${response.id} refused: already answered or gone (pending: ${typeof pending === "string" ? pending : "none"})`);
+    throw new Error("already answered");
+  }
+  log(`session ${s.id} ui_response ${response.id}${cmd.source ? ` from ${cmd.source}` : ""}`);
+  if (s.dialogInfo) {
+    recordDecision({ ...s.dialogInfo.base, by: "user", ...(cmd.source ? { source: cmd.source } : {}), answer: answerText(response), waitMs: Date.now() - s.dialogInfo.at });
   }
   s.dialogInfo = undefined;
   s.pendingDialog = false;
   s.lastDialog = undefined;
   clearTimeout(s.denyTimer);
   s.denyTimer = undefined;
+  ctx.hub.broadcast({ type: "ui_resolved", session: s.id, id: response.id, by: "user", ...(cmd.source ? { source: cmd.source } : {}) });
   ctx.hub.broadcastSessions();
   // Write raw: RpcClient.send() overwrites the record's id with its own
   // correlation id, which would break the dialog reply matching, and it

@@ -101,6 +101,7 @@ export function buildSessionList(inp: ListInputs): SwitcherSession[] {
       cwd,
       note,
       schedules: meta?.schedules,
+      published: meta?.published,
       nextFire: meta?.nextFire,
       comment: sessionId ? inp.groups.comments?.[sessionId] : undefined,
       age: fmtAge(modified > 0 ? inp.now - modified : 0),

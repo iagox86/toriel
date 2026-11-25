@@ -12,7 +12,7 @@ export const WAKE_DELAY_MS = 400;
  * sleeping session asleep, plus the ones that only leave or show toriel's state): typing one needs no wake.
  */
 export const NO_CHILD_COMMANDS: ReadonlySet<string> = new Set([
-  "help", "exit", "quit", "mouse", "park", "name", "rename", "comment", "btw", "performance", "fork", "parent", "detach", "why", "feedback", "abort", "background", "auto",
+  "help", "exit", "quit", "mouse", "park", "publish", "name", "rename", "comment", "btw", "performance", "fork", "parent", "detach", "why", "feedback", "abort", "background", "auto",
   "in", "at", "every", "loop", "cron", "watch", "schedules", "cancel", "pause", "resume", "fire",
 ]);
 

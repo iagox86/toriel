@@ -194,6 +194,10 @@ function sessionSegments(inp: StatusInputs): Segment[] {
   if (meta?.grantsSaved) {
     out.push({ text: attention(`${meta.grantsSaved} saved permission${meta.grantsSaved === 1 ? "" : "s"} off (/permissions restore)`), drop: 1 });
   }
+  if (meta?.published) {
+    // dim while the bridge is down: the session is marked, but nothing is showing in chat
+    out.push({ text: meta.chatUp ? accent("chat") : dim("chat (bridge down)"), drop: 3 });
+  }
   if (meta?.thinkingLevel) {
     out.push({ text: `think ${gauge(EFFORT_BADNESS[meta.thinkingLevel] ?? 50, meta.thinkingLevel)}`, drop: 5 });
   }

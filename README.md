@@ -110,7 +110,7 @@ Type `/` for commands; tab completes them and their arguments, `/help` lists the
 
 - Switcher: `/new [-n name] [-a agent] [-C dir]`, `/init`, `/agents`, `/permissions` (every session's permission grants), `/doctor`, `/cd <dir>` (where `/new`, `/init` and a typed first message start, for this window), `/detach`, `/stop`, `/delete [-y]`, `/rename`, `/group`, `/ungroup`, `/park [-u]`,
   `/filter [-r]`, `/external [show|hide]` (sessions toriel never ran - plain pi, other instances - are hidden unless grouped; this shows them), `/comment [-c] [text]`, `/summarize`, `/restore`, `/adopt <file>`, `/feedback`, `/mouse [on|off|toggle]`, `/schedules` (every session's timed prompts), `/cancel /pause /resume <id|name>` and `/fire <schedule>` (manage a timed prompt), `/kill-daemon`, `/help`, `/exit`
-- In a session: `/help`, `/name` (show or rename; same as `/rename`), `/in`, `/at`, `/every`, `/loop`, `/cron` (timed prompts), `/watch <path> <prompt>` (a prompt when a file or directory changes; `/schedules` lists them, `/cancel /pause /resume <id|name>` and `/fire <schedule>` manage one), `/permissions` (list, add and revoke "allow for 1 hour" grants), `/doctor`, `/btw`, `/performance`, `/comment`, `/model`, `/think`, `/compact`, `/clear`, `/fork [-n name] [--keep-permissions]` (works while the session is running; the copy gets everything up to its last finished step), `/cd <dir>` (move this session to another directory), `/park`, `/rename`, `/reload`,
+- In a session: `/help`, `/name` (show or rename; same as `/rename`), `/in`, `/at`, `/every`, `/loop`, `/cron` (timed prompts), `/watch <path> <prompt>` (a prompt when a file or directory changes; `/schedules` lists them, `/cancel /pause /resume <id|name>` and `/fire <schedule>` manage one), `/permissions` (list, add and revoke "allow for 1 hour" grants), `/doctor`, `/btw`, `/performance`, `/comment`, `/publish [off]` (show the session in chat; only a flag, the chat bridge is a later piece), `/model`, `/think`, `/compact`, `/clear`, `/fork [-n name] [--keep-permissions]` (works while the session is running; the copy gets everything up to its last finished step), `/cd <dir>` (move this session to another directory), `/park`, `/rename`, `/reload`,
   `/mcp` (`list`, `status`, `explore`, `add`, `remove`, `reconnect`, `login`, `logout`), `/init`, `/why`, `/abort`, `/background`, `/deny-after` (deny a permission prompt nobody answers in time; off by default), `/auto` (auto mode, shift+tab),
   `/feedback`, `/parent` (jump to the agent that started this subagent), `/detach` (cut that link), `/continue [text]` (carry on after an accidental esc), `/mouse [on|off|toggle]`, `/quit` (back to the switcher), `/exit`
 
@@ -140,7 +140,8 @@ this file with every setting shown commented out at its default, a comment above
 so open it to see what you can change (remove the `#` to change one; one you leave alone follows
 toriel's defaults as they improve): models (`provider`, `model`, `thinking`, `summaryModel`), session behaviour
 (`steeringMode`, `autoName`, `preventSleep`, `showExternalSessions`, `trashRetentionDays`), summaries, scheduled
-prompts, subagent limits, permissions and the command sandbox. Edits apply to sessions started
+prompts, subagent limits, permissions, the command sandbox and an optional Chatto chat bridge (`chatto:`;
+`/publish` shows a session in a channel there, so you can follow it and answer from a phone). Edits apply to sessions started
 afterwards. Environment variables (`TORIEL_*`) override it. A `settings.json` from an earlier
 version is still read; `toriel doctor --fix` converts it. Full list and semantics:
 [docs/reference.md](docs/reference.md).

@@ -24,6 +24,9 @@ export async function handlePrompt(
   res: Responder,
 ): Promise<void> {
   let s: DaemonSession | undefined;
+  if (cmd.source) {
+    log(`prompt from ${cmd.source}`); // where it came from (ticket 270); the transcript does not say yet
+  }
   if (cmd.session !== undefined) {
     s = ctx.registry.get(cmd.session);
     if (!s) {
@@ -242,6 +245,7 @@ export async function removeSession(ctx: DaemonContext, s: DaemonSession | undef
     if (gone.length > 0) {
       log(`removed ${gone.length} schedule(s) of the deleted session ${uuid}`);
     }
+    ctx.published.set(uuid, false);
     const grants = ctx.grants.removeSession(uuid);
     if (grants.length > 0) {
       log(`removed ${grants.length} permission grant(s) of the deleted session ${uuid}`);

@@ -76,6 +76,8 @@ export class ChildManager {
   onAssistantMessage?: (s: DaemonSession, message: { role?: string; stopReason?: string; errorMessage?: string; usage?: { input?: number; output?: number; cacheWrite?: number } } | undefined) => void;
   /** Called for every event a session's process emits (the subagent watchdog's clock). */
   onActivity?: (s: DaemonSession) => void;
+  /** A run starts from idle: the session is being used (an unparked session publishes itself again, ticket 269). */
+  onRunStart?: (s: DaemonSession) => void;
   /** The limits that decide which sessions get the toriel_agent tools: the same object the subagent manager enforces. */
   private readonly subagentLimits: SubagentLimits;
   /** Called when a session's process is stopped or found dead (subagents end with their session; foreground ones with their parent). */
@@ -567,7 +569,7 @@ export class ChildManager {
     }
     setTimeout(() => {
       if (s.lastDialog === dialog) {
-        this.clearDialog(s);
+        this.clearDialog(s, "expired");
       }
     }, timeout + 1000).unref();
   }
@@ -677,13 +679,14 @@ export class ChildManager {
         recordDecision({ ...s.dialogInfo.base, by: "deny-after", answer: permission ? "no" : "cancelled", waitMs: Date.now() - s.dialogInfo.at });
         s.dialogInfo = undefined;
       }
-      this.clearDialog(s);
+      this.clearDialog(s, "deny-after");
       this.hub.broadcast({ type: "notice", session: s.id, text: `${permission ? AUTO_DENIED_NOTICE : AUTO_DISMISSED_NOTICE}: nobody answered in ${fmtDuration(ms)}: ${what}`, durable: true });
     }, ms);
     s.denyTimer.unref();
   }
 
-  private clearDialog(s: DaemonSession): void {
+  /** Close the session's open dialog without an answer from a person; `by` is what `ui_resolved` tells every controller (ticket 270). */
+  private clearDialog(s: DaemonSession, by: "expired" | "deny-after" | "dropped" = "dropped"): void {
     clearTimeout(s.denyTimer);
     s.denyTimer = undefined;
     if (s.dialogInfo) {
@@ -691,8 +694,12 @@ export class ChildManager {
       s.dialogInfo = undefined;
     }
     if (s.pendingDialog) {
+      const id = s.lastDialog?.id;
       s.pendingDialog = false;
       s.lastDialog = undefined;
+      if (typeof id === "string") {
+        this.hub.broadcast({ type: "ui_resolved", session: s.id, id, by });
+      }
       this.hub.broadcastSessions();
     }
   }
@@ -749,6 +756,10 @@ export class ChildManager {
       const message = { type: "ui_request" as const, session: s.id, request: shown };
       if (s.attachedTo) {
         this.hub.send(s.attachedTo, message);
+        // observers (the chat bridge) see it without holding the attach (ticket 270)
+        if (DIALOG_METHODS.has(event.method as string)) {
+          this.hub.sendToObservers(message, s.attachedTo);
+        }
       } else {
         this.hub.broadcast(message);
       }
@@ -783,6 +794,7 @@ export class ChildManager {
       // a continued turn (the one a task reminder buys, a queued message, a retry) re-emits agent_start mid-run: it is the
       // same busy period, so the stale-list clock (and meta, which nothing here changes) keeps the run's original start (ticket 251)
       if (!s.streaming) {
+        this.onRunStart?.(s);
         s.streaming = true;
         s.runSince = Date.now();
         this.hub.broadcastSessions();

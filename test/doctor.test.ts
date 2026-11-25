@@ -231,6 +231,7 @@ describe("doctor checks", () => {
       setup({ mcpExtra: { broken: { exposure: "direct" } } }).opts,
       setup({ piMcpJson: { mcpServers: { freecad: { url: "http://127.0.0.1:39280/mcp" } } } }).opts,
       setup({ config: { authorizerChain: ["toriel-grants"], permission: { "*": "allow", external_directory_write: { "/tmp/*": "allow" }, path: { "*": "ask", [GRANTS_RULE]: "ask" } } }, settings: JSON.stringify({ scopeGuardAcceptedAllows: [{ surface: "external_directory_write", pattern: "/tmp/*" }, { surface: "*", pattern: "*" }] }) }).opts,
+      { ...setup({ settings: '{"chatto":{"url":"https://chat.example.com","tokenFile":"/nonexistent/chatto.token","allowedUser":"u1"}}' }).opts, chatClientInstalled: () => false },
     ];
     const seen = new Set<string>();
     for (const opts of scenarios) {
@@ -508,6 +509,30 @@ describe("doctor checks", () => {
     assert.deepEqual(collectFindings({ ...setup({ settings: '{"sandbox":"off"}' }).opts, probeBwrap: broken }), [], "switched off: nothing to check");
   });
 
+  it("checks the chat bridge's token only when the chatto setting is on (ticket 271)", () => {
+    const chatto = (token: string) => `{"chatto":{"url":"https://chat.example.com","tokenFile":${JSON.stringify(token)},"allowedUser":"u1"}}`;
+    const grade = (settings: string) => collectFindings({ ...setup({ settings }).opts, probeBwrap: () => undefined }).filter((x) => x.id.startsWith("chat-bridge"));
+    assert.deepEqual(grade("{}"), [], "no chatto setting: nothing to say");
+    const missing = grade(chatto("/nonexistent/chatto.token"));
+    assert.deepEqual(missing.map((x) => [x.id, x.level]), [["chat-bridge-token", "feature"]]);
+    assert.match(missing[0]?.message ?? "", /cannot start: the token file .* does not exist/);
+    assert.ok(missing[0]?.manual);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "doctor-chat-"));
+    try {
+      const file = path.join(dir, "token");
+      fs.writeFileSync(file, "t");
+      fs.chmodSync(file, 0o644);
+      assert.match(grade(chatto(file))[0]?.message ?? "", /chmod 600/);
+      fs.chmodSync(file, 0o600);
+      assert.deepEqual(grade(chatto(file)), [], "a private token file and the package installed: fine");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+    const noPackage = collectFindings({ ...setup({ settings: chatto("/nonexistent/t") }).opts, probeBwrap: () => undefined, chatClientInstalled: () => false }).filter((x) => x.id === "chat-bridge-package");
+    assert.match(noPackage[0]?.message ?? "", /@chatto\/client is not installed/);
+    assert.ok(noPackage[0]?.manual);
+  });
+
   it("flags a model tier whose provider pi does not know, and stays quiet without lanes or with known providers", () => {
     const s = setup({ settings: '{"agentLanes":{"cheap":"litellm/local-model","medium":"nope/x"}}' });
     fs.writeFileSync(path.join(s.opts.agentDir as string, "models.json"), JSON.stringify({ providers: { litellm: {} } }));
@@ -569,7 +594,7 @@ describe("doctor report", () => {
     assert.match(text, /Required: all 5 ok/);
     assert.match(text, /Recommended: all 5 ok/);
     assert.doesNotMatch(text, / ok {7}/);
-    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(17 ok\)/);
+    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(19 ok\)/);
   });
 });
 
@@ -598,7 +623,7 @@ describe("doctor report colours", () => {
   it("colours the compact report too, with the passing checks' count dim", () => {
     const coloured = renderDoctor(checks(), { compact: true, style: ANSI_STYLE });
     assert.match(coloured, /Required\x1b\[22m: \x1b\[32mall 5 ok\x1b\[39m/);
-    assert.match(coloured, /\x1b\[2m {2}\(17 ok\)\x1b\[22m/);
+    assert.match(coloured, /\x1b\[2m {2}\(19 ok\)\x1b\[22m/);
   });
 });
 
