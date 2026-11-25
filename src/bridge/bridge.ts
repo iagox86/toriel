@@ -15,6 +15,7 @@ import type { ChattoSettings } from "../settings.ts";
 import { type ChatAdapter, type ChatEvent, type ChatMessage, MAX_BODY } from "./adapter.ts";
 import type { DaemonPort } from "./daemon-client.ts";
 import { oneLine } from "../util.ts";
+import { CHAT_HELP, parseChatCommand } from "./chat-commands.ts";
 import { HISTORY_TURNS, renderHistory } from "./history.ts";
 
 interface ChannelRecord {
@@ -1075,6 +1076,9 @@ export class Bridge {
       }
       return;
     }
+    if (await this.refuseCommand(m, text)) {
+      return;
+    }
     if (m.roomId === this.state.inboxRoomId) {
       await this.startSession(text, { inbox: true }).catch((err: unknown) => this.problem("could not start a session", err, { roomId: m.roomId }));
       return;
@@ -1142,7 +1146,7 @@ export class Bridge {
       }
       rec.cursor = x.id;
       this.save(); // before the delivery: a crash between the two loses this message rather than sending it twice (at most once)
-      await this.channelMessage(sessionId, x);
+      await this.channelMessage(sessionId, x, x.id !== live?.id);
     }
   }
 
@@ -1156,7 +1160,7 @@ export class Bridge {
   }
 
   /** One message from the channel of session `sessionId`: a dialog answer, or a prompt. */
-  private async channelMessage(sessionId: string, m: ChatMessage): Promise<void> {
+  private async channelMessage(sessionId: string, m: ChatMessage, late = false): Promise<void> {
     if (!this.settings.allowedUsers.includes(m.authorId)) {
       this.log(`ignored a message from user ${m.authorId}`); // the actor id only, never the content
       return;
@@ -1172,16 +1176,53 @@ export class Bridge {
       await this.adapter.post(m.roomId, "I don't use threads: write in the channel itself and I will read it.", { replyTo: m.id });
       return;
     }
+    const meta = this.metas.find((x) => x.sessionId === sessionId);
+    if (await this.refuseCommand(m, text, { meta, late })) {
+      return;
+    }
     const d = this.dialogFor(m.roomId);
     if (d && (await this.answerFrom(d, { text }))) {
       return;
     }
-    const meta = this.metas.find((x) => x.sessionId === sessionId);
     if (!meta) {
       await this.adapter.post(m.roomId, "toriel does not know this session right now (the daemon restarted?); open it in toriel once.", { replyTo: m.id });
       return;
     }
     await this.prompt(meta, text, m);
+  }
+
+  /**
+   * `/command` and `!command` are the bridge's, never the agent's: /abort and /help are done, anything else is answered with what
+   * chat can do. A command that was written while the bridge was away is not run (an abort would hit a later run). True when
+   * the message was a command.
+   */
+  private async refuseCommand(m: ChatMessage, text: string, where: { meta?: SessionMeta; late?: boolean } = {}): Promise<boolean> {
+    const cmd = parseChatCommand(text);
+    if (!cmd) {
+      return false;
+    }
+    const say = (t: string) => this.adapter.post(m.roomId, t, { replyTo: m.id });
+    if (cmd.kind === "bang") {
+      await say("`!` commands are not available in chat yet, and I never pass them to the agent. `/help` lists what I can do.");
+    } else if (cmd.name === "help") {
+      await say(CHAT_HELP);
+    } else if (cmd.name === "abort" && where.meta) {
+      if (where.late) {
+        await say("Not run: `/abort` was written while toriel was not listening, and it may no longer mean the run that is going now. Send it again if you still want it.");
+      } else if (!where.meta.active || where.meta.dead) {
+        await say("Nothing is running in this session.");
+      } else {
+        try {
+          await this.daemon.request({ type: "abort", session: where.meta.id });
+          await say("Interrupted.");
+        } catch (err) {
+          await say(`⚠ could not interrupt: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    } else {
+      await say(`\`/${cmd.name}\` is not a command I handle here, and I never pass it to the agent.\n${CHAT_HELP}`);
+    }
+    return true;
   }
 
   private async prompt(meta: SessionMeta, text: string, m: ChatMessage): Promise<void> {
