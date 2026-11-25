@@ -24,7 +24,7 @@ async function setup(chat = new FakeChat(), dir = fs.mkdtempSync(path.join(os.tm
   dirs.push(dir);
   const daemon = new FakeDaemon();
   const logs: string[] = [];
-  const bridge = new Bridge({ adapter: chat, daemon, settings, stateFile: path.join(dir, "state.json"), log: (t) => logs.push(t) });
+  const bridge = new Bridge({ adapter: chat, daemon, settings, stateFile: path.join(dir, "state.json"), log: (t) => logs.push(t), retryMs: 0 });
   await bridge.start();
   return { chat, daemon, bridge, logs, dir };
 }
@@ -275,5 +275,79 @@ describe("a session whose closed channel is still there", () => {
     await t.bridge.idle();
     assert.equal(t.chat.rooms.get(other.id)?.archived, true);
     assert.ok(t.chat.roomByName("fix-the-build"));
+  });
+});
+
+describe("when something goes wrong", () => {
+  it("says a channel could not be made in the inbox and to the daemon, and the other sessions still get theirs", async () => {
+    const t = await setup();
+    t.chat.createFails = "[permission_denied] you may not create rooms here";
+    t.daemon.sessions([meta(), meta({ id: 2, sessionId: "uuid-2", sessionName: "Second One" })]);
+    await t.bridge.idle();
+    const inbox = t.chat.roomByName("inbox") as { id: string };
+    const said = t.chat.postsIn(inbox.id).map((p) => p.body).filter((b) => b.startsWith("⚠"));
+    assert.equal(said.length, 2, "one line for each session");
+    assert.match(said[0], /could not open the channel for "Fix The Build": \[permission_denied\]/);
+    const status = t.daemon.of("chat_status").filter((r) => r.problem);
+    assert.equal(status.length, 2);
+    assert.equal(status[0].session, 1);
+    assert.equal(status[1].session, 2);
+    assert.ok(t.logs.some((l) => /could not open the channel for "Fix The Build" failed/.test(l)));
+  });
+  it("says it once, tries again, and tells the daemon when it works", async () => {
+    const t = await setup();
+    t.chat.createFails = "server error";
+    t.daemon.sessions([meta()]);
+    await t.bridge.idle();
+    t.daemon.sessions([meta()]); // the next list: tried again, the same problem, not said again
+    await t.bridge.idle();
+    const inbox = t.chat.roomByName("inbox") as { id: string };
+    assert.equal(t.chat.postsIn(inbox.id).filter((p) => p.body.startsWith("⚠")).length, 1);
+    assert.equal(t.daemon.of("chat_status").filter((r) => r.problem).length, 1);
+    t.chat.createFails = undefined;
+    t.daemon.sessions([meta()]);
+    await t.bridge.idle();
+    assert.ok(t.chat.roomByName("fix-the-build"));
+    const last = t.daemon.of("chat_status").at(-1);
+    assert.equal(last?.problem, undefined, "cleared");
+    assert.equal(last?.up, true);
+  });
+  it("tells the session's own channel when the trouble is in it, and does not echo the daemon's note back", async () => {
+    const t = await setup();
+    t.daemon.sessions([meta()]);
+    await t.bridge.idle();
+    const room = t.chat.roomByName("fix-the-build") as { id: string };
+    t.daemon.failures.set("prompt", "the session cannot be started");
+    t.chat.say(room.id, "hello");
+    await t.bridge.idle();
+    assert.ok(t.chat.postsIn(room.id).some((p) => /could not send that: the session cannot be started/.test(p.body)));
+    const before = t.chat.postsIn(room.id).length;
+    t.daemon.push({ type: "notice", session: 1, text: "chat bridge: something it already said", durable: true });
+    await t.bridge.idle();
+    assert.equal(t.chat.postsIn(room.id).length, before);
+  });
+  it("says a session could not be started from the inbox, in the inbox", async () => {
+    const t = await setup();
+    t.daemon.failures.set("spawn", "no more sessions allowed");
+    const inbox = t.chat.roomByName("inbox") as { id: string };
+    t.chat.say(inbox.id, "start something");
+    await t.bridge.idle();
+    assert.ok(t.chat.postsIn(inbox.id).some((p) => /⚠ could not start a session: no more sessions allowed/.test(p.body)));
+  });
+});
+
+describe("telling the daemon where the channels are", () => {
+  it("sends the open channels' names when they change, and not again when they do not", async () => {
+    const t = await setup();
+    t.daemon.sessions([meta()]);
+    await t.bridge.idle();
+    assert.deepEqual(t.daemon.of("chat_channels").at(-1)?.channels, { "uuid-1": "fix-the-build" });
+    const count = t.daemon.of("chat_channels").length;
+    t.daemon.sessions([meta()]);
+    await t.bridge.idle();
+    assert.equal(t.daemon.of("chat_channels").length, count, "unchanged, not repeated");
+    t.daemon.sessions([meta({ published: undefined })]);
+    await t.bridge.idle();
+    assert.deepEqual(t.daemon.of("chat_channels").at(-1)?.channels, {}, "a closed channel is gone from it");
   });
 });

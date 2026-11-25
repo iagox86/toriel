@@ -19,6 +19,12 @@ export class PublishedStore {
    * published session differently while it is false.
    */
   bridgeUp = false;
+  /** What is wrong with the bridge, in its own words (or why it exited); cleared when it says all is well. Memory only. */
+  problem?: string;
+  /** The chat server's host (for `/publish` to say where the channel is), set when the bridge starts. */
+  server?: string;
+  /** Session UUID -> the name of its open channel, as the bridge last said. Memory only. */
+  channels: Record<string, string> = {};
 
   private readonly file: string;
   private readonly now: () => number;

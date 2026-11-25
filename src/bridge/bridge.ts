@@ -6,7 +6,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { DaemonMessage, HistoryTurn, SessionMeta } from "../shared.ts";
+import { BRIDGE_NOTICE_PREFIX, type DaemonMessage, type HistoryTurn, type SessionMeta } from "../shared.ts";
 import { DIALOG_METHODS } from "../config.ts";
 import { optionsNumberedAlready } from "../dialogs.ts";
 import type { ChattoSettings } from "../settings.ts";
@@ -50,6 +50,8 @@ export interface BridgeDeps {
   settings: ChattoSettings;
   stateFile: string;
   log: (text: string) => void;
+  /** How long a session whose channel could not be made or closed waits before the next try (default 30 s; tests pass 0). */
+  retryMs?: number;
 }
 
 /**
@@ -105,6 +107,8 @@ const TYPING_EVERY_MS = 3000;
 const DISCOVER_EVERY_MS = 30_000;
 /** How many of a channel's latest messages the catch-up looks at (what is older than its cursor is not looked at again). */
 const CATCHUP_WINDOW = 200;
+/** The same problem is told once in this long, however often it comes back. */
+const PROBLEM_REPEAT_MS = 10 * 60_000;
 
 /** The text of a pi message: the text blocks of an assistant message, or a user message's string. */
 export function messageText(message: { content?: unknown } | undefined): string {
@@ -143,6 +147,13 @@ export class Bridge {
   private readonly binding = new Set<string>();
   /** Ids of channel messages already dealt with, so a message the live event and the catch-up both deliver counts once. */
   private readonly handled = new Set<string>();
+  private readonly retryMs: number;
+  /** Problems already told, by text, and when. */
+  private readonly told = new Map<string, number>();
+  /** Sessions whose channel could not be made or closed, and when to try again. */
+  private readonly retryAt = new Map<string, number>();
+  /** A problem was reported to the daemon and not yet cleared. */
+  private problemOpen = false;
   /** Channels the user made that wait for a first message before a session exists. */
   private readonly emptyChannels = new Map<string, string>(); // room id -> channel name
 
@@ -152,10 +163,46 @@ export class Bridge {
     this.settings = deps.settings;
     this.stateFile = deps.stateFile;
     this.log = deps.log;
+    this.retryMs = deps.retryMs ?? 30_000;
   }
 
   private run(label: string, fn: () => Promise<void>): void {
-    this.chain = this.chain.then(fn).catch((err: unknown) => this.log(`${label} failed: ${err instanceof Error ? err.message : String(err)}`));
+    this.chain = this.chain.then(fn).catch((err: unknown) => this.problem(label, err));
+  }
+
+  /**
+   * Something failed. It is logged, said in the chat (in the session's channel when there is one, else where it was asked: the room
+   * of a message, else the inbox) and told to the daemon, which shows it in the status line and, for a session, leaves a note in its
+   * transcript. The same problem is told once in ten minutes; `clearProblem` tells the daemon when things work again.
+   */
+  private async problem(label: string, err: unknown, where: { roomId?: string; session?: number; sessionId?: string } = {}): Promise<void> {
+    const why = err instanceof Error ? err.message : String(err);
+    const text = `${label}: ${why}`;
+    const last = this.told.get(text);
+    if (last !== undefined && Date.now() - last < PROBLEM_REPEAT_MS) {
+      return;
+    }
+    this.told.set(text, Date.now());
+    this.log(`${label} failed: ${why}`);
+    try {
+      const channel = where.sessionId ? this.state.channels[where.sessionId] : undefined;
+      const room = where.roomId ?? (channel && !channel.closed ? channel.roomId : undefined) ?? this.state.inboxRoomId;
+      if (room) {
+        await this.adapter.post(room, `⚠ ${text}`);
+      }
+    } catch {
+      // chat is what is wrong, perhaps: the daemon is still told
+    }
+    this.problemOpen = true;
+    await this.daemon.request({ type: "chat_status", up: true, problem: text.length > 300 ? `${text.slice(0, 299)}…` : text, ...(where.session !== undefined ? { session: where.session } : {}) }).catch(() => undefined);
+  }
+
+  /** A sync went through without trouble: whatever was reported is no longer wrong. */
+  private async clearProblem(): Promise<void> {
+    if (this.problemOpen) {
+      this.problemOpen = false;
+      await this.daemon.request({ type: "chat_status", up: true }).catch(() => undefined);
+    }
   }
 
   /** Look for rooms nobody told the bridge about now instead of on the next tick (tests). */
@@ -193,6 +240,7 @@ export class Bridge {
     this.discoverTimer = setInterval(() => {
       this.run("discover", () => this.discover());
       this.run("catch-up", () => this.catchUpAll());
+      this.run("sync", () => this.syncSessions()); // tries again where a channel could not be made or closed
     }, DISCOVER_EVERY_MS);
     this.discoverTimer.unref();
     await this.daemon.request({ type: "observe_dialogs" });
@@ -315,7 +363,7 @@ export class Bridge {
   /** One short line in a published session's channel, for something that happened that the transcript does not show. */
   private async say(session: number, text: string): Promise<void> {
     const rec = this.channelOf(this.metaOf(session));
-    if (rec && text.trim()) {
+    if (rec && text.trim() && !text.startsWith(BRIDGE_NOTICE_PREFIX)) {
       await this.postLong(rec.roomId, `ℹ ${text.trim()}`);
     }
   }
@@ -365,21 +413,50 @@ export class Bridge {
         }
       }
     }
+    let failed = false;
     for (const meta of this.metas) {
-      if (!meta.sessionId) {
+      if (!meta.sessionId || (this.retryAt.get(meta.sessionId) ?? 0) > Date.now()) {
         continue;
       }
       const rec = this.state.channels[meta.sessionId];
-      if (meta.published) {
-        this.binding.delete(meta.sessionId);
-        if (!rec || rec.closed || !rec.rootId) {
-          await this.openChannel(meta);
-        } else {
-          await this.refreshChannel(meta, rec);
+      try {
+        if (meta.published) {
+          this.binding.delete(meta.sessionId);
+          if (!rec || rec.closed || !rec.rootId) {
+            await this.openChannel(meta);
+          } else {
+            await this.refreshChannel(meta, rec);
+          }
+        } else if (rec && !rec.closed && !this.binding.has(meta.sessionId)) {
+          await this.closeChannel(meta.sessionId, rec, meta);
         }
-      } else if (rec && !rec.closed && !this.binding.has(meta.sessionId)) {
-        await this.closeChannel(meta.sessionId, rec, meta);
+        this.retryAt.delete(meta.sessionId);
+      } catch (err) {
+        // one session's trouble does not stop the others' channels
+        failed = true;
+        this.retryAt.set(meta.sessionId, Date.now() + this.retryMs);
+        await this.problem(`could not ${meta.published ? "open" : "close"} the channel for ${meta.sessionName ? `"${meta.sessionName}"` : `session ${meta.id}`}`, err, { session: meta.id, sessionId: meta.sessionId });
       }
+    }
+    if (!failed && this.retryAt.size === 0) {
+      await this.clearProblem();
+    }
+    await this.announceChannels();
+  }
+
+  private lastAnnounced = "";
+  /** Tell the daemon which channel each session has, so `/publish` in toriel can say where it is. */
+  private async announceChannels(): Promise<void> {
+    const channels: Record<string, string> = {};
+    for (const [sessionId, rec] of Object.entries(this.state.channels)) {
+      if (!rec.closed) {
+        channels[sessionId] = rec.name;
+      }
+    }
+    const text = JSON.stringify(channels);
+    if (text !== this.lastAnnounced) {
+      this.lastAnnounced = text;
+      await this.daemon.request({ type: "chat_channels", channels }).catch(() => undefined);
     }
   }
 
@@ -859,6 +936,7 @@ export class Bridge {
     if (name && name !== meta.sessionName) {
       await this.daemon.request({ type: "rename", session: meta.id, name });
       this.log(`session ${meta.id} renamed to ${name} from its channel`);
+      await this.announceChannels();
     }
   }
 
@@ -885,13 +963,16 @@ export class Bridge {
       return;
     }
     if (m.roomId === this.state.inboxRoomId) {
-      await this.startSession(text, { inbox: true });
+      await this.startSession(text, { inbox: true }).catch((err: unknown) => this.problem("could not start a session", err, { roomId: m.roomId }));
       return;
     }
     if (this.emptyChannels.has(m.roomId)) {
       const channelName = this.emptyChannels.get(m.roomId) ?? "";
       this.emptyChannels.delete(m.roomId);
-      await this.startSession(text, { roomId: m.roomId, channelName, name: sessionNameFromChannel(channelName) });
+      await this.startSession(text, { roomId: m.roomId, channelName, name: sessionNameFromChannel(channelName) }).catch(async (err: unknown) => {
+        this.emptyChannels.set(m.roomId, channelName); // still waiting for a message that can start it
+        await this.problem("could not start a session", err, { roomId: m.roomId });
+      });
     }
   }
 

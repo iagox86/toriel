@@ -37,6 +37,7 @@ import { renameNotice } from "./session-id.ts";
 import { runPermissions } from "./permission-commands.ts";
 import { addSchedule, addWatch, operateSchedule, showSchedules } from "./schedule-commands.ts";
 import { errText } from "./util.ts";
+import { publishInfo } from "./publish-info.ts";
 import { fmtClock, fmtDuration } from "./when.ts";
 import { log } from "./log.ts";
 
@@ -112,7 +113,8 @@ export class SessionCommands {
       exit: () => this.h.dispose(),
       quit: () => this.h.switching.open(),
       park: () => this.park(),
-      publish: (c) => this.publish(c.args[0]),
+      publish: () => this.publish(),
+      unpublish: () => this.unpublish(),
       btw: (c) => this.btw(c.args.join(" "), c.opts.model as string | undefined),
       performance: (c) => this.performance(c.opts.model as string | undefined),
       comment: (c) => this.comment(c.args.join(" "), c.opts.clear === true),
@@ -182,28 +184,47 @@ export class SessionCommands {
     this.h.notify(clear ? "comment removed" : "comment saved");
   }
 
-  /**
-   * Publish the viewed session to chat, or stop (ticket 269). Does NOT wake a sleeping session: it only sets the daemon's flag,
-   * keyed by the session's id.
-   */
-  private async publish(state: string | undefined): Promise<void> {
-    const word = state?.trim().toLowerCase();
-    if (word !== undefined && word !== "" && word !== "off" && word !== "on") {
-      this.h.notify("publish: say /publish or /publish off");
-      return;
-    }
+  /** The viewed session's UUID, when it has one yet (a session with no message has no id). */
+  private viewedSessionId(): string | undefined {
     const key = this.h.viewing;
-    const sessionId = this.viewedMeta()?.sessionId ?? (key ? this.h.local.get(key)?.id : undefined);
+    return this.viewedMeta()?.sessionId ?? (key ? this.h.local.get(key)?.id : undefined);
+  }
+
+  /**
+   * Publish the viewed session to chat (ticket 269), or, when it already is, say where it shows. Does NOT wake a sleeping session: it
+   * only sets the daemon's flag, keyed by the session's id.
+   */
+  private async publish(): Promise<void> {
+    const sessionId = this.viewedSessionId();
     if (!sessionId) {
       this.h.notify("nothing to publish yet - send a message first");
       return;
     }
+    const meta = this.viewedMeta();
+    if (meta?.published) {
+      this.h.infoPanel.show(publishInfo(meta));
+      return;
+    }
     try {
-      const on = word !== "off";
-      await this.h.request({ type: "publish", sessionId, on });
-      this.h.notify(on ? "published to chat (shows once the chat bridge runs; /park or /publish off stops)" : "no longer published to chat");
+      await this.h.request({ type: "publish", sessionId, on: true });
+      this.h.notify("published to chat (shows once the chat bridge runs; /publish again says where, /unpublish stops)");
     } catch (err) {
       this.h.notify(`publish failed: ${errText(err)}`);
+    }
+  }
+
+  /** Stop publishing the viewed session. Does not wake a sleeping session. */
+  private async unpublish(): Promise<void> {
+    const sessionId = this.viewedSessionId();
+    if (!sessionId) {
+      this.h.notify("this session is not published");
+      return;
+    }
+    try {
+      await this.h.request({ type: "publish", sessionId, on: false });
+      this.h.notify("no longer published to chat");
+    } catch (err) {
+      this.h.notify(`unpublish failed: ${errText(err)}`);
     }
   }
 

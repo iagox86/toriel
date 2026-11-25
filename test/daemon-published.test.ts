@@ -100,3 +100,28 @@ describe("daemon: published sessions nobody has opened (ticket 280)", () => {
     assert.equal(t.registry.all().length, 1);
   });
 });
+
+describe("daemon: what the bridge reports (ticket 283)", () => {
+  it("shows a problem and the channel of a published session in the session list, and clears the problem", async () => {
+    harness = await startDaemon();
+    const c = await harness.connect();
+    const { sessionId } = await c.request({ type: "spawn", cwd: harness.dir });
+    await c.request({ type: "prompt", session: sessionId, message: "hi" });
+    let uuid: string | undefined;
+    for (let i = 0; i < 80 && !uuid; i++) {
+      uuid = c.sessions().find((x) => x.id === sessionId)?.sessionId;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.ok(uuid);
+    await c.request({ type: "publish", sessionId: uuid, on: true });
+    const bridge = await harness.connect();
+    await bridge.request({ type: "list" });
+    await bridge.request({ type: "chat_status", up: true, problem: "could not open the channel for \"X\": boom", session: sessionId });
+    await c.waitFor((m) => m.type === "sessions" && m.sessions.some((x: { id: number; chatProblem?: string }) => x.id === sessionId && /boom/.test(x.chatProblem ?? "")));
+    await c.waitFor((m) => m.type === "notice" && m.session === sessionId && /^chat bridge: could not open/.test(m.text) && m.durable === true);
+    await bridge.request({ type: "chat_channels", channels: { [uuid]: "fix-the-build" } });
+    await c.waitFor((m) => m.type === "sessions" && m.sessions.some((x: { id: number; chatChannel?: string }) => x.id === sessionId && x.chatChannel === "fix-the-build"));
+    await bridge.request({ type: "chat_status", up: true });
+    await c.waitFor((m) => m.type === "sessions" && m.sessions.some((x: { id: number; chatProblem?: string; chatUp?: boolean }) => x.id === sessionId && x.chatProblem === undefined && x.chatUp === true));
+  });
+});

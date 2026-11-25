@@ -43,7 +43,12 @@ export class FakeChat implements ChatAdapter {
   async listArchived(): Promise<ChatRoom[]> {
     return [...this.rooms.values()].filter((r) => r.archived).map(({ id, name, archived, description }) => ({ id, name, archived, description }));
   }
+  /** Make createRoom fail with this message (a bot without the permission, a server error). */
+  createFails?: string;
   async createRoom(_group: string, name: string, description: string): Promise<ChatRoom> {
+    if (this.createFails) {
+      throw new Error(this.createFails);
+    }
     if ([...this.rooms.values()].some((r) => r.name.toLowerCase() === name.toLowerCase())) {
       throw new Error("[already_exists] a room with this name already exists on this server");
     }

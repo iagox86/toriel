@@ -49,6 +49,11 @@ export class ChatSupervisor {
       }
       return;
     }
+    try {
+      this.ctx.published.server = new URL(settings.chatto?.url ?? "").host;
+    } catch {
+      // validChatto has checked the URL; an odd one only costs the host in /publish's report
+    }
     this.launch();
   }
 
@@ -64,19 +69,25 @@ export class ChatSupervisor {
     const child = spawn(process.execPath, ["--disable-warning=ExperimentalWarning", MAIN], { env: { ...process.env, TORIEL_SOCK: SOCK }, stdio: ["ignore", "ignore", "pipe"] });
     this.child = child;
     let tail = "";
+    let lastLine = "";
     child.stderr?.setEncoding("utf8");
     child.stderr?.on("data", (chunk: string) => {
       tail += chunk;
       for (let i = tail.indexOf("\n"); i !== -1; i = tail.indexOf("\n")) {
         log(`chat bridge: ${tail.slice(0, i)}`);
+        lastLine = tail.slice(0, i).trim() || lastLine;
         tail = tail.slice(i + 1);
       }
     });
     child.once("error", (err) => log(`chat bridge could not start: ${err.message}`));
     child.once("exit", (code, signal) => {
       this.child = undefined;
-      if (this.ctx.published.bridgeUp) {
+      // why it went away, for the status line of the sessions it was showing (the last thing it said, which is its reason when it died of one)
+      const why = !this.stopped && (code !== 0 || signal) ? (lastLine ? lastLine.replace(/^bridge: /, "") : `exited (${signal ?? code})`) : undefined;
+      if (this.ctx.published.bridgeUp || this.ctx.published.problem !== why) {
         this.ctx.published.bridgeUp = false;
+        this.ctx.published.problem = why;
+        this.ctx.published.channels = {}; // the channels are closed when it goes
         this.ctx.hub.broadcastSessions();
       }
       if (this.stopped) {

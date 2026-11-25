@@ -196,7 +196,14 @@ function sessionSegments(inp: StatusInputs): Segment[] {
   }
   if (meta?.published) {
     // dim while the bridge is down: the session is marked, but nothing is showing in chat
-    out.push({ text: meta.chatUp ? accent("chat") : dim("chat (bridge down)"), drop: 3 });
+    const why = meta.chatProblem && meta.chatProblem.length > 60 ? `${meta.chatProblem.slice(0, 59)}…` : meta.chatProblem;
+    if (!meta.chatUp) {
+      out.push({ text: dim(why ? `chat (bridge down: ${why})` : "chat (bridge down)"), drop: 3 });
+    } else if (why) {
+      out.push({ text: attention(`chat: ${why}`), drop: 2 }); // the bridge is up but something it was asked to do failed
+    } else {
+      out.push({ text: accent("chat"), drop: 3 });
+    }
   }
   if (meta?.thinkingLevel) {
     out.push({ text: `think ${gauge(EFFORT_BADNESS[meta.thinkingLevel] ?? 50, meta.thinkingLevel)}`, drop: 5 });
