@@ -216,7 +216,8 @@ export class SessionCommands {
   /** Stop publishing the viewed session. Does not wake a sleeping session. */
   private async unpublish(): Promise<void> {
     const sessionId = this.viewedSessionId();
-    if (!sessionId) {
+    const meta = this.viewedMeta();
+    if (!sessionId || (meta && !meta.published)) {
       this.h.notify("this session is not published");
       return;
     }

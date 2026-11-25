@@ -74,10 +74,10 @@ export interface UsageReport {
   at: number;
 }
 
-/** One turn of a session's conversation as `read_history` reports it: the text only, no tool output. */
 /** Notices the daemon makes out of a bridge's problem start with this; the bridge does not post them back into the channel it already told. */
 export const BRIDGE_NOTICE_PREFIX = "chat bridge: ";
 
+/** One turn of a session's conversation as `read_history` reports it: the text only, no tool output. */
 export interface HistoryTurn {
   role: "user" | "assistant" | "compaction";
   text: string;

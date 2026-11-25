@@ -130,10 +130,12 @@ export async function connectChatto(opts: ChattoConnect): Promise<ChatAdapter> {
     async listArchived(group) {
       // RoomDirectoryService.listRooms with the archived filter (probed live, ticket 279); scope 2 = channels, filter 2 = archived
       const out: ChatRoom[] = [];
+      const seen = new Set<string>(); // pages are live reads: a room that moved between two of them is listed twice
       for (let offset = 0; offset < 2000; offset += 100) {
         const res = await types_directory().listRooms({ scope: 2, archiveFilter: 2, page: { limit: 100, offset } });
         for (const r of Array.isArray(res.rooms) ? (res.rooms as Payload[]) : []) {
-          if (r.room?.groupId === group) {
+          if (r.room?.groupId === group && !seen.has(String(r.room.id))) {
+            seen.add(String(r.room.id));
             out.push({ id: String(r.room.id), name: String(r.room.name), archived: true, description: r.room.description || undefined });
           }
         }

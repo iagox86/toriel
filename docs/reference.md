@@ -601,7 +601,7 @@ Nothing is installed into pi's own config dir (`pi-dir.ts`: `$PI_CODING_AGENT_DI
 list its path under `extensions` in pi's `settings.json` to use it.
 `theme-preview.ts` prints sample components in the active theme.
 
-The chat bridge (see "Chat bridge"): `published.ts` (the set of published session ids the daemon keeps), `daemon-chat.ts` (starts and restarts the bridge process), `bridge/main.ts` (that process), `bridge/bridge.ts` (what it does), `bridge/adapter.ts` (the chat-server interface), `bridge/chatto-adapter.ts` (Chatto through `@chatto/client`), `bridge/history.ts` (a past as posts), `bridge/daemon-client.ts` (its socket to the daemon), `bridge/token.ts` (reading the token), `daemon-published.ts` (registers published sessions nobody has opened); tests use `test/fake-chatto.ts`.
+The chat bridge (see "Chat bridge"): `published.ts` (the set of published session ids the daemon keeps), `daemon-chat.ts` (starts and restarts the bridge process), `bridge/main.ts` (that process), `bridge/bridge.ts` (what it does), `bridge/adapter.ts` (the chat-server interface), `bridge/chatto-adapter.ts` (Chatto through `@chatto/client`), `bridge/history.ts` (a past as posts), `publish-info.ts` (what `/publish` says about a published session), `bridge/daemon-client.ts` (its socket to the daemon), `bridge/token.ts` (reading the token), `daemon-published.ts` (registers published sessions nobody has opened); tests use `test/fake-chatto.ts`.
 
 ## Checks
 

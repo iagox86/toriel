@@ -9,6 +9,7 @@ import { renderHistory } from "../src/bridge/history.ts";
 import type { ChattoSettings } from "../src/settings.ts";
 import type { HistoryTurn } from "../src/shared.ts";
 import { digestHistory } from "../src/daemon-history.ts";
+import { crashReason } from "../src/daemon-chat.ts";
 import { FakeChat, FakeDaemon, meta, RON } from "./fake-chatto.ts";
 
 const dirs: string[] = [];
@@ -208,8 +209,10 @@ describe("what was written in a channel while nobody listened", () => {
     t.chat.deliver = false;
     t.chat.say(room.id, "behind a lost cursor");
     await t.bridge.catchUpNow();
+    await t.bridge.catchUpNow();
+    await t.bridge.catchUpNow();
     assert.equal(t.daemon.of("prompt").length, 1, "nothing is sent on a guess");
-    assert.ok(t.logs.some((l) => /not among the latest/.test(l)));
+    assert.equal(t.logs.filter((l) => /not among the latest/.test(l)).length, 1, "said once, not on every look");
   });
   it("is caught up when the channel comes back after the bridge restarted", async () => {
     const t = await setup();
@@ -349,5 +352,81 @@ describe("telling the daemon where the channels are", () => {
     t.daemon.sessions([meta({ published: undefined })]);
     await t.bridge.idle();
     assert.deepEqual(t.daemon.of("chat_channels").at(-1)?.channels, {}, "a closed channel is gone from it");
+  });
+});
+
+describe("failure paths (review of ticket 283)", () => {
+  it("retries an open that failed after the pinned post without posting it, or skipping the history, again", async () => {
+    const t = await setup();
+    t.daemon.histories.set(1, { total: 1, turns: [turn("user", "hello", 10)] });
+    t.chat.failPost = (b) => /^✅ \*\*Published/.test(b);
+    t.daemon.sessions([meta()]);
+    await t.bridge.idle();
+    t.chat.failPost = undefined;
+    t.daemon.sessions([meta()]);
+    await t.bridge.idle();
+    const room = t.chat.roomByName("fix-the-build") as { id: string };
+    const bodies = t.chat.postsIn(room.id).map((p) => p.body);
+    assert.equal(bodies.filter((b) => /_session uuid-1_/.test(b)).length, 1, "one pinned post");
+    assert.equal(t.chat.pins.length, 1);
+    assert.equal(bodies.filter((b) => b === "> **you:** hello").length, 1, "the history once");
+    assert.equal(bodies.filter((b) => /Published/.test(b)).length, 1, "and the acknowledgement once, at the end");
+  });
+  it("does not lose history turns whose post failed", async () => {
+    const t = await setup();
+    t.daemon.histories.set(1, { total: 1, turns: [turn("user", "hello", 10)] });
+    t.chat.failPost = (b) => b === "> **you:** hello";
+    t.daemon.sessions([meta()]);
+    await t.bridge.idle();
+    const rec = JSON.parse(fs.readFileSync(path.join(t.dir, "state.json"), "utf8")).channels["uuid-1"];
+    assert.equal(rec.mirroredAt, undefined, "the mark did not move past what was not shown");
+  });
+  it("tells the daemon the problem is over when the session that had it is gone", async () => {
+    const t = await setup();
+    t.chat.createFails = "boom";
+    t.daemon.sessions([meta()]);
+    await t.bridge.idle();
+    t.daemon.sessions([]); // the session went away while its channel was failing
+    await t.bridge.idle();
+    const last = t.daemon.of("chat_status").at(-1);
+    assert.equal(last?.problem, undefined);
+  });
+  it("sends a problem on one line", async () => {
+    const t = await setup();
+    t.chat.createFails = "bad gateway\n<html>\n\u0007page</html>";
+    t.daemon.sessions([meta()]);
+    await t.bridge.idle();
+    const sent = t.daemon.of("chat_status").find((r) => r.problem)?.problem as string;
+    assert.ok(sent && !/\p{Cc}/u.test(sent), sent);
+    const inbox = t.chat.roomByName("inbox") as { id: string };
+    assert.ok(t.chat.postsIn(inbox.id).every((p) => !/\n.*(<html>)/.test(p.body)));
+  });
+  it("finds the message of a crash, not the frame under it", () => {
+    const trace = ["file:///x/bridge/main.ts:12", "    throw new Error(\"the group Toriel does not exist\");", "    ^", "", "Error: the group Toriel does not exist", "    at start (file:///x/bridge/bridge.ts:90:11)", "    at async main (file:///x/bridge/main.ts:5:3)", "", "Node.js v22.18.0"];
+    assert.equal(crashReason(trace), "Error: the group Toriel does not exist");
+    assert.equal(crashReason(["bridge up", "listening"]), "listening");
+    assert.equal(crashReason([]), undefined);
+  });
+  it("starts a session from the first message of a channel the bridge had not been told about", async () => {
+    const t = await setup();
+    const made = await t.chat.createRoom("g1", "brand-new-room", ""); // no room event is delivered
+    t.chat.say(made.id, "first words");
+    await t.bridge.idle();
+    assert.deepEqual(t.daemon.of("spawn").map((r) => r.name), ["Brand New Room"]);
+    assert.deepEqual(t.daemon.of("prompt").map((r) => r.message), ["first words"]);
+  });
+  it("keeps the first message of a session whose prompt failed, and sends it when the session is listed", async () => {
+    const t = await setup();
+    t.daemon.failures.set("prompt", "the session is busy starting");
+    const inbox = t.chat.roomByName("inbox") as { id: string };
+    t.chat.say(inbox.id, "do the thing");
+    await t.bridge.idle();
+    assert.equal(t.daemon.of("spawn").length, 1);
+    assert.ok(t.chat.postsIn(inbox.id).some((p) => /could not send the first message/.test(p.body)));
+    t.daemon.failures.delete("prompt");
+    t.daemon.sessions([meta({ id: 100, sessionId: "uuid-new", sessionName: "Do The Thing", published: undefined })]);
+    await t.bridge.idle();
+    assert.deepEqual(t.daemon.of("prompt").map((r) => r.message), ["do the thing", "do the thing"], "sent again");
+    assert.equal(t.daemon.of("prompt")[1].session, 100);
   });
 });

@@ -12,6 +12,7 @@ import { optionsNumberedAlready } from "../dialogs.ts";
 import type { ChattoSettings } from "../settings.ts";
 import { type ChatAdapter, type ChatEvent, type ChatMessage, MAX_BODY } from "./adapter.ts";
 import type { DaemonPort } from "./daemon-client.ts";
+import { oneLine } from "../util.ts";
 import { HISTORY_TURNS, renderHistory } from "./history.ts";
 
 interface ChannelRecord {
@@ -142,12 +143,14 @@ export class Bridge {
   /** Prompts this bridge sent, so the user message pi echoes back is not posted a second time. */
   private readonly echoes: string[] = [];
   /** A session started from chat that has no UUID yet: publish it (and bind a channel, when one exists) once it has. */
-  private readonly awaiting = new Map<number, { roomId?: string; channelName?: string; inbox?: boolean }>();
+  private readonly awaiting = new Map<number, { roomId?: string; channelName?: string; inbox?: boolean; /** The first message, when the prompt that should have carried it failed: sent once the session is listed. */ retryText?: string }>();
   /** Sessions whose channel was bound before the daemon listed them as published. */
   private readonly binding = new Set<string>();
   /** Ids of channel messages already dealt with, so a message the live event and the catch-up both deliver counts once. */
   private readonly handled = new Set<string>();
   private readonly retryMs: number;
+  /** A channel being opened: what an earlier try already did, so a retry neither posts the pinned post again nor skips the history. */
+  private readonly opening = new Map<string, { reopened?: boolean; existed?: boolean; rootId?: string; mirrored?: boolean }>();
   /** Problems already told, by text, and when. */
   private readonly told = new Map<string, number>();
   /** Sessions whose channel could not be made or closed, and when to try again. */
@@ -176,7 +179,7 @@ export class Bridge {
    * transcript. The same problem is told once in ten minutes; `clearProblem` tells the daemon when things work again.
    */
   private async problem(label: string, err: unknown, where: { roomId?: string; session?: number; sessionId?: string } = {}): Promise<void> {
-    const why = err instanceof Error ? err.message : String(err);
+    const why = oneLine(err instanceof Error ? err.message : String(err));
     const text = `${label}: ${why}`;
     const last = this.told.get(text);
     if (last !== undefined && Date.now() - last < PROBLEM_REPEAT_MS) {
@@ -195,6 +198,15 @@ export class Bridge {
     }
     this.problemOpen = true;
     await this.daemon.request({ type: "chat_status", up: true, problem: text.length > 300 ? `${text.slice(0, 299)}…` : text, ...(where.session !== undefined ? { session: where.session } : {}) }).catch(() => undefined);
+  }
+
+  /** Log something that can come back on every tick, once in `PROBLEM_REPEAT_MS`. */
+  private logQuiet(text: string): void {
+    const last = this.told.get(text);
+    if (last === undefined || Date.now() - last >= PROBLEM_REPEAT_MS) {
+      this.told.set(text, Date.now());
+      this.log(text);
+    }
   }
 
   /** A sync went through without trouble: whatever was reported is no longer wrong. */
@@ -411,6 +423,10 @@ export class Bridge {
         if (want.inbox) {
           this.inboxAnnounce.add(meta.sessionId);
         }
+        if (want.retryText !== undefined) {
+          this.echoes.push(want.retryText);
+          await this.daemon.request({ type: "prompt", session: meta.id, message: want.retryText, source: "chatto" }).catch((err: unknown) => this.problem("could not send the first message to the new session", err, { roomId: want.roomId ?? this.state.inboxRoomId, session: meta.id }));
+        }
       }
     }
     let failed = false;
@@ -422,7 +438,7 @@ export class Bridge {
       try {
         if (meta.published) {
           this.binding.delete(meta.sessionId);
-          if (!rec || rec.closed || !rec.rootId) {
+          if (!rec || rec.closed || !rec.rootId || this.opening.has(meta.sessionId)) {
             await this.openChannel(meta);
           } else {
             await this.refreshChannel(meta, rec);
@@ -436,6 +452,12 @@ export class Bridge {
         failed = true;
         this.retryAt.set(meta.sessionId, Date.now() + this.retryMs);
         await this.problem(`could not ${meta.published ? "open" : "close"} the channel for ${meta.sessionName ? `"${meta.sessionName}"` : `session ${meta.id}`}`, err, { session: meta.id, sessionId: meta.sessionId });
+      }
+    }
+    for (const id of [...this.retryAt.keys()]) {
+      if (!this.metas.some((m) => m.sessionId === id)) {
+        this.retryAt.delete(id); // the session is gone: nothing is waiting to be retried for it
+        this.opening.delete(id);
       }
     }
     if (!failed && this.retryAt.size === 0) {
@@ -533,8 +555,12 @@ export class Bridge {
         this.log(`closed channel ${old.name} found for session ${meta.id} by its tag: reopened`);
       }
     }
-    const reopened = rec?.closed === true;
-    const existed = rec !== undefined;
+    const progress = this.opening.get(sessionId) ?? {};
+    this.opening.set(sessionId, progress);
+    progress.reopened ??= rec?.closed === true;
+    progress.existed ??= rec !== undefined;
+    const reopened = progress.reopened;
+    const existed = progress.existed;
     const wanted = channelNameFor(meta.sessionName ?? "", `session-${meta.id}`);
     if (rec) {
       if (rec.closed) {
@@ -549,20 +575,27 @@ export class Bridge {
       this.state.channels[sessionId] = rec;
       await this.addUsers(room.id);
     }
-    const rootId = await this.adapter.post(rec.roomId, this.rootText(meta, rec.name));
-    rec.rootId = rootId;
-    this.save();
-    await this.adapter.pin(rec.roomId, rootId).catch(() => undefined);
+    if (progress.rootId === undefined) {
+      const rootId = await this.adapter.post(rec.roomId, this.rootText(meta, rec.name));
+      progress.rootId = rootId;
+      rec.rootId = rootId;
+      this.save();
+      await this.adapter.pin(rec.roomId, rootId).catch(() => undefined);
+    }
     // the past: a channel made now shows the conversation so far; one that existed shows what happened while it was closed
-    if (!existed) {
-      await this.mirrorHistory(meta, rec);
-    } else if (rec.mirroredAt !== undefined) {
-      await this.mirrorHistory(meta, rec, rec.mirroredAt);
+    if (!progress.mirrored) {
+      if (!existed) {
+        await this.mirrorHistory(meta, rec);
+      } else if (rec.mirroredAt !== undefined) {
+        await this.mirrorHistory(meta, rec, rec.mirroredAt);
+      }
+      progress.mirrored = true;
     }
     // the acknowledgement of /publish: a message of its own (the pinned one is information), so it also notifies
     const ack = await this.adapter.post(rec.roomId, reopened ? "✅ **Published again**: this channel is connected to the session." : "✅ **Published**: this channel is connected to the session.");
     rec.cursor ??= ack; // what is written after this is new; a reopened channel keeps its cursor, so what was written before it closed is caught up below
     this.save();
+    this.opening.delete(sessionId);
     this.log(`channel ${rec.name} opened for session ${meta.id}`);
     if (this.inboxAnnounce.delete(sessionId) && this.state.inboxRoomId) {
       await this.adapter.post(this.state.inboxRoomId, `Started **${meta.sessionName ?? rec.name}** in its own channel: #${rec.name}`);
@@ -589,18 +622,18 @@ export class Bridge {
     const all = digest?.turns ?? [];
     const turns = since === undefined ? all : all.filter((t) => t.at !== undefined && t.at > since);
     const newest = turns.reduce((n, t) => Math.max(n, t.at ?? 0), 0);
+    if (turns.length > 0) {
+      const { posts, shown, dropped } = renderHistory(turns);
+      const total = digest?.total ?? turns.length;
+      const left = since === undefined ? total - shown : 0;
+      await this.adapter.post(rec.roomId, since === undefined ? `ℹ **So far** in this session${left > 0 ? ` (the last ${shown} of ${total} turns; ${dropped > 0 ? "older ones" : "earlier ones"} are in toriel)` : ""}:` : `ℹ **While this channel was closed** (${shown} turn${shown === 1 ? "" : "s"}):`);
+      for (const post of posts) {
+        await this.postLong(rec.roomId, post);
+      }
+    }
+    // only now: a post that failed above leaves the mark where it was, so the turns are not skipped by a later reopen
     rec.mirroredAt = Math.max(rec.mirroredAt ?? 0, newest || (since === undefined ? Date.now() : 0)) || undefined;
     this.save();
-    if (turns.length === 0) {
-      return;
-    }
-    const { posts, shown, dropped } = renderHistory(turns);
-    const total = digest?.total ?? turns.length;
-    const left = since === undefined ? total - shown : 0;
-    await this.adapter.post(rec.roomId, since === undefined ? `ℹ **So far** in this session${left > 0 ? ` (the last ${shown} of ${total} turns; ${dropped > 0 ? "older ones" : "earlier ones"} are in toriel)` : ""}:` : `ℹ **While this channel was closed** (${shown} turn${shown === 1 ? "" : "s"}):`);
-    for (const post of posts) {
-      await this.postLong(rec.roomId, post);
-    }
   }
 
   private stateLabel(meta: SessionMeta): string {
@@ -973,6 +1006,18 @@ export class Bridge {
         this.emptyChannels.set(m.roomId, channelName); // still waiting for a message that can start it
         await this.problem("could not start a session", err, { roomId: m.roomId });
       });
+      return;
+    }
+    if (!Object.values(this.state.channels).some((c) => c.roomId === m.roomId)) {
+      // written before the event that announces a new room arrived: look at the group now, and if it is a channel of the owner's, this is its first message
+      const room = (await this.adapter.listRooms(this.groupId)).find((r) => r.id === m.roomId);
+      if (room) {
+        await this.adapter.joinRoom(room.id).catch(() => undefined);
+        await this.manageRoom(room, m.authorId, "created");
+        if (this.emptyChannels.has(m.roomId)) {
+          await this.onMessage(m);
+        }
+      }
     }
   }
 
@@ -991,11 +1036,11 @@ export class Bridge {
       if (fence >= 0) {
         fresh = list.slice(fence + 1);
       } else if (!live) {
-        this.log(`channel ${rec.name}: the last message dealt with is not among the latest ${CATCHUP_WINDOW}, so nothing is caught up`);
+        this.logQuiet(`channel ${rec.name}: the last message dealt with is not among the latest ${CATCHUP_WINDOW}, so nothing is caught up`);
         return;
       }
     } catch (err) {
-      this.log(`could not read channel ${rec.name} to catch up: ${err instanceof Error ? err.message : String(err)}`);
+      this.logQuiet(`could not read channel ${rec.name} to catch up: ${oneLine(err instanceof Error ? err.message : String(err))}`);
       if (!live) {
         return;
       }
@@ -1016,7 +1061,7 @@ export class Bridge {
         this.handled.delete(this.handled.values().next().value as string);
       }
       rec.cursor = x.id;
-      this.save();
+      this.save(); // before the delivery: a crash between the two loses this message rather than sending it twice (at most once)
       await this.channelMessage(sessionId, x);
     }
   }
@@ -1086,7 +1131,20 @@ export class Bridge {
     await this.daemon.request({ type: "detach", session: spawned.sessionId }).catch(() => undefined);
     this.awaiting.set(spawned.sessionId, { roomId: opts.roomId, channelName: opts.channelName, inbox: opts.inbox });
     this.echoes.push(text);
-    await this.daemon.request({ type: "prompt", session: spawned.sessionId, message: text, source: "chatto" });
+    try {
+      await this.daemon.request({ type: "prompt", session: spawned.sessionId, message: text, source: "chatto" });
+    } catch (err) {
+      // the session exists and will get its channel; its first message is sent again when it is listed
+      const at = this.echoes.indexOf(text);
+      if (at >= 0) {
+        this.echoes.splice(at, 1);
+      }
+      const want = this.awaiting.get(spawned.sessionId);
+      if (want) {
+        want.retryText = text;
+      }
+      await this.problem("could not send the first message to the new session (it is sent again when the session is listed)", err, { roomId: opts.roomId ?? this.state.inboxRoomId });
+    }
     this.log(`session ${spawned.sessionId} started from chat`);
   }
 }

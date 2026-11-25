@@ -86,7 +86,12 @@ export class FakeChat implements ChatAdapter {
   async unarchiveRoom(id: string): Promise<void> {
     (this.rooms.get(id) as ChatRoom).archived = false;
   }
+  /** Make a post fail while this returns true for its body (a server hiccup). */
+  failPost?: (body: string) => boolean;
   async post(roomId: string, body: string, opts?: { replyTo?: string }): Promise<string> {
+    if (this.failPost?.(body)) {
+      throw new Error("server hiccup");
+    }
     const id = `m${++this.seq}`;
     this.posts.push({ id, roomId, body, replyTo: opts?.replyTo, reactions: new Set() });
     return id;
