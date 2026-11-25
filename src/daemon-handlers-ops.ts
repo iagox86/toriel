@@ -537,6 +537,26 @@ export async function handleRestoreCode(ctx: DaemonContext, cmd: Cmd<"restore_co
   res(true, undefined, { code: codeResult(file, target.ts, false) });
 }
 
+/**
+ * Start or stop sending this controller every session's dialogs, attached or not (ticket 270). The dialogs open right now are sent
+ * at once, so a bridge that connects while a prompt waits still shows it. Needs a controller connection.
+ */
+export function handleObserveDialogs(ctx: DaemonContext, cmd: Cmd<"observe_dialogs">, socket: net.Socket, res: Responder): void {
+  if (!ctx.hub.isController(socket)) {
+    throw new Error("observe_dialogs comes from a controller connection");
+  }
+  const on = cmd.on !== false;
+  ctx.hub.observe(socket, on);
+  if (on) {
+    for (const s of ctx.registry.all()) {
+      if (s.child && s.pendingDialog && s.lastDialog && s.attachedTo !== socket) {
+        ctx.hub.send(socket, { type: "ui_request", session: s.id, request: s.lastDialog });
+      }
+    }
+  }
+  res(true, undefined, { observing: on });
+}
+
 /** Deliver the user's answer to a dialog the child asked for. */
 export function handleUiResponse(
   ctx: DaemonContext,
@@ -548,16 +568,22 @@ export function handleUiResponse(
   if (typeof response.id !== "string") {
     throw new Error("ui_response without id");
   }
+  // first answer wins (ticket 270): any controller may answer, and the later one finds the dialog gone; nothing reaches pi twice
   const pending = s.lastDialog?.id;
-  log(`session ${s.id} ui_response ${response.id}${pending === response.id ? "" : ` matches no pending dialog (pending: ${pending ?? "none"}); written to pi anyway`}`);
-  if (s.dialogInfo && s.lastDialog?.id === response.id) {
-    recordDecision({ ...s.dialogInfo.base, by: "user", answer: answerText(response), waitMs: Date.now() - s.dialogInfo.at });
+  if (pending !== response.id) {
+    log(`session ${s.id} ui_response ${response.id} refused: already answered or gone (pending: ${typeof pending === "string" ? pending : "none"})`);
+    throw new Error("already answered");
+  }
+  log(`session ${s.id} ui_response ${response.id}${cmd.source ? ` from ${cmd.source}` : ""}`);
+  if (s.dialogInfo) {
+    recordDecision({ ...s.dialogInfo.base, by: "user", ...(cmd.source ? { source: cmd.source } : {}), answer: answerText(response), waitMs: Date.now() - s.dialogInfo.at });
   }
   s.dialogInfo = undefined;
   s.pendingDialog = false;
   s.lastDialog = undefined;
   clearTimeout(s.denyTimer);
   s.denyTimer = undefined;
+  ctx.hub.broadcast({ type: "ui_resolved", session: s.id, id: response.id, by: "user", ...(cmd.source ? { source: cmd.source } : {}) });
   ctx.hub.broadcastSessions();
   // Write raw: RpcClient.send() overwrites the record's id with its own
   // correlation id, which would break the dialog reply matching, and it

@@ -10,6 +10,8 @@ export class ClientHub {
    * never become controllers: no initial sync, no attach accounting.
    */
   private readonly presenceOnly = new Set<net.Socket>();
+  /** Controllers that asked to see every dialog (observe_dialogs), attached or not: the chat bridge (ticket 270). */
+  private readonly observers = new Set<net.Socket>();
   private sessionsDirty = false;
   private readonly metasFor: (socket: net.Socket) => SessionMeta[];
 
@@ -53,7 +55,31 @@ export class ClientHub {
     if (this.presenceOnly.delete(socket)) {
       return "presence";
     }
+    this.observers.delete(socket);
     return this.controllers.delete(socket) ? "controller" : "unknown";
+  }
+
+  /** Start or stop sending a controller the dialogs of sessions it is not attached to. */
+  observe(socket: net.Socket, on: boolean): void {
+    if (on) {
+      this.observers.add(socket);
+    } else {
+      this.observers.delete(socket);
+    }
+  }
+
+  isObserver(socket: net.Socket): boolean {
+    return this.observers.has(socket);
+  }
+
+  /** `msg` to every observer except `except` (the socket that already got it). */
+  sendToObservers(msg: DaemonMessage, except?: net.Socket): void {
+    this.flushSessions();
+    for (const socket of this.observers) {
+      if (socket !== except) {
+        this.write(socket, msg);
+      }
+    }
   }
 
   send(socket: net.Socket, msg: DaemonMessage): void {

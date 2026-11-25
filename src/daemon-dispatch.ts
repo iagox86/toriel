@@ -20,6 +20,7 @@ import {
   handleAbortBash,
   handleAutoMode,
   handleModeNotice,
+  handleObserveDialogs,
   handlePlanMode,
   handlePublish,
   handleDenyAfter,
@@ -141,6 +142,8 @@ export async function dispatch(ctx: DaemonContext, cmd: ClientCommand, socket: n
       return handleRewind(ctx, cmd, res);
     case "restore_code":
       return handleRestoreCode(ctx, cmd, res);
+    case "observe_dialogs":
+      return handleObserveDialogs(ctx, cmd, socket, res);
     case "ui_response":
       return handleUiResponse(ctx, cmd, res);
     case "list":

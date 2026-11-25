@@ -24,6 +24,9 @@ export async function handlePrompt(
   res: Responder,
 ): Promise<void> {
   let s: DaemonSession | undefined;
+  if (cmd.source) {
+    log(`prompt from ${cmd.source}`); // where it came from (ticket 270); the transcript does not say yet
+  }
   if (cmd.session !== undefined) {
     s = ctx.registry.get(cmd.session);
     if (!s) {

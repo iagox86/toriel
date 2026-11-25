@@ -35,7 +35,7 @@ import { DaemonLink } from "./daemon-link.ts";
 import { buildLayouts } from "./layout.ts";
 
 import { dialogOwner } from "./dialog-route.ts";
-import { DEFAULT_GRANT_DURATIONS, type DialogRequest, DialogPanel, isTextDialog, withOrigin, withOwnLayout } from "./dialogs.ts";
+import { DEFAULT_GRANT_DURATIONS, type DialogRequest, DialogPanel, isTextDialog, resolvedDialogNote, withOrigin, withOwnLayout } from "./dialogs.ts";
 import { configureEditorKeys, InputEditor, } from "./editor.ts";
 import { type ImageBlock, lastLine } from "./format.ts";
 import { RewindPicker } from "./rewind-picker.ts";
@@ -434,6 +434,9 @@ class Controller {
       case "ui_request":
         this.onUiRequest(msg.session, msg.request as unknown as DialogRequest);
         return;
+      case "ui_resolved":
+        this.onUiResolved(msg.session, msg.id, msg.by, msg.source);
+        return;
       case "notice": {
         const meta = this.sessions.get(msg.session);
         if (meta && msg.durable) {
@@ -555,6 +558,25 @@ class Controller {
     } else {
       log("timing: pi-tui has no handleTerminalInput any more; events start at their own begin, not at the key press");
     }
+  }
+
+  /**
+   * A dialog was ended by something other than this controller's own answer (which already closed its box): another client answered
+   * it, pi's timeout or the deny-after timer ended it, or the session stopped. Close the box at once instead of waiting for the next
+   * session list (ticket 270), and say why when the session is on screen.
+   */
+  private onUiResolved(sessionId: number, id: string, by: string, source: string | undefined): void {
+    const key = this.keyById(sessionId);
+    const view = key ? this.views.get(key) : undefined;
+    const why = resolvedDialogNote(view?.dialog, id, by, source);
+    if (!key || !view || why === undefined) {
+      return;
+    }
+    view.dialog = undefined;
+    if (key === this.viewing) {
+      this.notify(`the question was ${why}`);
+    }
+    this.renderChrome();
   }
 
   private onUiRequest(sessionId: number, request: DialogRequest | undefined): void {

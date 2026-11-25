@@ -259,6 +259,10 @@ async function handle(cmd) {
     }
   }
   switch (cmd.type) {
+    case "extension_ui_response":
+      // what pi is told about a dialog, for the tests that count the answers it gets (ticket 270); pi sends no reply to one
+      appendFileSync(join(process.env.FAKE_PI_DIR ?? tmpdir(), "ui-responses.jsonl"), `${JSON.stringify(cmd)}\n`);
+      return;
     case "get_state":
       return ok(cmd.id, "get_state", {
         model,

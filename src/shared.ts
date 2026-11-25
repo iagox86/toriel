@@ -35,7 +35,7 @@ export const AUTO_DENIED_NOTICE = "denied automatically";
 /** The notice for a question nobody answered in time (deny-after), dismissed as if cancelled. */
 export const AUTO_DISMISSED_NOTICE = "dismissed automatically";
 
-export const PROTOCOL = 16; // 16: the publish command and SessionMeta.published/chatUp (a session shown in chat, ticket 269); 15: auto_mode/plan_mode's optional `quiet` and the mode_notice command (the shift+tab cycle announces only the mode it settles on, ticket 236); 14: spawn's optional `model` (a new session starts on that model, /new -m, ticket 247); 13: the feedback_snapshot command (the daemon's state for a /feedback bundle, ticket 239); 12: the plan_mode command and SessionMeta.plan/tasks (a read-only session until the user approves a plan, ticket 229; the agent's task list, ticket 228); 11: the deny_after command (deny a permission prompt nobody answers in time, ticket 88); 10: the auto_mode command and SessionMeta.auto/autoUntil (a session that allows its permission prompts except the sketchy ones, ticket 213); 9: watch_add's optional `by` ("agent": a file trigger an agent made through toriel_watch_create, held to the agent limits); 8: permission_check's optional `probe` (answer from the grants without remembering a suggestion for a dialog; the reply says `expiresAt`), for the toriel_permission_check tool; 7: spawn's optional `wake` (start a sleeping session because the user typed a command into it; answers `woke: false` with a reason instead of starting a file another pi may have open); 6: 6: rename and adopt answer with the applied `name` and `nameVerified` (the daemon makes names unique); 5: file-path prompts carry grant rows, and permission_add's `dialog` (4: the watch_add command (file-trigger schedules); 3: agent_spawn's optional cwd; 2: the `cd` command and adopt's `keepPermissions`)
+export const PROTOCOL = 17; // 17: observe_dialogs, the ui_resolved message, and the optional `source` of ui_response and prompt (any controller can watch and answer a dialog, the first answer wins, ticket 270); 16: the publish command and SessionMeta.published/chatUp (a session shown in chat, ticket 269); 15: auto_mode/plan_mode's optional `quiet` and the mode_notice command (the shift+tab cycle announces only the mode it settles on, ticket 236); 14: spawn's optional `model` (a new session starts on that model, /new -m, ticket 247); 13: the feedback_snapshot command (the daemon's state for a /feedback bundle, ticket 239); 12: the plan_mode command and SessionMeta.plan/tasks (a read-only session until the user approves a plan, ticket 229; the agent's task list, ticket 228); 11: the deny_after command (deny a permission prompt nobody answers in time, ticket 88); 10: the auto_mode command and SessionMeta.auto/autoUntil (a session that allows its permission prompts except the sketchy ones, ticket 213); 9: watch_add's optional `by` ("agent": a file trigger an agent made through toriel_watch_create, held to the agent limits); 8: permission_check's optional `probe` (answer from the grants without remembering a suggestion for a dialog; the reply says `expiresAt`), for the toriel_permission_check tool; 7: spawn's optional `wake` (start a sleeping session because the user typed a command into it; answers `woke: false` with a reason instead of starting a file another pi may have open); 6: 6: rename and adopt answer with the applied `name` and `nameVerified` (the daemon makes names unique); 5: file-path prompts carry grant rows, and permission_add's `dialog` (4: the watch_add command (file-trigger schedules); 3: agent_spawn's optional cwd; 2: the `cd` command and adopt's `keepPermissions`)
 
 /** Which toriel code a process runs (build-id.ts). */
 export interface BuildInfo {
@@ -174,6 +174,8 @@ type ClientCommandBody =
       message: string;
       /** Pasted images sent with the message (base64 data, as pi's RPC takes them). */
       images?: PromptImage[];
+      /** The kind of client that sent it ("chatto") when it is not a toriel controller; the daemon logs it. */
+      source?: string;
       /** Live session to prompt. */
       session?: number;
       /** Inactive/dead session to (re)spawn and prompt: resume this file. */
@@ -311,7 +313,10 @@ type ClientCommandBody =
   /** Acquire exclusive input attach (force: steal from another controller). */
   | { type: "attach"; id?: string; session: number; force?: boolean }
   | { type: "detach"; session: number }
-  | { type: "ui_response"; session: number; response: Record<string, unknown> }
+  /** Answer a dialog. Only the pending dialog can be answered: a second answer (or one for a dialog that went away) is refused with "already answered" and nothing reaches pi. `source` is the kind of client answering ("chatto"), for the decision log and `ui_resolved`. */
+  | { type: "ui_response"; session: number; response: Record<string, unknown>; source?: string }
+  /** Start (default) or stop receiving every session's dialogs as `ui_request`, attached or not, without taking the attach; the dialogs already open are sent at once. For the chat bridge. */
+  | { type: "observe_dialogs"; id?: string; on?: boolean }
   /** Orderly daemon shutdown (children stop too). */
   | { type: "shutdown" }
   /** Presence heartbeat from the toriel-presence extension in an external
@@ -404,6 +409,8 @@ export type DaemonMessage =
   | { type: "event"; session: number; event: Record<string, unknown> }
   | { type: "history"; session: number; messages: unknown[] }
   | { type: "ui_request"; session: number; request: Record<string, unknown> }
+  /** A dialog is over, whoever ended it: `by` is "user" (an answer; `source` names the client kind when it said), "expired" (pi's own timeout), "deny-after" (the daemon's timer) or "dropped" (the session stopped or died). Every controller closes the matching dialog at once. */
+  | { type: "ui_resolved"; session: number; id: string; by: string; source?: string }
   | { type: "exited"; session: number; reason?: string }
   /** Something worth saying about a session that is not an event in its transcript (a schedule ended or failed). */
   | { type: "notice"; session: number; text: string; /** Worth reading later (a grant answered a prompt): a row in the transcript, not a four-second flash. */ durable?: boolean }

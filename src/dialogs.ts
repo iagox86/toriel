@@ -7,6 +7,26 @@ import { durationWords } from "./permission-format.ts";
 import { attention, dim, panel, panelInnerWidth, selected } from "./theme.ts";
 import { fmtClock } from "./when.ts";
 
+/**
+ * What the daemon's `ui_resolved` means for a box this controller still shows (ticket 270): undefined when the box is not that
+ * dialog (nothing to close; this controller's own answer already closed its box), else the reason to say. The caller drops the box.
+ */
+export function resolvedDialogNote(open: Pick<DialogRequest, "id"> | undefined, id: string, by: string, source?: string): string | undefined {
+  if (!open || open.id !== id) {
+    return undefined;
+  }
+  switch (by) {
+    case "user":
+      return `answered from ${source ?? "another client"}`;
+    case "expired":
+      return "timed out";
+    case "deny-after":
+      return "denied automatically: nobody answered in time";
+    default:
+      return "dropped";
+  }
+}
+
 export interface DialogRequest {
   id: string;
   method: string;

@@ -28,6 +28,8 @@ export interface DecisionRecord {
   auto: boolean;
   floor?: string;
   by: DecidedBy;
+  /** The kind of client that answered when it said so ("chatto" for the chat bridge); absent for a toriel controller (ticket 270). */
+  source?: string;
   /** "yes", "no", "cancelled", or the option's own text; absent for a prompt nobody answered. */
   answer?: string;
   /** How long the prompt waited before it was answered (a person's, or the deny-after timer's), ms. */
@@ -39,7 +41,7 @@ export interface DecisionRecord {
 }
 
 /** A record before anyone has answered: everything but the answer. */
-export type DecisionBase = Omit<DecisionRecord, "v" | "at" | "by" | "answer" | "waitMs">;
+export type DecisionBase = Omit<DecisionRecord, "v" | "at" | "by" | "answer" | "waitMs" | "source">;
 
 const MAX_BYTES = 8 * 1024 * 1024;
 

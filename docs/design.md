@@ -1612,3 +1612,12 @@ The bridge that shows sessions in Chatto (design of record: ticket 266) is built
 - **Command.** `publish {sessionId, on?}` (protocol 16; no `on` toggles) answers `{published}` and rebroadcasts the session list. It is only a flag: `/publish` never wakes a sleeping session (`publish` is in `NO_CHILD_COMMANDS`), the bridge will react to the change.
 - **Display.** `SessionMeta.published` and `chatUp` (`chatUp` = the bridge is connected; `PublishedStore.bridgeUp`, false until the bridge exists). The status line shows `chat` (or a dim `chat (bridge down)`) at drop level 3, so it goes before the model but after the safety banners on a narrow terminal; the switcher row gets a ` chat` badge after the schedule clock.
 - **Known limit.** The switcher marker comes from the session's meta, so a session file the daemon has never registered (never woken since the daemon started) shows no badge until it is. `/publish` itself works on such a session (the id comes from the file).
+
+## Chat bridge, piece 2: dialogs from any controller (ticket 270, built 2026-11-24)
+
+Findings in ticket 263 (comments 747, 748): the `ui_request` went only to the attached controller, `handleUiResponse` wrote any answer to pi even when it matched no pending dialog, and other controllers closed their box only when the next session list said nothing was pending. Built:
+
+- `observe_dialogs` (a controller command, `ClientHub.observe`): the daemon sends the subscriber every dialog of a session it is not attached to, as `ui_request`. Dropped when the socket closes. Only DIALOG_METHODS (select/confirm/input/editor) are copied; notifications are not.
+- First answer wins. The daemon tracks one open dialog per session (`lastDialog`), so "pending" means the id matches it; anything else is `already answered`. A late answer from the slower client therefore never reaches pi, and pi never sees an `extension_ui_response` for an id it has already settled (so what pi does with an unknown id no longer matters).
+- `ui_resolved` is broadcast by `handleUiResponse` and by `clearDialog` (expiry, deny-after, stop, death). The `agent_settled` drop stays the controller's, from the session list.
+- Not done: the transcript does not yet say that a prompt came from chat (`source` is only logged), and the desktop box's repaint on `ui_resolved` was not checked in a live terminal (it calls `renderChrome`, as an answer does).

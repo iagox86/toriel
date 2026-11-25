@@ -137,16 +137,16 @@ describe("daemon: permission grants", () => {
     assert.deepEqual((await c.request({ type: "permission_list", uuid: UUID })).grants, []);
   });
 
-  it("logs every ui_response, and names one that matches no pending dialog (ticket 249)", async () => {
+  it("logs every ui_response, and refuses one that matches no pending dialog (tickets 249, 270)", async () => {
     const h = await start();
     const { c, session } = await savedSession(h);
     await c.request({ type: "prompt", session, message: "/ask-select" });
     await c.waitFor((m) => m.type === "ui_request" && m.request?.id === "ask-select-1");
     await c.request({ type: "ui_response", session, response: { id: "ask-select-1", value: "No" } });
-    await c.request({ type: "ui_response", session, response: { id: "stale-9", value: "Yes" } });
+    await assert.rejects(c.request({ type: "ui_response", session, response: { id: "stale-9", value: "Yes" } }), /already answered/);
     const log = fs.readFileSync(path.join(h.dir, "daemon.log"), "utf8");
     assert.match(log, new RegExp(`session ${session} ui_response ask-select-1\\n`));
-    assert.match(log, new RegExp(`session ${session} ui_response stale-9 matches no pending dialog \\(pending: none\\)`));
+    assert.match(log, new RegExp(`session ${session} ui_response stale-9 refused: already answered or gone \\(pending: none\\)`));
   });
 
   it("hands the uncovered ask's suggested grant to the dialog that follows, once", async () => {
