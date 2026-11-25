@@ -114,13 +114,14 @@ describe("the bridge: a channel per published session", () => {
     const t = await setup();
     const room = await openSession(t);
     const posts = t.chat.postsIn(room.id);
-    assert.equal(posts.length, 1);
+    assert.equal(posts.length, 2);
     assert.match(posts[0]?.body ?? "", /Fix The Build[\s\S]*\/work\/proj/);
+    assert.match(posts[1]?.body ?? "", /^✅ \*\*Published\*\*/, "the acknowledgement of /publish is a message of its own");
     assert.deepEqual(t.chat.pins, [posts[0]?.id]);
     assert.match(room.description, /^idle/);
     t.daemon.sessions([meta({ streaming: true })]);
     await t.bridge.idle();
-    assert.equal(t.chat.postsIn(room.id).length, 1, "a second list does not open it again");
+    assert.equal(t.chat.postsIn(room.id).length, 2, "a second list does not open it again (the first message and the acknowledgement)");
     assert.match(t.chat.roomByName("fix-the-build")?.description ?? "", /^working/);
   });
   it("makes names unique and follows a rename", async () => {
@@ -145,7 +146,8 @@ describe("the bridge: a channel per published session", () => {
     await t.bridge.idle();
     assert.equal(room.archived, false);
     assert.equal(t.chat.rooms.size, 2, "the inbox and the same channel");
-    assert.match(t.chat.postsIn(room.id).at(-1)?.body ?? "", /Fix The Build/);
+    assert.match(t.chat.postsIn(room.id).at(-2)?.body ?? "", /Fix The Build/);
+    assert.match(t.chat.postsIn(room.id).at(-1)?.body ?? "", /Published again/);
   });
   it("keeps a published session's channel when the daemon does not list it (asleep after a restart)", async () => {
     const t = await setup();
@@ -165,7 +167,7 @@ describe("the bridge: a channel per published session", () => {
     d.sessions([meta()]);
     await third.idle();
     assert.equal([...t.chat.rooms.values()].filter((r) => r.name.startsWith("fix-the-build")).length, 1);
-    assert.equal(t.chat.postsIn(room.id).length, 2, "the old first message says closed, a new one opens the channel again");
+    assert.equal(t.chat.postsIn(room.id).length, 4, "the old first message says closed, a new one and an acknowledgement open the channel again");
     assert.match(t.chat.postsIn(room.id)[0]?.body ?? "", /^\*\*closed\*\*/);
     assert.equal(room.archived, false);
   });
@@ -397,7 +399,7 @@ describe("the bridge: output", () => {
     await t.bridge.idle();
     assert.ok(t.chat.typings.includes(room.id));
     assert.equal(t.chat.postsIn(room.id).at(-1)?.body, "Done: fixed it.\n\n_2 tools ran_");
-    assert.equal(t.chat.postsIn(room.id).length, 2);
+    assert.equal(t.chat.postsIn(room.id).length, 3, "the first message, the acknowledgement and the reply");
   });
   it("says tools ran when the turn ended without text, and posts nothing for a thinking-only message", async () => {
     const t = await setup();

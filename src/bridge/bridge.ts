@@ -363,6 +363,7 @@ export class Bridge {
   private async openChannel(meta: SessionMeta): Promise<void> {
     const sessionId = meta.sessionId as string;
     let rec = this.state.channels[sessionId];
+    const reopened = rec?.closed === true;
     const wanted = channelNameFor(meta.sessionName ?? "", `session-${meta.id}`);
     if (rec) {
       if (rec.closed) {
@@ -381,6 +382,8 @@ export class Bridge {
     rec.rootId = rootId;
     this.save();
     await this.adapter.pin(rec.roomId, rootId).catch(() => undefined);
+    // the acknowledgement of /publish: a message of its own (the pinned one is information), so it also notifies
+    await this.adapter.post(rec.roomId, reopened ? "✅ **Published again**: this channel is connected to the session." : "✅ **Published**: this channel is connected to the session.");
     this.log(`channel ${rec.name} opened for session ${meta.id}`);
     if (this.inboxAnnounce.delete(sessionId) && this.state.inboxRoomId) {
       await this.adapter.post(this.state.inboxRoomId, `Started **${meta.sessionName ?? rec.name}** in its own channel: #${rec.name}`);
