@@ -35,7 +35,7 @@ export function rowBadge(s: Pick<SwitcherSession, "schedules" | "nextFire" | "pu
   return scheduleBadge(s, now) + (s.published ? " chat" : "");
 }
 
-export type SessionState ="streaming" | "idle" | "inactive" | "dead" | "compacting";
+export type SessionState = "streaming" | "idle" | "inactive" | "dead" | "compacting";
 
 /** Has a live pi child (as opposed to a file on disk, or a child that died). */
 export function isLiveState(state: SessionState): boolean {

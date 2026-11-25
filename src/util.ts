@@ -98,3 +98,6 @@ export function onPathDirs(name: string, dirs: readonly string[]): boolean {
 
 /** Text on one line, control characters (newlines, escapes) collapsed to a space: for what reaches a status line or a log from outside. */
 export const oneLine = (text: string): string => text.replace(/\p{Cc}+/gu, " ").trim();
+
+/** A controller's `source` label ("chatto"): a short word, or nothing. It reaches the log, the decision log and a channel's text, so anything else is dropped. */
+export const cleanSource = (source: unknown): string | undefined => (typeof source === "string" && /^[a-z][a-z0-9_-]{0,31}$/i.test(source) ? source : undefined);

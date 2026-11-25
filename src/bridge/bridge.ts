@@ -8,7 +8,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { BRIDGE_NOTICE_PREFIX, type DaemonMessage, type HistoryTurn, type SessionMeta } from "../shared.ts";
 import { DIALOG_METHODS } from "../config.ts";
-import { optionsNumberedAlready } from "../dialogs.ts";
+import { answerValue, DEFAULT_GRANT_DURATIONS, type DialogRequest, grantRowFor, isPermissionPrompt, optionsNumberedAlready, withOwnLayout } from "../dialogs.ts";
+import { isCappedSurface } from "../permissions.ts";
+import { fmtClock } from "../when.ts";
 import type { ChattoSettings } from "../settings.ts";
 import { type ChatAdapter, type ChatEvent, type ChatMessage, MAX_BODY } from "./adapter.ts";
 import type { DaemonPort } from "./daemon-client.ts";
@@ -38,7 +40,7 @@ interface OpenDialog {
   sessionId: string;
   roomId: string;
   messageId: string;
-  request: { id: string; method: string; title?: string; message?: string; options?: string[] };
+  request: DialogRequest;
   body: string;
   emojis: string[];
   /** The reaction the user chose, kept when the others are cleared. */
@@ -53,7 +55,14 @@ export interface BridgeDeps {
   log: (text: string) => void;
   /** How long a session whose channel could not be made or closed waits before the next try (default 30 s; tests pass 0). */
   retryMs?: number;
+  /** The lifetimes of the "allow ..." rows of a permission prompt (the `permissionGrantDurations` setting), as the desktop offers them. */
+  grantDurations?: readonly string[];
+  /** The longest one step (a chat event, a daemon message, a tick) may take before the bridge gives up on it and goes on (default 2 minutes). */
+  stepTimeoutMs?: number;
 }
+
+/** A problem with what the bridge was set up with: retrying will not help, so the daemon is told not to. */
+export class SetupError extends Error {}
 
 /**
  * The link from a channel to its session lives in the channel itself: its description ends with `[toriel:<session uuid>]`, so the
@@ -149,6 +158,10 @@ export class Bridge {
   /** Ids of channel messages already dealt with, so a message the live event and the catch-up both deliver counts once. */
   private readonly handled = new Set<string>();
   private readonly retryMs: number;
+  private readonly grantDurations: readonly string[];
+  private readonly stepTimeoutMs: number;
+  /** The chat server is not answering (its connection is down and being retried). */
+  private connectionDown = false;
   /** A channel being opened: what an earlier try already did, so a retry neither posts the pinned post again nor skips the history. */
   private readonly opening = new Map<string, { reopened?: boolean; existed?: boolean; rootId?: string; mirrored?: boolean }>();
   /** Problems already told, by text, and when. */
@@ -167,10 +180,21 @@ export class Bridge {
     this.stateFile = deps.stateFile;
     this.log = deps.log;
     this.retryMs = deps.retryMs ?? 30_000;
+    this.grantDurations = deps.grantDurations ?? DEFAULT_GRANT_DURATIONS;
+    this.stepTimeoutMs = deps.stepTimeoutMs ?? 120_000;
   }
 
   private run(label: string, fn: () => Promise<void>): void {
-    this.chain = this.chain.then(fn).catch((err: unknown) => this.problem(label, err));
+    this.chain = this.chain.then(() => this.withTimeout(fn)).catch((err: unknown) => this.problem(label, err));
+  }
+
+  /** One step, given up on after `stepTimeoutMs`: a call to the chat server or the daemon that never answers must not freeze everything queued behind it. */
+  private withTimeout(fn: () => Promise<void>): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`took longer than ${Math.round(this.stepTimeoutMs / 1000)} s and was given up on`)), this.stepTimeoutMs);
+      timer.unref();
+      fn().then(resolve, reject).finally(() => clearTimeout(timer));
+    });
   }
 
   /**
@@ -198,6 +222,25 @@ export class Bridge {
     }
     this.problemOpen = true;
     await this.daemon.request({ type: "chat_status", up: true, problem: text.length > 300 ? `${text.slice(0, 299)}…` : text, ...(where.session !== undefined ? { session: where.session } : {}) }).catch(() => undefined);
+  }
+
+  /**
+   * The chat connection went down or came back (the client keeps retrying by itself). Down is a problem like any other, shown in the
+   * status line; back is a sync and a look for what was written meanwhile, since events are not replayed.
+   */
+  private async onConnection(up: boolean): Promise<void> {
+    if (!up && !this.connectionDown) {
+      this.connectionDown = true;
+      await this.problem("the chat server is not reachable", new Error("reconnecting"));
+    } else if (up && this.connectionDown) {
+      this.connectionDown = false;
+      this.told.delete("the chat server is not reachable: reconnecting");
+      this.problemOpen = false;
+      await this.daemon.request({ type: "chat_status", up: true }).catch(() => undefined);
+      this.log("the chat server is reachable again");
+      await this.catchUpAll();
+      await this.syncSessions();
+    }
   }
 
   /** Log something that can come back on every tick, once in `PROBLEM_REPEAT_MS`. */
@@ -239,7 +282,7 @@ export class Bridge {
     await this.adapter.connect();
     const group = await this.adapter.findGroup(this.settings.group);
     if (!group) {
-      throw new Error(`the room group "${this.settings.group}" does not exist, or the bot cannot see it`);
+      throw new SetupError(`the room group "${this.settings.group}" does not exist, or the bot cannot see it`);
     }
     this.groupId = group;
     await this.ensureInbox();
@@ -249,6 +292,7 @@ export class Bridge {
     await this.closeAll("toriel was restarted; this channel reopens when the session is published and listed again.");
     this.daemon.onMessage((msg) => this.run(`daemon ${msg.type}`, () => this.onDaemon(msg)));
     this.adapter.onEvent((e) => this.run(`chat ${e.type}`, () => this.onChat(e)));
+    this.adapter.onStatus((up) => this.run("chat connection", () => this.onConnection(up)));
     this.discoverTimer = setInterval(() => {
       this.run("discover", () => this.discover());
       this.run("catch-up", () => this.catchUpAll());
@@ -460,7 +504,7 @@ export class Bridge {
         this.opening.delete(id);
       }
     }
-    if (!failed && this.retryAt.size === 0) {
+    if (!failed && this.retryAt.size === 0 && !this.connectionDown) {
       await this.clearProblem();
     }
     await this.announceChannels();
@@ -771,18 +815,26 @@ export class Bridge {
     if (!meta?.sessionId || !rec || !DIALOG_METHODS.has(method) || typeof request.id !== "string") {
       return;
     }
-    const req = request as OpenDialog["request"];
+    // a permission prompt is laid out as the desktop does it (toriel's own "allow ... for 1 hour" rows, pi's raw session row hidden), and
+    // answered the same way: each row maps to pi's own wording, or to "Yes" plus a grant toriel keeps
+    const asked = request as unknown as DialogRequest;
+    const req = isPermissionPrompt(asked) ? withOwnLayout(asked, this.grantDurations) : asked;
+    const notes = [
+      req.toriel?.protectedAsk ? "_This one is about toriel's or pi's own configuration: a permission for it is never kept, only this once._" : "",
+      typeof req.toriel?.denyAt === "number" ? `_Denied automatically at ${fmtClock(req.toriel.denyAt, new Date())} if nobody answers._` : "",
+    ].filter(Boolean);
+    const note = notes.length > 0 ? `\n\n${notes.join("\n")}` : "";
     let body: string;
     let emojis: string[];
     const title = (req.title ?? req.message ?? "").trim();
     if (method === "confirm") {
-      body = `**${meta.sessionName ?? rec.name} asks:**\n${title}${req.message && req.title ? `\n${req.message}` : ""}\n\n✅ yes · ❌ no`;
+      body = `**${meta.sessionName ?? rec.name} asks:**\n${title}${req.message && req.title ? `\n${req.message}` : ""}\n\n✅ yes · ❌ no${note}`;
       emojis = ["white_check_mark", "x"];
     } else if (method === "select") {
       const options = req.options ?? [];
       // an extension that numbered its own rows (ask_user_question) would show every number twice (chat renders a list's numbers itself)
       const lines = optionsNumberedAlready(options) ? options : options.map((o, i) => `${i + 1}. ${o}`);
-      body = `**${meta.sessionName ?? rec.name} asks:**\n\`\`\`\n${title}\n\`\`\`\n${lines.join("\n")}\n\nReact with the number, or write it.`;
+      body = `**${meta.sessionName ?? rec.name} asks:**\n\`\`\`\n${title}\n\`\`\`\n${lines.join("\n")}${note}\n\nReact with the number, or write it.`;
       emojis = NUMBER_EMOJI.slice(0, Math.min(options.length, NUMBER_EMOJI.length));
     } else {
       body = `**${meta.sessionName ?? rec.name} asks:**\n${title}\n\nWrite your answer in the channel (\`cancel\` to dismiss).`;
@@ -827,6 +879,23 @@ export class Bridge {
     }
   }
 
+  /**
+   * One of toriel's "allow ... for <life>" rows: pi is told "Yes" and toriel keeps the grant(s) the prompt suggested, as the desktop
+   * does. The grants are stored first (a file-path grant is only made while the prompt is open), and pi is answered only when that
+   * worked; a failure is said and leaves the prompt open to try again.
+   */
+  private async answerWithGrant(d: OpenDialog, life: string, label: string): Promise<void> {
+    for (const g of d.request.toriel?.grants ?? []) {
+      try {
+        await this.daemon.request({ type: "permission_add", session: d.session, surface: g.surface, pattern: g.pattern, for: life, source: "dialog", ...(isCappedSurface(g.surface) ? { dialog: d.request.id } : {}) });
+      } catch (err) {
+        await this.problem("could not keep the permission grant (the prompt is still open)", err, { roomId: d.roomId, session: d.session });
+        return;
+      }
+    }
+    await this.answer(d, { value: "Yes" }, label);
+  }
+
   /** Answer from a reaction or a typed reply; true when the dialog took it. */
   private async answerFrom(d: OpenDialog, choice: { emoji?: string; text?: string }): Promise<boolean> {
     const { method, options } = d.request;
@@ -847,7 +916,12 @@ export class Bridge {
       if (option === undefined) {
         return false;
       }
-      await this.answer(d, { value: option }, choice.emoji ?? String(n));
+      const row = grantRowFor(d.request, option);
+      if (row) {
+        await this.answerWithGrant(d, row.for, choice.emoji ?? String(n));
+      } else {
+        await this.answer(d, { value: answerValue(d.request, option) }, choice.emoji ?? String(n));
+      }
       return true;
     }
     if (choice.text === undefined) {
@@ -937,7 +1011,10 @@ export class Bridge {
         continue;
       }
       await this.adapter.joinRoom(room.id).catch(() => undefined);
-      const members = await this.adapter.members(room.id).catch(() => [] as string[]);
+      const members = await this.adapter.members(room.id).catch(() => undefined);
+      if (!members) {
+        continue; // who is in it is not known (a hiccup): a legitimate channel is not closed on a guess; the next look decides
+      }
       await this.manageRoom(room, members.find((m) => this.settings.allowedUsers.includes(m)) ?? "nobody who may", "created");
     }
   }
@@ -992,7 +1069,10 @@ export class Bridge {
       return;
     }
     const text = m.body.trim();
-    if (!text && !m.attachments?.length) {
+    if (!text) {
+      if (m.attachments?.length) {
+        await this.adapter.post(m.roomId, "I can't read images or files yet: write it as text.", { replyTo: m.id });
+      }
       return;
     }
     if (m.roomId === this.state.inboxRoomId) {
@@ -1045,7 +1125,7 @@ export class Bridge {
         return;
       }
     }
-    fresh = fresh.filter((x) => x.authorId !== this.adapter.selfId);
+    fresh = fresh.filter((x) => x.authorId !== this.adapter.selfId).map((x) => (x.id === live?.id ? { ...x, ...live, attachments: live.attachments ?? x.attachments } : x)); // the event's copy where it says something, the page's where it does not (the page lists attachments)
     if (live && !fresh.some((x) => x.id === live.id)) {
       fresh.push(live);
     }
@@ -1082,7 +1162,10 @@ export class Bridge {
       return;
     }
     const text = m.body.trim();
-    if (!text && !m.attachments?.length) {
+    if (!text) {
+      if (m.attachments?.length) {
+        await this.adapter.post(m.roomId, "I can't read images or files yet: write it as text.", { replyTo: m.id });
+      }
       return;
     }
     if (m.threadRootId) {

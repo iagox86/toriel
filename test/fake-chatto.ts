@@ -31,13 +31,27 @@ export class FakeChat implements ChatAdapter {
     this.listeners.push(l);
     return () => undefined;
   }
-  onStatus(): () => void {
+  private statusListeners: Array<(up: boolean) => void> = [];
+  onStatus(l: (up: boolean) => void): () => void {
+    this.statusListeners.push(l);
     return () => undefined;
   }
+  /** The connection to the server went down or came back. */
+  setStatus(up: boolean): void {
+    for (const l of this.statusListeners) {
+      l(up);
+    }
+  }
+  /** Make listRooms never answer (a server that hangs), or members fail (a hiccup). */
+  hangList = false;
+  membersFail = false;
   async findGroup(name: string): Promise<string | undefined> {
     return this.groups.get(name);
   }
   async listRooms(): Promise<ChatRoom[]> {
+    if (this.hangList) {
+      return new Promise<ChatRoom[]>(() => undefined);
+    }
     return [...this.rooms.values()].filter((r) => !r.archived).map(({ id, name, archived, description }) => ({ id, name, archived, description }));
   }
   async listArchived(): Promise<ChatRoom[]> {
@@ -65,6 +79,9 @@ export class FakeChat implements ChatAdapter {
   /** Who is in each room, for the tests that need a room's members (default: nobody). */
   memberIds = new Map<string, string[]>();
   async members(roomId: string): Promise<string[]> {
+    if (this.membersFail) {
+      throw new Error("members unavailable");
+    }
     return this.memberIds.get(roomId) ?? [];
   }
   added: Array<[string, string]> = [];
@@ -135,11 +152,11 @@ export class FakeChat implements ChatAdapter {
       l(e);
     }
   }
-  say(roomId: string, body: string, extra: { userId?: string; threadRootId?: string; inReplyTo?: string } = {}): string {
+  say(roomId: string, body: string, extra: { userId?: string; threadRootId?: string; inReplyTo?: string; attachments?: Array<{ id: string; name: string; mimeType: string }> } = {}): string {
     const id = `u${++this.seq}`;
     this.written.push({ id, roomId, authorId: extra.userId ?? RON, body, threadRootId: extra.threadRootId, at: Date.now() });
     if (this.deliver) {
-      this.emit({ type: "message", message: { id, roomId, authorId: extra.userId ?? RON, body, threadRootId: extra.threadRootId, inReplyTo: extra.inReplyTo } });
+      this.emit({ type: "message", message: { id, roomId, authorId: extra.userId ?? RON, body, threadRootId: extra.threadRootId, inReplyTo: extra.inReplyTo, attachments: extra.attachments } });
     }
     return id;
   }

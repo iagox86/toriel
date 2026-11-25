@@ -15,7 +15,7 @@ import { wasHandled } from "./handled-files.ts";
 import { profileOfSession } from "./session-agents.ts";
 import { log } from "./log.ts";
 import { restoreTrashedSession, trashSessionFile } from "./trash.ts";
-import { errText } from "./util.ts";
+import { cleanSource, errText } from "./util.ts";
 
 export async function handlePrompt(
   ctx: DaemonContext,
@@ -24,8 +24,8 @@ export async function handlePrompt(
   res: Responder,
 ): Promise<void> {
   let s: DaemonSession | undefined;
-  if (cmd.source) {
-    log(`prompt from ${cmd.source}`); // where it came from (ticket 270); the transcript does not say yet
+  if (cleanSource(cmd.source)) {
+    log(`prompt from ${cleanSource(cmd.source)}`); // where it came from (ticket 270); the transcript does not say yet
   }
   if (cmd.session !== undefined) {
     s = ctx.registry.get(cmd.session);

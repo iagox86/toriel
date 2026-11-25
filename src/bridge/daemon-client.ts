@@ -3,6 +3,9 @@
 import * as net from "node:net";
 import { type ClientCommand, type DaemonMessage, type DistributiveOmit, encodeLine, LineSplitter } from "../shared.ts";
 
+/** How long a daemon request may take before the bridge gives up on it (a prompt that wakes a sleeping session is the slow one). */
+const REQUEST_TIMEOUT_MS = 60_000;
+
 export interface DaemonPort {
   /** Send a command and resolve with its response data; rejects with the daemon's error text. */
   request(cmd: DistributiveOmit<ClientCommand, "id">): Promise<unknown>;
@@ -13,7 +16,7 @@ export interface DaemonPort {
   close(): void;
 }
 
-export function connectDaemon(sock: string): Promise<DaemonPort> {
+export function connectDaemon(sock: string, timeoutMs = REQUEST_TIMEOUT_MS): Promise<DaemonPort> {
   return new Promise((resolve, reject) => {
     const socket = net.connect(sock);
     const splitter = new LineSplitter();
@@ -64,7 +67,21 @@ export function connectDaemon(sock: string): Promise<DaemonPort> {
         request(cmd) {
           const id = `b${++seq}`;
           return new Promise((res, rej) => {
-            pending.set(id, { resolve: res, reject: rej });
+            const timer = setTimeout(() => {
+              pending.delete(id);
+              rej(new Error(`the daemon did not answer ${cmd.type} in ${Math.round(timeoutMs / 1000)} s`));
+            }, timeoutMs);
+            timer.unref();
+            pending.set(id, {
+              resolve: (v) => {
+                clearTimeout(timer);
+                res(v);
+              },
+              reject: (e) => {
+                clearTimeout(timer);
+                rej(e);
+              },
+            });
             socket.write(encodeLine({ ...cmd, id }));
           });
         },
