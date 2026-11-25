@@ -43,6 +43,8 @@ export interface ChatAdapter {
   /** Make a channel in the group and join it; rejects when the name is taken or the bot may not create. */
   createRoom(groupId: string, name: string, description: string): Promise<ChatRoom>;
   joinRoom(roomId: string): Promise<void>;
+  /** Add another user to a room (the bot needs the permission to). */
+  addMember(roomId: string, userId: string): Promise<void>;
   renameRoom(roomId: string, name: string): Promise<void>;
   setDescription(roomId: string, description: string): Promise<void>;
   archiveRoom(roomId: string): Promise<void>;

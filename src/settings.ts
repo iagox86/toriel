@@ -34,9 +34,11 @@ export interface ChattoSettings {
   defaultCwd?: string;
   /** Model of a session started from chat, provider/id. */
   defaultModel?: string;
+  /** Chat users the bridge adds to every channel it creates (user ids). Default: just allowedUser; [] adds nobody. */
+  addUsers: string[];
 }
 
-const CHATTO_KEYS = ["url", "tokenFile", "tokenEnv", "group", "inboxChannel", "allowedUser", "defaultCwd", "defaultModel"] as const;
+const CHATTO_KEYS = ["url", "tokenFile", "tokenEnv", "group", "inboxChannel", "allowedUser", "defaultCwd", "defaultModel", "addUsers"] as const;
 
 /** Validate the `chatto:` mapping; the problem text when it is unusable. */
 export function validChatto(value: unknown): { ok: true; chatto: ChattoSettings } | { ok: false; problem: string } {
@@ -48,11 +50,16 @@ export function validChatto(value: unknown): { ok: true; chatto: ChattoSettings 
     if (!(CHATTO_KEYS as readonly string[]).includes(k)) {
       return { ok: false, problem: `unknown chatto setting "${k}"` };
     }
-    if (typeof o[k] !== "string" || (o[k] as string).length === 0) {
+    if (k === "addUsers") {
+      if (!Array.isArray(o[k]) || !(o[k] as unknown[]).every((u) => typeof u === "string" && u.length > 0)) {
+        return { ok: false, problem: "chatto.addUsers must be a list of user ids (or [] to add nobody)" };
+      }
+    } else if (typeof o[k] !== "string" || (o[k] as string).length === 0) {
       return { ok: false, problem: `chatto.${k} must be a non-empty string` };
     }
   }
-  const s = o as Record<(typeof CHATTO_KEYS)[number], string | undefined>;
+  const s = o as Record<Exclude<(typeof CHATTO_KEYS)[number], "addUsers">, string | undefined>;
+  const addUsers = (o.addUsers as string[] | undefined) ?? (s.allowedUser ? [s.allowedUser] : []);
   if (!s.url || !/^https?:\/\/\S+$/.test(s.url)) {
     return { ok: false, problem: "chatto.url must be the server's http(s) URL" };
   }
@@ -65,7 +72,7 @@ export function validChatto(value: unknown): { ok: true; chatto: ChattoSettings 
   if (s.defaultModel && !/^[^/\s]+\/\S+$/.test(s.defaultModel)) {
     return { ok: false, problem: "chatto.defaultModel must be provider/id" };
   }
-  return { ok: true, chatto: { url: s.url, tokenFile: s.tokenFile, tokenEnv: s.tokenEnv, group: s.group ?? "Toriel", inboxChannel: s.inboxChannel ?? "inbox", allowedUser: s.allowedUser, defaultCwd: s.defaultCwd, defaultModel: s.defaultModel } };
+  return { ok: true, chatto: { url: s.url, tokenFile: s.tokenFile, tokenEnv: s.tokenEnv, group: s.group ?? "Toriel", inboxChannel: s.inboxChannel ?? "inbox", allowedUser: s.allowedUser, defaultCwd: s.defaultCwd, defaultModel: s.defaultModel, addUsers } };
 }
 
 export interface TorielSettings {

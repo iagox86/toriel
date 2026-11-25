@@ -184,6 +184,7 @@ export class Bridge {
     const room = found ?? (await this.adapter.createRoom(this.groupId, this.settings.inboxChannel, "Toriel: start a session by writing here; announcements"));
     if (!found) {
       this.log(`created the inbox channel ${room.name}`);
+      await this.addUsers(room.id);
     }
     await this.adapter.joinRoom(room.id).catch(() => undefined);
     this.state.inboxRoomId = room.id;
@@ -277,6 +278,13 @@ export class Bridge {
     return `**${meta.sessionName ?? name}**\n\`${meta.cwd}\` · ${meta.model}\nWrite here to message this session. Dialogs show up with reactions to click.`;
   }
 
+  /** Put the configured users (default: the allowed user) into a channel the bridge just made; a refusal is logged, not fatal. */
+  private async addUsers(roomId: string): Promise<void> {
+    for (const user of this.settings.addUsers) {
+      await this.adapter.addMember(roomId, user).catch((err: unknown) => this.log(`could not add user ${user} to a channel: ${err instanceof Error ? err.message : String(err)}`));
+    }
+  }
+
   private async openChannel(meta: SessionMeta): Promise<void> {
     const sessionId = meta.sessionId as string;
     let rec = this.state.channels[sessionId];
@@ -291,6 +299,7 @@ export class Bridge {
       const room = await this.adapter.createRoom(this.groupId, name, "starting");
       rec = { roomId: room.id, name, closed: false };
       this.state.channels[sessionId] = rec;
+      await this.addUsers(room.id);
     }
     const rootId = await this.adapter.post(rec.roomId, this.rootText(meta, rec.name));
     rec.rootId = rootId;

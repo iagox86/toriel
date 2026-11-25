@@ -52,6 +52,10 @@ export class FakeChat implements ChatAdapter {
       r.members = true;
     }
   }
+  added: Array<[string, string]> = [];
+  async addMember(roomId: string, userId: string): Promise<void> {
+    this.added.push([roomId, userId]);
+  }
   async renameRoom(id: string, name: string): Promise<void> {
     (this.rooms.get(id) as ChatRoom).name = name;
   }

@@ -16,7 +16,7 @@ afterEach(() => {
   }
 });
 
-const settings: ChattoSettings = { url: "https://chat.example.com", tokenEnv: "X", group: "Toriel", inboxChannel: "inbox", allowedUser: RON, defaultCwd: "/work" };
+const settings: ChattoSettings = { url: "https://chat.example.com", tokenEnv: "X", group: "Toriel", inboxChannel: "inbox", allowedUser: RON, defaultCwd: "/work", addUsers: [RON] };
 
 async function setup(over: Partial<ChattoSettings> = {}, existing?: FakeChat) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-"));
@@ -166,6 +166,39 @@ describe("the bridge: a channel per published session", () => {
     await third.idle();
     assert.equal([...t.chat.rooms.values()].filter((r) => r.name.startsWith("fix-the-build")).length, 1);
     assert.equal(t.chat.postsIn(room.id).length, 1, "no second first message");
+  });
+});
+
+describe("the bridge: who joins the channels it makes", () => {
+  it("adds the configured users to the inbox and to each new session channel, not to a reused one", async () => {
+    const t = await setup({ addUsers: [RON, "friend1"] });
+    const inbox = t.chat.roomByName("inbox");
+    assert.deepEqual(t.chat.added, [[inbox?.id, RON], [inbox?.id, "friend1"]]);
+    const room = await openSession(t);
+    assert.deepEqual(t.chat.added.slice(2), [[room.id, RON], [room.id, "friend1"]]);
+    t.daemon.sessions([meta({ published: undefined })]);
+    await t.bridge.idle();
+    t.daemon.sessions([meta()]);
+    await t.bridge.idle();
+    assert.equal(t.chat.added.length, 4, "republishing reuses the channel and its members");
+  });
+  it("adds nobody when the list is empty, and carries on when the server refuses", async () => {
+    const none = await setup({ addUsers: [] });
+    assert.equal(none.chat.added.length, 0);
+    const chat = new FakeChat();
+    chat.addMember = async () => {
+      throw new Error("not allowed");
+    };
+    const t = await setup({}, chat);
+    await openSession(t);
+    assert.ok(t.logs.some((l) => l.includes("could not add user ron1")));
+  });
+  it("defaults to the allowed user, and validates the list", () => {
+    const ok = validChatto({ url: "https://c", tokenFile: "t", allowedUser: "u1" });
+    assert.ok(ok.ok && ok.chatto.addUsers.join() === "u1");
+    const none = validChatto({ url: "https://c", tokenFile: "t", allowedUser: "u1", addUsers: [] });
+    assert.ok(none.ok && none.chatto.addUsers.length === 0);
+    assert.match((validChatto({ url: "https://c", tokenFile: "t", allowedUser: "u1", addUsers: "u2" }) as { problem: string }).problem, /list of user ids/);
   });
 });
 

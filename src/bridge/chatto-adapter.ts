@@ -136,6 +136,9 @@ export async function connectChatto(opts: ChattoConnect): Promise<ChatAdapter> {
     async joinRoom(roomId) {
       await rooms$().joinRoom({ roomId });
     },
+    async addMember(roomId, userId) {
+      await rooms$().addMember({ roomId, userId });
+    },
     async renameRoom(roomId, name) {
       known.set(roomId, name);
       await rooms$().updateRoom({ roomId, name, updateMask: { paths: ["name"] } });
