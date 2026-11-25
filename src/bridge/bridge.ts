@@ -15,7 +15,8 @@ import type { ChattoSettings } from "../settings.ts";
 import { type ChatAdapter, type ChatEvent, type ChatMessage, MAX_BODY } from "./adapter.ts";
 import type { DaemonPort } from "./daemon-client.ts";
 import { oneLine } from "../util.ts";
-import { CHAT_HELP, parseChatCommand } from "./chat-commands.ts";
+import { parseChatCommand } from "./chat-commands.ts";
+import { runChatCommand } from "./command-runner.ts";
 import { HISTORY_TURNS, renderHistory } from "./history.ts";
 
 interface ChannelRecord {
@@ -113,6 +114,8 @@ export function splitBody(text: string, max = MAX_BODY): string[] {
   return out;
 }
 
+/** An indicator that started this recently is not stopped by a session list that says the session is idle (the list can lag the events). */
+const TYPING_GRACE_MS = 15_000;
 const NUMBER_EMOJI = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
 const TYPING_EVERY_MS = 3000;
 const DISCOVER_EVERY_MS = 30_000;
@@ -148,7 +151,9 @@ export class Bridge {
   private metas: SessionMeta[] = [];
   private chain: Promise<void> = Promise.resolve();
   private readonly dialogs = new Map<string, OpenDialog>(); // by dialog id
+  private readonly pickers = new Map<string, { messageId: string; rows: string[]; emojis: string[]; onPick: (row: string) => Promise<void>; body: string }>(); // by room: a numbered question of the bridge's own
   private readonly typingTimers = new Map<string, NodeJS.Timeout>(); // by room id
+  private readonly typingSince = new Map<string, number>(); // by room id: when the indicator started
   private readonly toolsRun = new Map<number, number>(); // by session number, since the last post
   /** Prompts this bridge sent, so the user message pi echoes back is not posted a second time. */
   private readonly echoes: string[] = [];
@@ -488,6 +493,7 @@ export class Bridge {
           } else {
             await this.refreshChannel(meta, rec);
           }
+          this.syncTyping(meta);
         } else if (rec && !rec.closed && !this.binding.has(meta.sessionId)) {
           await this.closeChannel(meta.sessionId, rec, meta);
         }
@@ -733,12 +739,31 @@ export class Bridge {
     }
     const tick = (): void => void this.adapter.typing(roomId).catch(() => undefined);
     tick();
+    this.typingSince.set(roomId, Date.now());
     const t = setInterval(tick, TYPING_EVERY_MS);
     t.unref();
     this.typingTimers.set(roomId, t);
   }
 
+  /**
+   * A session list says whether the session is working. The indicator normally follows the events (`agent_start`, `agent_settled`),
+   * but a channel opened mid-run (`/publish` while it thinks, a restart) never saw the start, and a missed settle would leave it on:
+   * so the list starts it for a working session and, after a grace period (the list can lag the events), stops it for an idle one.
+   */
+  private syncTyping(meta: SessionMeta): void {
+    const rec = meta.sessionId ? this.state.channels[meta.sessionId] : undefined;
+    if (!rec || rec.closed) {
+      return;
+    }
+    if (meta.streaming) {
+      this.startTyping(rec.roomId);
+    } else if (this.typingTimers.has(rec.roomId) && Date.now() - (this.typingSince.get(rec.roomId) ?? 0) > TYPING_GRACE_MS) {
+      this.stopTyping(rec.roomId);
+    }
+  }
+
   private stopTyping(roomId: string): void {
+    this.typingSince.delete(roomId);
     const t = this.typingTimers.get(roomId);
     if (t) {
       clearInterval(t);
@@ -941,6 +966,9 @@ export class Bridge {
   private async onChat(e: ChatEvent): Promise<void> {
     if (e.type === "reaction") {
       if (!e.added || !this.settings.allowedUsers.includes(e.userId)) {
+        return;
+      }
+      if (await this.answerPick(e.roomId, { emoji: e.emoji, messageId: e.messageId })) {
         return;
       }
       for (const d of this.dialogs.values()) {
@@ -1180,6 +1208,9 @@ export class Bridge {
     if (await this.refuseCommand(m, text, { meta, late })) {
       return;
     }
+    if (await this.answerPick(m.roomId, { text })) {
+      return;
+    }
     const d = this.dialogFor(m.roomId);
     if (d && (await this.answerFrom(d, { text }))) {
       return;
@@ -1192,35 +1223,74 @@ export class Bridge {
   }
 
   /**
-   * `/command` and `!command` are the bridge's, never the agent's: /abort and /help are done, anything else is answered with what
-   * chat can do. A command that was written while the bridge was away is not run (an abort would hit a later run). True when
-   * the message was a command.
+   * `/command` and `!command` are the bridge's, never the agent's: a command chat has is done (`command-runner.ts`), anything else
+   * is answered with what chat can do. A command written while the bridge was away is not run on catch-up (an abort would hit a
+   * later run), only said so. True when the message was a command.
    */
   private async refuseCommand(m: ChatMessage, text: string, where: { meta?: SessionMeta; late?: boolean } = {}): Promise<boolean> {
     const cmd = parseChatCommand(text);
     if (!cmd) {
       return false;
     }
-    const say = (t: string) => this.adapter.post(m.roomId, t, { replyTo: m.id });
-    if (cmd.kind === "bang") {
-      await say("`!` commands are not available in chat yet, and I never pass them to the agent. `/help` lists what I can do.");
-    } else if (cmd.name === "help") {
-      await say(CHAT_HELP);
-    } else if (cmd.name === "abort" && where.meta) {
-      if (where.late) {
-        await say("Not run: `/abort` was written while toriel was not listening, and it may no longer mean the run that is going now. Send it again if you still want it.");
-      } else if (!where.meta.active || where.meta.dead) {
-        await say("Nothing is running in this session.");
-      } else {
-        try {
-          await this.daemon.request({ type: "abort", session: where.meta.id });
-          await say("Interrupted.");
-        } catch (err) {
-          await say(`⚠ could not interrupt: ${err instanceof Error ? err.message : String(err)}`);
+    const say = async (t: string) => {
+      await this.adapter.post(m.roomId, t, { replyTo: m.id });
+    };
+    if (where.late && cmd.name !== "help") {
+      await say(`Not run: \`${cmd.name}\` was written while toriel was not listening, and it may no longer mean what it did then. Send it again if you still want it.`);
+      return true;
+    }
+    this.pickers.delete(m.roomId); // a new command replaces a question still waiting for its answer
+    await runChatCommand(cmd, {
+      daemon: this.daemon,
+      meta: where.meta,
+      metas: this.metas,
+      say,
+      pick: (title, rows, onPick) => this.askPick(m.roomId, title, rows, onPick),
+      prompt: async (t) => {
+        if (where.meta) {
+          await this.prompt(where.meta, t, m);
         }
+      },
+    });
+    return true;
+  }
+
+  /** A numbered question of the bridge's own (not a session's dialog): posted with number reactions, answered by one or by typing the number. */
+  private async askPick(roomId: string, title: string, rows: string[], onPick: (row: string) => Promise<void>): Promise<void> {
+    const emojis = NUMBER_EMOJI.slice(0, Math.min(rows.length, NUMBER_EMOJI.length));
+    const body = `**${title}**\n${rows.slice(0, emojis.length).map((r, i) => `${i + 1}. ${r}`).join("\n")}\n\nReact with the number, or write it.`;
+    const messageId = await this.adapter.post(roomId, body);
+    this.pickers.set(roomId, { messageId, rows: rows.slice(0, emojis.length), emojis, onPick, body });
+    for (const e of emojis) {
+      if (this.pickers.get(roomId)?.messageId !== messageId) {
+        break;
       }
-    } else {
-      await say(`\`/${cmd.name}\` is not a command I handle here, and I never pass it to the agent.\n${CHAT_HELP}`);
+      await this.adapter.react(roomId, messageId, e).catch(() => undefined);
+    }
+  }
+
+  /** An answer to the room's open numbered question, from a reaction (`emoji`) or a typed number; true when it took it. */
+  private async answerPick(roomId: string, choice: { emoji?: string; text?: string; messageId?: string }): Promise<boolean> {
+    const pk = this.pickers.get(roomId);
+    if (!pk || (choice.messageId !== undefined && choice.messageId !== pk.messageId)) {
+      return false;
+    }
+    const n = choice.emoji ? NUMBER_EMOJI.indexOf(choice.emoji) + 1 : /^\d+$/.test((choice.text ?? "").trim()) ? Number(choice.text) : 0;
+    const row = n > 0 ? pk.rows[n - 1] : undefined;
+    if (row === undefined) {
+      return false;
+    }
+    this.pickers.delete(roomId);
+    await this.adapter.edit(roomId, pk.messageId, `${pk.body}\n\n**→ ${row}**`).catch(() => undefined);
+    for (const e of pk.emojis) {
+      if (e !== NUMBER_EMOJI[n - 1]) {
+        await this.adapter.unreact(roomId, pk.messageId, e).catch(() => undefined);
+      }
+    }
+    try {
+      await pk.onPick(row);
+    } catch (err) {
+      await this.adapter.post(roomId, `⚠ ${err instanceof Error ? err.message : String(err)}`);
     }
     return true;
   }
