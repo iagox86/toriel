@@ -97,6 +97,7 @@ export function splitBody(text: string, max = MAX_BODY): string[] {
 
 const NUMBER_EMOJI = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
 const TYPING_EVERY_MS = 3000;
+const DISCOVER_EVERY_MS = 30_000;
 
 /** The text of a pi message: the text blocks of an assistant message, or a user message's string. */
 export function messageText(message: { content?: unknown } | undefined): string {
@@ -120,6 +121,7 @@ export class Bridge {
   private readonly stateFile: string;
   private readonly log: (text: string) => void;
   private state: BridgeState = { channels: {} };
+  private discoverTimer?: NodeJS.Timeout;
   private groupId = "";
   private metas: SessionMeta[] = [];
   private chain: Promise<void> = Promise.resolve();
@@ -147,6 +149,12 @@ export class Bridge {
     this.chain = this.chain.then(fn).catch((err: unknown) => this.log(`${label} failed: ${err instanceof Error ? err.message : String(err)}`));
   }
 
+  /** Look for rooms nobody told the bridge about now instead of on the next tick (tests). */
+  discoverNow(): Promise<void> {
+    this.run("discover", () => this.discover());
+    return this.chain;
+  }
+
   /** Resolves when everything queued so far has run (tests). */
   idle(): Promise<void> {
     return this.chain;
@@ -163,9 +171,12 @@ export class Bridge {
     await this.ensureInbox();
     // channels left open by a bridge that did not get to clean up (a crash, a kill) are cleared: the published sessions reopen theirs
     await this.reconcile();
+    await this.sweepGroup();
     await this.closeAll("toriel was restarted; this channel reopens when the session is published and listed again.");
     this.daemon.onMessage((msg) => this.run(`daemon ${msg.type}`, () => this.onDaemon(msg)));
     this.adapter.onEvent((e) => this.run(`chat ${e.type}`, () => this.onChat(e)));
+    this.discoverTimer = setInterval(() => this.run("discover", () => this.discover()), DISCOVER_EVERY_MS);
+    this.discoverTimer.unref();
     await this.daemon.request({ type: "observe_dialogs" });
     await this.daemon.request({ type: "chat_status", up: true });
     this.log(`bridge up: group ${this.settings.group}, ${Object.keys(this.state.channels).length} channel(s) known`);
@@ -213,6 +224,7 @@ export class Bridge {
       clearInterval(t);
     }
     this.typingTimers.clear();
+    clearInterval(this.discoverTimer);
     await this.chain; // what was queued still runs, in order
     await this.closeAll("toriel stopped; this channel reopens when it is back and the session is published.");
     await this.daemon.request({ type: "chat_status", up: false }).catch(() => undefined);
@@ -604,16 +616,83 @@ export class Bridge {
       return;
     }
     if (e.type === "room") {
-      if (e.change === "created" && this.settings.allowedUsers.includes(e.by) && e.room.id !== this.state.inboxRoomId && !Object.values(this.state.channels).some((c) => c.roomId === e.room.id)) {
-        this.emptyChannels.set(e.room.id, e.room.name);
-        this.log(`channel ${e.room.name} made in chat: a session starts with its first message`);
-        await this.adapter.joinRoom(e.room.id).catch(() => undefined);
-      } else if (e.change === "renamed" && this.settings.allowedUsers.includes(e.by)) {
-        await this.renamedInChat(e.room.id, e.room.name);
+      if (e.change === "renamed") {
+        if (this.settings.allowedUsers.includes(e.by)) {
+          await this.renamedInChat(e.room.id, e.room.name);
+        }
+      } else if (e.change === "created" || e.change === "unarchived") {
+        await this.manageRoom(e.room, e.by, e.change);
       }
       return;
     }
     await this.onMessage(e.message);
+  }
+
+  /**
+   * Everything in the group belongs to toriel (the group is a mirror of toriel's published sessions, plus the inbox), so a room that
+   * appears there is dealt with: one an allowed user made becomes a session on its first message; one anybody else made is refused
+   * and closed; a session channel that was reopened while its session is not published is closed again. Toriel joins and archives
+   * whatever it needs to.
+   */
+  private async manageRoom(room: { id: string; name: string }, by: string, change: "created" | "unarchived"): Promise<void> {
+    if (room.id === this.state.inboxRoomId || this.emptyChannels.has(room.id)) {
+      return;
+    }
+    const known = Object.values(this.state.channels).find((c) => c.roomId === room.id);
+    if (known) {
+      if (known.closed) {
+        await this.adapter.joinRoom(room.id).catch(() => undefined);
+        await this.adapter.post(room.id, "This session is not published, so this channel is closed again. `/publish` in toriel reopens it.").catch(() => undefined);
+        await this.adapter.archiveRoom(room.id);
+        this.log(`channel ${room.name} was reopened for a session that is not published: closed again`);
+      }
+      return;
+    }
+    await this.adapter.joinRoom(room.id).catch(() => undefined);
+    if (this.settings.allowedUsers.includes(by)) {
+      this.emptyChannels.set(room.id, room.name);
+      this.log(`channel ${room.name} made in chat: a session starts with its first message`);
+      await this.adapter.post(room.id, `Write a message here to start a session named **${sessionNameFromChannel(room.name)}**.`).catch(() => undefined);
+      return;
+    }
+    this.log(`channel ${room.name} was ${change === "created" ? "made" : "reopened"} by user ${by}, who may not use toriel: closed`);
+    await this.adapter.post(room.id, "This group belongs to toriel: only its owners can make channels here, and sessions get theirs from toriel itself. Closing this channel.").catch(() => undefined);
+    await this.adapter.archiveRoom(room.id);
+  }
+
+  /**
+   * Rooms that appeared in the group without an event reaching the bridge (events were seen to miss a room the bot was not in): found
+   * by looking at the group, with the room's members standing in for its creator, who is not known then.
+   */
+  private async discover(): Promise<void> {
+    const mine = new Set(Object.values(this.state.channels).map((c) => c.roomId));
+    for (const want of this.awaiting.values()) {
+      if (want.roomId) {
+        mine.add(want.roomId); // a channel whose session is starting
+      }
+    }
+    for (const room of await this.adapter.listRooms(this.groupId)) {
+      if (room.id === this.state.inboxRoomId || mine.has(room.id) || this.emptyChannels.has(room.id)) {
+        continue;
+      }
+      await this.adapter.joinRoom(room.id).catch(() => undefined);
+      const members = await this.adapter.members(room.id).catch(() => [] as string[]);
+      await this.manageRoom(room, members.find((m) => this.settings.allowedUsers.includes(m)) ?? "nobody who may", "created");
+    }
+  }
+
+  /** At start: join every room of the group and close the ones that are neither the inbox nor a session's channel. */
+  private async sweepGroup(): Promise<void> {
+    const mine = new Set(Object.values(this.state.channels).map((c) => c.roomId));
+    for (const room of await this.adapter.listRooms(this.groupId)) {
+      await this.adapter.joinRoom(room.id).catch(() => undefined);
+      if (room.id === this.state.inboxRoomId || mine.has(room.id)) {
+        continue;
+      }
+      await this.adapter.post(room.id, "Not a toriel session channel (the group mirrors toriel's published sessions), so toriel closes it.").catch(() => undefined);
+      await this.adapter.archiveRoom(room.id).catch((err: unknown) => this.log(`could not close ${room.name}: ${err instanceof Error ? err.message : String(err)}`));
+      this.log(`channel ${room.name} is not a toriel session channel: closed`);
+    }
   }
 
   /** A channel the user renamed in chat renames its session (My Toriel Room from my-toriel-room); the channel then keeps the user's spelling until the session is renamed. */

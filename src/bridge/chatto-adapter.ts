@@ -136,6 +136,10 @@ export async function connectChatto(opts: ChattoConnect): Promise<ChatAdapter> {
     async joinRoom(roomId) {
       await rooms$().joinRoom({ roomId });
     },
+    async members(roomId) {
+      const r = await rooms$().listMembers({ roomId });
+      return Array.isArray(r.userIds) ? r.userIds.map(String) : [];
+    },
     async addMember(roomId, userId) {
       await rooms$().addMember({ roomId, userId });
     },

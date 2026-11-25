@@ -323,6 +323,67 @@ describe("the bridge: a channel carries its session's id", () => {
   });
 });
 
+describe("the bridge: the group belongs to toriel", () => {
+  it("tells a stranger who makes a channel it is not theirs to make, and closes it", async () => {
+    const t = await setup();
+    const made = await t.chat.createRoom("g1", "stranger-room", "");
+    t.chat.emit({ type: "room", room: made, by: "stranger", change: "created" });
+    await t.bridge.idle();
+    assert.equal(t.chat.rooms.get(made.id)?.archived, true);
+    assert.match(t.chat.postsIn(made.id)[0]?.body ?? "", /belongs to toriel/);
+    assert.ok(t.logs.some((l) => l.includes("stranger-room") && l.includes("stranger")));
+  });
+  it("says what a channel an allowed user makes is for, for every allowed user", async () => {
+    const t = await setup({ allowedUsers: [RON, "friend1"] });
+    const made = await t.chat.createRoom("g1", "chris-room", "");
+    t.chat.emit({ type: "room", room: made, by: "friend1", change: "created" });
+    await t.bridge.idle();
+    assert.equal(t.chat.rooms.get(made.id)?.archived, false);
+    assert.match(t.chat.postsIn(made.id)[0]?.body ?? "", /start a session named \*\*Chris Room\*\*/);
+    t.chat.say(made.id, "hi from chris", { userId: "friend1" });
+    await t.bridge.idle();
+    assert.deepEqual(t.daemon.of("spawn"), [{ type: "spawn", cwd: "/work", name: "Chris Room" }]);
+  });
+  it("closes a session channel somebody reopens while its session is not published", async () => {
+    const t = await setup();
+    const room = await openSession(t);
+    t.daemon.sessions([meta({ published: undefined })]);
+    await t.bridge.idle();
+    assert.equal(room.archived, true);
+    room.archived = false; // somebody unarchived it in chat
+    t.chat.emit({ type: "room", room: { id: room.id, name: room.name, archived: false }, by: RON, change: "unarchived" });
+    await t.bridge.idle();
+    assert.equal(room.archived, true);
+    assert.match(t.chat.postsIn(room.id).at(-1)?.body ?? "", /not published/);
+  });
+  it("finds a room no event announced, and judges it by who is in it", async () => {
+    const t = await setup({ allowedUsers: [RON, "friend1"] });
+    const theirs = await t.chat.createRoom("g1", "chris-room", "");
+    t.chat.memberIds.set(theirs.id, ["friend1"]);
+    const strangers = await t.chat.createRoom("g1", "intruder", "");
+    t.chat.memberIds.set(strangers.id, ["stranger"]);
+    await t.bridge.discoverNow();
+    assert.equal(t.chat.rooms.get(theirs.id)?.archived, false);
+    assert.equal(t.chat.rooms.get(strangers.id)?.archived, true);
+    t.chat.say(theirs.id, "hello", { userId: "friend1" });
+    await t.bridge.idle();
+    assert.equal(t.daemon.of("spawn").length, 1);
+    // a second look does not greet or close anything again
+    const posts = t.chat.posts.length;
+    await t.bridge.discoverNow();
+    assert.equal(t.chat.posts.length, posts);
+  });
+  it("at start joins what is in the group and closes the rooms that are neither the inbox nor a session's", async () => {
+    const chat = new FakeChat();
+    const stray = await chat.createRoom("g1", "old-experiment", "");
+    const t = await setup({}, chat);
+    assert.equal(chat.rooms.get(stray.id)?.archived, true);
+    assert.match(chat.postsIn(stray.id)[0]?.body ?? "", /Not a toriel session channel/);
+    assert.equal(chat.roomByName("inbox")?.archived, false);
+    assert.ok(t);
+  });
+});
+
 describe("the bridge: output", () => {
   it("posts the assistant's text with a count of the tools that ran, and shows typing while it works", async () => {
     const t = await setup();

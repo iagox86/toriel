@@ -52,6 +52,11 @@ export class FakeChat implements ChatAdapter {
       r.members = true;
     }
   }
+  /** Who is in each room, for the tests that need a room's members (default: nobody). */
+  memberIds = new Map<string, string[]>();
+  async members(roomId: string): Promise<string[]> {
+    return this.memberIds.get(roomId) ?? [];
+  }
   added: Array<[string, string]> = [];
   async addMember(roomId: string, userId: string): Promise<void> {
     this.added.push([roomId, userId]);
