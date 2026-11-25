@@ -175,6 +175,8 @@ export class FakeChat implements ChatAdapter {
 export class FakeDaemon implements DaemonPort {
   requests: Array<Record<string, unknown>> = [];
   failures = new Map<string, string>();
+  /** What a request type answers (a value, or a function of the request); default: nothing. */
+  answers = new Map<string, unknown>();
   private listeners: Array<(m: DaemonMessage) => void> = [];
   nextSession = 100;
   /** What read_history answers, by session number (default: nothing, as a daemon with an empty conversation would). */
@@ -192,7 +194,8 @@ export class FakeDaemon implements DaemonPort {
     if (cmd.type === "read_history") {
       return this.histories.get(Number(cmd.session));
     }
-    return undefined;
+    const answer = this.answers.get(String(cmd.type));
+    return typeof answer === "function" ? (answer as (c: Record<string, unknown>) => unknown)(cmd) : answer;
   }
   onMessage(l: (m: DaemonMessage) => void): void {
     this.listeners.push(l);
