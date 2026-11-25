@@ -279,12 +279,13 @@ export const SESSION_COMMANDS = [
     help: "Goes back to the list without stopping this session (use /park to also stop it)." },
   {
     name: "publish",
-    description: "show this session in chat (a channel of its own); /publish off stops",
-    help: "Publishes the session to the chat bridge: it gets a channel, the transcript follows there, and you can answer its questions and reply from chat. Nothing is published unless you ask, and chat cannot publish. /publish off closes the channel and stops, and it stays off until you run /publish again; /delete stops it for good; /park closes the channel too, but a session that was published when parked is published again when it is used again (or by /park -u). Only sets a flag: a sleeping session is not woken. Takes effect once the chat bridge is configured and running.\n\nExamples:\n  /publish\n  /publish off",
-    complete: (typed) => ["off"].filter((w) => w.startsWith(typed.trim().toLowerCase())),
-    build: (cmd) => {
-      cmd.argument("[state]", "off to stop publishing; leave out to publish");
-    },
+    description: "show this session in chat (a channel of its own); on a published session, show where it is",
+    help: "Publishes the session to the chat bridge: it gets a channel, the transcript follows there, and you can answer its questions and reply from chat. Nothing is published unless you ask, and chat cannot publish. On a session that is already published it publishes nothing and reports where it shows: the chat server, the channel, and whether the bridge is connected or what is wrong. /unpublish closes the channel and stops, and it stays off until you run /publish again; /delete stops it for good; /park closes the channel too, but a session that was published when parked is published again when it is used again (or by /park -u). Only sets a flag: a sleeping session is not woken. Takes effect once the chat bridge is configured and running.\n\nExamples:\n  /publish",
+  },
+  {
+    name: "unpublish",
+    description: "stop showing this session in chat (its channel is closed)",
+    help: "Stops publishing the session: the bridge closes its channel (the messages stay in the archived channel) and the session stays unpublished until you run /publish again. A session that was not published is left as it is. Only sets a flag: a sleeping session is not woken.\n\nExamples:\n  /unpublish",
   },
   {
     name: "park",

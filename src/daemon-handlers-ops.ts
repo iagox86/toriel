@@ -10,7 +10,7 @@ import { PLAN_DIR, SOCK, TRASH_DIR } from "./config.ts";
 import { planOn, setPlanOn } from "../pi/extensions/lib/plan-mode.ts";
 import { type Cmd, type DaemonContext, requireNotInPi, type Responder } from "./daemon-context.ts";
 import { deliverToSession } from "./daemon-handlers-bridge.ts";
-import { sendHistory } from "./daemon-history.ts";
+import { digestHistory, readHistoryOf, sendHistory } from "./daemon-history.ts";
 import { answerText, recordDecision } from "./decision-log.ts";
 import { autoOn, type DaemonSession, type HeldPrompt, requireIdle } from "./daemon-session.ts";
 import { formatLocalCommand, type LocalResult, runLocal } from "./local-command.ts";
@@ -576,6 +576,18 @@ export function handleObserveDialogs(ctx: DaemonContext, cmd: Cmd<"observe_dialo
     }
   }
   res(true, undefined, { observing: on });
+}
+
+/**
+ * A session's conversation as a digest, for the chat bridge (ticket 279). Reads only: it does not attach, does not start a sleeping
+ * session (its file is read instead) and does not send the controller a history to replace its view with.
+ */
+export async function handleReadHistory(ctx: DaemonContext, cmd: Cmd<"read_history">, res: Responder): Promise<void> {
+  const s = ctx.registry.get(cmd.session);
+  if (!s) {
+    throw new Error(`no session ${cmd.session}`);
+  }
+  res(true, undefined, digestHistory(await readHistoryOf(s), cmd.last ?? 40));
 }
 
 /** Deliver the user's answer to a dialog the child asked for. */

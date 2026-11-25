@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { parseCommandLine } from "../src/cli.ts";
 import { SESSION_COMMANDS } from "../src/commands.ts";
+import { publishInfo } from "../src/publish-info.ts";
 import { PublishedStore } from "../src/published.ts";
 import { buildStatusLine } from "../src/status.ts";
 import type { SessionMeta } from "../src/shared.ts";
@@ -83,13 +84,23 @@ describe("PublishedStore", () => {
 });
 
 describe("/publish", () => {
-  it("parses with and without off", () => {
-    const args = (line: string) => {
-      const r = parseCommandLine(SESSION_COMMANDS, line);
-      return r.kind === "run" ? { args: r.call.args } : undefined;
-    };
-    assert.deepEqual(args("/publish"), { args: [] });
-    assert.deepEqual(args("/publish off"), { args: ["off"] });
+  it("is /publish and /unpublish, neither taking an argument", () => {
+    const run = (line: string) => parseCommandLine(SESSION_COMMANDS, line).kind === "run";
+    assert.equal(run("/publish"), true);
+    assert.equal(run("/unpublish"), true);
+    assert.equal(run("/publish off"), false, "stopping is /unpublish");
+  });
+  it("says where a published session shows, and what is wrong when something is", () => {
+    const up = { chatUp: true, chatServer: "chat.example.com", chatChannel: "fix-the-build" };
+    const text = publishInfo(up);
+    assert.match(text, /server {3}chat\.example\.com/);
+    assert.match(text, /channel {2}#fix-the-build/);
+    assert.match(text, /status {3}connected$/m);
+    assert.match(publishInfo({ ...up, chatChannel: undefined }), /channel is not open yet/);
+    assert.match(publishInfo({ ...up, chatProblem: "could not open the channel: boom" }), /connected, but: could not open the channel: boom/);
+    assert.match(publishInfo({ ...up, chatUp: false }), /bridge is down \(the daemon restarts it/);
+    assert.match(publishInfo({ ...up, chatUp: false, chatProblem: "the token file is too open" }), /bridge is down: the token file is too open/);
+    assert.match(publishInfo({ chatUp: true }), /server {3}\(unknown\)/);
   });
 });
 

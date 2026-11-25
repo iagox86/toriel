@@ -21,6 +21,7 @@ import {
   handleAutoMode,
   handleModeNotice,
   handleObserveDialogs,
+  handleReadHistory,
   handlePlanMode,
   handlePublish,
   handleDenyAfter,
@@ -46,7 +47,8 @@ import { handleAgentSpawn, handleAgentsOp } from "./daemon-subagents.ts";
 import { handlePermissionAdd, handlePermissionCheck, handlePermissionList, handlePermissionRestore, handlePermissionRevoke } from "./daemon-permissions.ts";
 import { handleResolve } from "./daemon-resolve.ts";
 import { handleScheduleAdd, handleScheduleList, handleScheduleOp, handleWatchAdd } from "./daemon-schedule.ts";
-import type { ClientCommand } from "./shared.ts";
+import { BRIDGE_NOTICE_PREFIX, type ClientCommand } from "./shared.ts";
+import { oneLine } from "./util.ts";
 
 export async function dispatch(ctx: DaemonContext, cmd: ClientCommand, socket: net.Socket, res: Responder): Promise<void> {
   switch (cmd.type) {
@@ -86,9 +88,25 @@ export async function dispatch(ctx: DaemonContext, cmd: ClientCommand, socket: n
       return handleAutoMode(ctx, cmd, res);
     case "publish":
       return handlePublish(ctx, cmd, res);
-    case "chat_status":
-      if (ctx.published.bridgeUp !== cmd.up) {
-        ctx.published.bridgeUp = cmd.up;
+    case "chat_status": {
+      const problem = typeof cmd.problem === "string" && cmd.problem.trim() ? oneLine(cmd.problem).slice(0, 300) : undefined; // reaches the status line and a notice: one line, whatever was sent
+      const changed = ctx.published.bridgeUp !== cmd.up || (cmd.up && ctx.published.problem !== problem);
+      ctx.published.bridgeUp = cmd.up;
+      if (cmd.up) {
+        ctx.published.problem = problem;
+      }
+      if (cmd.up && problem && cmd.session !== undefined && changed) {
+        ctx.hub.broadcast({ type: "notice", session: cmd.session, text: `${BRIDGE_NOTICE_PREFIX}${problem}`, durable: true });
+      }
+      if (changed) {
+        ctx.hub.broadcastSessions();
+      }
+      res(true);
+      return;
+    }
+    case "chat_channels":
+      if (JSON.stringify(ctx.published.channels) !== JSON.stringify(cmd.channels)) {
+        ctx.published.channels = cmd.channels;
         ctx.hub.broadcastSessions();
       }
       res(true);
@@ -151,6 +169,8 @@ export async function dispatch(ctx: DaemonContext, cmd: ClientCommand, socket: n
       return handleRestoreCode(ctx, cmd, res);
     case "observe_dialogs":
       return handleObserveDialogs(ctx, cmd, socket, res);
+    case "read_history":
+      return handleReadHistory(ctx, cmd, res);
     case "ui_response":
       return handleUiResponse(ctx, cmd, res);
     case "list":

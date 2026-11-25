@@ -35,7 +35,7 @@ export const AUTO_DENIED_NOTICE = "denied automatically";
 /** The notice for a question nobody answered in time (deny-after), dismissed as if cancelled. */
 export const AUTO_DISMISSED_NOTICE = "dismissed automatically";
 
-export const PROTOCOL = 17; // 17: observe_dialogs, the ui_resolved message, and the optional `source` of ui_response and prompt (any controller can watch and answer a dialog, the first answer wins, ticket 270); 16: the publish command and SessionMeta.published/chatUp (a session shown in chat, ticket 269); 15: auto_mode/plan_mode's optional `quiet` and the mode_notice command (the shift+tab cycle announces only the mode it settles on, ticket 236); 14: spawn's optional `model` (a new session starts on that model, /new -m, ticket 247); 13: the feedback_snapshot command (the daemon's state for a /feedback bundle, ticket 239); 12: the plan_mode command and SessionMeta.plan/tasks (a read-only session until the user approves a plan, ticket 229; the agent's task list, ticket 228); 11: the deny_after command (deny a permission prompt nobody answers in time, ticket 88); 10: the auto_mode command and SessionMeta.auto/autoUntil (a session that allows its permission prompts except the sketchy ones, ticket 213); 9: watch_add's optional `by` ("agent": a file trigger an agent made through toriel_watch_create, held to the agent limits); 8: permission_check's optional `probe` (answer from the grants without remembering a suggestion for a dialog; the reply says `expiresAt`), for the toriel_permission_check tool; 7: spawn's optional `wake` (start a sleeping session because the user typed a command into it; answers `woke: false` with a reason instead of starting a file another pi may have open); 6: 6: rename and adopt answer with the applied `name` and `nameVerified` (the daemon makes names unique); 5: file-path prompts carry grant rows, and permission_add's `dialog` (4: the watch_add command (file-trigger schedules); 3: agent_spawn's optional cwd; 2: the `cd` command and adopt's `keepPermissions`)
+export const PROTOCOL = 19; // 19: chat_status's optional `problem` and `session`, and SessionMeta.chatProblem (what went wrong in the chat bridge, shown in the status line and as a durable notice, ticket 283); 18: the read_history command (a session's conversation as a digest, for the chat bridge to show a published session's past, ticket 279); 17: observe_dialogs, the ui_resolved message, and the optional `source` of ui_response and prompt (any controller can watch and answer a dialog, the first answer wins, ticket 270); 16: the publish command and SessionMeta.published/chatUp (a session shown in chat, ticket 269); 15: auto_mode/plan_mode's optional `quiet` and the mode_notice command (the shift+tab cycle announces only the mode it settles on, ticket 236); 14: spawn's optional `model` (a new session starts on that model, /new -m, ticket 247); 13: the feedback_snapshot command (the daemon's state for a /feedback bundle, ticket 239); 12: the plan_mode command and SessionMeta.plan/tasks (a read-only session until the user approves a plan, ticket 229; the agent's task list, ticket 228); 11: the deny_after command (deny a permission prompt nobody answers in time, ticket 88); 10: the auto_mode command and SessionMeta.auto/autoUntil (a session that allows its permission prompts except the sketchy ones, ticket 213); 9: watch_add's optional `by` ("agent": a file trigger an agent made through toriel_watch_create, held to the agent limits); 8: permission_check's optional `probe` (answer from the grants without remembering a suggestion for a dialog; the reply says `expiresAt`), for the toriel_permission_check tool; 7: spawn's optional `wake` (start a sleeping session because the user typed a command into it; answers `woke: false` with a reason instead of starting a file another pi may have open); 6: 6: rename and adopt answer with the applied `name` and `nameVerified` (the daemon makes names unique); 5: file-path prompts carry grant rows, and permission_add's `dialog` (4: the watch_add command (file-trigger schedules); 3: agent_spawn's optional cwd; 2: the `cd` command and adopt's `keepPermissions`)
 
 /** Which toriel code a process runs (build-id.ts). */
 export interface BuildInfo {
@@ -74,6 +74,21 @@ export interface UsageReport {
   at: number;
 }
 
+/** Notices the daemon makes out of a bridge's problem start with this; the bridge does not post them back into the channel it already told. */
+export const BRIDGE_NOTICE_PREFIX = "chat bridge: ";
+
+/** One turn of a session's conversation as `read_history` reports it: the text only, no tool output. */
+export interface HistoryTurn {
+  role: "user" | "assistant" | "compaction";
+  text: string;
+  /** Tool calls the assistant made in this turn. */
+  tools?: number;
+  /** ms since epoch, when pi recorded one. */
+  at?: number;
+  stopReason?: string;
+  errorMessage?: string;
+}
+
 export interface SessionMeta {
   /** Daemon-assigned short id, stable for the daemon's lifetime. */
   id: number;
@@ -97,6 +112,11 @@ export interface SessionMeta {
   /** The session is published to chat (ticket 269), and whether the chat bridge is connected right now (set only on a published session). */
   published?: boolean;
   chatUp?: boolean;
+  /** What is wrong with the chat bridge, or why it is down, when it said (set only on a published session). */
+  chatProblem?: string;
+  /** The channel the session has in chat (its name, without the #) and the chat server's host, for `/publish` on a published session. */
+  chatChannel?: string;
+  chatServer?: string;
   /** toriel settings-file mtime this child started with (null = no file); undefined when inactive. */
   settingsMtime?: number | null;
   /** Problems the settings file had when this child started. */
@@ -296,8 +316,10 @@ type ClientCommandBody =
   | { type: "resolve"; id?: string; query: string }
   /** Show a session in chat (`on` omitted: toggle) or stop showing it; keyed by UUID, so a sleeping session can be published. Answers `{ published }`. */
   | { type: "publish"; id?: string; sessionId: string; on?: boolean; resume?: boolean; unpark?: boolean }
-  /** The chat bridge says whether it is connected to the chat server (drives SessionMeta.chatUp). */
-  | { type: "chat_status"; id?: string; up: boolean }
+  /** The chat bridge says whether it is connected to the chat server (drives SessionMeta.chatUp). While up, `problem` is the one thing that is wrong right now (a channel it could not make, say; shown in the status line of published sessions), absent when nothing is; `session` (a session number) also leaves a durable notice in that session's transcript. */
+  | { type: "chat_status"; id?: string; up: boolean; problem?: string; session?: number }
+  /** The chat bridge says which channel (by name) each session it shows has right now, by session UUID; the whole map each time. Drives SessionMeta.chatChannel, for what /publish shows. */
+  | { type: "chat_channels"; id?: string; channels: Record<string, string> }
   /** pi's slash commands (extensions, skills, prompt templates). Without a
    * live session the daemon answers from the last list any child reported. */
   | { type: "commands"; id?: string; session?: number }
@@ -319,6 +341,8 @@ type ClientCommandBody =
   | { type: "ui_response"; session: number; response: Record<string, unknown>; source?: string }
   /** Start (default) or stop receiving every session's dialogs as `ui_request`, attached or not, without taking the attach; the dialogs already open are sent at once. For the chat bridge. */
   | { type: "observe_dialogs"; id?: string; on?: boolean }
+  /** The session's conversation as a digest (user and assistant turns, text only), live or asleep, without attaching or waking it: the last `last` turns (default 40) and how many there were. The reply's data is `{ turns: HistoryTurn[]; total: number }`. For the chat bridge. */
+  | { type: "read_history"; id?: string; session: number; last?: number }
   /** Orderly daemon shutdown (children stop too). */
   | { type: "shutdown" }
   /** Presence heartbeat from the toriel-presence extension in an external

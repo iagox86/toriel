@@ -29,6 +29,15 @@ export function chatDisabledReason(env: NodeJS.ProcessEnv, profile: string | und
   return undefined;
 }
 
+/**
+ * Why a bridge died, from the last lines it wrote to stderr: the last line that reads like an error message and is not a stack frame
+ * (node prints the trace after the message), else the last line that is not a frame.
+ */
+export function crashReason(lines: readonly string[]): string | undefined {
+  const real = lines.map((l) => l.trim()).filter((l) => l && !/^at\s/.test(l) && !/^\^+$/.test(l) && !/^Node\.js v/.test(l));
+  return [...real].reverse().find((l) => /\b\w*Error\b|error:|refused|cannot|failed/i.test(l)) ?? real.at(-1);
+}
+
 export class ChatSupervisor {
   private child?: ChildProcess;
   private timer?: NodeJS.Timeout;
@@ -49,6 +58,11 @@ export class ChatSupervisor {
       }
       return;
     }
+    try {
+      this.ctx.published.server = new URL(settings.chatto?.url ?? "").host;
+    } catch {
+      // validChatto has checked the URL; an odd one only costs the host in /publish's report
+    }
     this.launch();
   }
 
@@ -64,19 +78,28 @@ export class ChatSupervisor {
     const child = spawn(process.execPath, ["--disable-warning=ExperimentalWarning", MAIN], { env: { ...process.env, TORIEL_SOCK: SOCK }, stdio: ["ignore", "ignore", "pipe"] });
     this.child = child;
     let tail = "";
+    const recent: string[] = [];
     child.stderr?.setEncoding("utf8");
     child.stderr?.on("data", (chunk: string) => {
       tail += chunk;
       for (let i = tail.indexOf("\n"); i !== -1; i = tail.indexOf("\n")) {
         log(`chat bridge: ${tail.slice(0, i)}`);
+        recent.push(tail.slice(0, i));
+        if (recent.length > 30) {
+          recent.shift();
+        }
         tail = tail.slice(i + 1);
       }
     });
     child.once("error", (err) => log(`chat bridge could not start: ${err.message}`));
     child.once("exit", (code, signal) => {
       this.child = undefined;
-      if (this.ctx.published.bridgeUp) {
+      // why it went away, for the status line of the sessions it was showing (the last thing it said, which is its reason when it died of one)
+      const why = !this.stopped && (code !== 0 || signal) ? (crashReason(recent) ?? `exited (${signal ?? code})`) : undefined;
+      if (this.ctx.published.bridgeUp || this.ctx.published.problem !== why) {
         this.ctx.published.bridgeUp = false;
+        this.ctx.published.problem = why;
+        this.ctx.published.channels = {}; // the channels are closed when it goes
         this.ctx.hub.broadcastSessions();
       }
       if (this.stopped) {

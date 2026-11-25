@@ -90,6 +90,7 @@ export async function connectChatto(opts: ChattoConnect): Promise<ChatAdapter> {
   });
   const rooms$ = () => server.service(types.RoomService);
   const messages$ = () => server.service(types.MessageService);
+  const types_directory = () => server.service(types.RoomDirectoryService);
   const adapter: ChatAdapter = {
     get selfId() {
       return selfId;
@@ -125,6 +126,24 @@ export async function connectChatto(opts: ChattoConnect): Promise<ChatAdapter> {
     },
     async listRooms() {
       return rooms();
+    },
+    async listArchived(group) {
+      // RoomDirectoryService.listRooms with the archived filter (probed live, ticket 279); scope 2 = channels, filter 2 = archived
+      const out: ChatRoom[] = [];
+      const seen = new Set<string>(); // pages are live reads: a room that moved between two of them is listed twice
+      for (let offset = 0; offset < 2000; offset += 100) {
+        const res = await types_directory().listRooms({ scope: 2, archiveFilter: 2, page: { limit: 100, offset } });
+        for (const r of Array.isArray(res.rooms) ? (res.rooms as Payload[]) : []) {
+          if (r.room?.groupId === group && !seen.has(String(r.room.id))) {
+            seen.add(String(r.room.id));
+            out.push({ id: String(r.room.id), name: String(r.room.name), archived: true, description: r.room.description || undefined });
+          }
+        }
+        if (!res.page?.hasMore) {
+          break;
+        }
+      }
+      return out;
     },
     async createRoom(group, name, description) {
       const r = await rooms$().createRoom({ name, description, groupId: group, universal: false });
@@ -173,6 +192,26 @@ export async function connectChatto(opts: ChattoConnect): Promise<ChatAdapter> {
     },
     async unreact(roomId, messageId, emoji) {
       await messages$().removeReaction({ roomId, messageEventId: messageId, emoji });
+    },
+    async recentMessages(roomId, limit) {
+      // the page is the newest `limit` events, oldest first (probed live, ticket 279); the `after` cursor is an opaque one, so the bridge slices by message id instead
+      const res = await rooms$().getRoomEvents({ roomId, limit });
+      const events: Payload[] = Array.isArray(res.page?.events) ? res.page.events : [];
+      return events.flatMap((ev) => {
+        const m = ev.event?.case === "messagePosted" ? ev.event.value?.message : undefined;
+        if (!m || m.deletedAt) {
+          return [];
+        }
+        const message: ChatMessage = {
+          id: String(ev.id),
+          roomId,
+          authorId: String(ev.actorId),
+          body: String(m.body ?? ""),
+          inReplyTo: m.inReplyTo || undefined,
+          threadRootId: m.threadRootEventId || undefined,
+        };
+        return [message];
+      });
     },
     async typing(roomId) {
       await server.refreshTyping({ roomId, threadRootId: "" });

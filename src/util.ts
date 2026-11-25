@@ -95,3 +95,6 @@ export function onPathDirs(name: string, dirs: readonly string[]): boolean {
     }
   });
 }
+
+/** Text on one line, control characters (newlines, escapes) collapsed to a space: for what reaches a status line or a log from outside. */
+export const oneLine = (text: string): string => text.replace(/\p{Cc}+/gu, " ").trim();

@@ -36,6 +36,7 @@ import { SessionRegistry } from "./daemon-session.ts";
 import { log } from "./log.ts";
 import { DEFAULT_GRANT_LIMITS, GrantStore } from "./permissions.ts";
 import { Presence } from "./presence.ts";
+import { registerPublished } from "./daemon-published.ts";
 import { PublishedStore } from "./published.ts";
 import { ChatSupervisor } from "./daemon-chat.ts";
 import { DEFAULT_LIMITS, Scheduler } from "./scheduler.ts";
@@ -224,6 +225,8 @@ async function main(): Promise<void> {
   ctx.watches?.sync(); // re-arm the file watches of the schedules the file brought back
   ctx.grants.load();
   ctx.published.load();
+  // published sessions nobody has opened since this daemon started still get their channel
+  registerPublished(ctx).catch((err: unknown) => log(`registering the published sessions failed: ${errText(err)}`));
   chat.start(); // after the socket serves: the bridge is a controller of this daemon
   // timed grants lapse by themselves (the store never matches an expired one); this only says so
   const grantKeeper = setInterval(() => announceExpired(ctx, ctx.grants.sweep()), 30_000);
