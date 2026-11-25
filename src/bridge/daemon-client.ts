@@ -8,7 +8,7 @@ const REQUEST_TIMEOUT_MS = 60_000;
 
 export interface DaemonPort {
   /** Send a command and resolve with its response data; rejects with the daemon's error text. */
-  request(cmd: DistributiveOmit<ClientCommand, "id">): Promise<unknown>;
+  request(cmd: DistributiveOmit<ClientCommand, "id">, timeoutMs?: number): Promise<unknown>;
   /** Every message the daemon sends (events, session lists, dialogs, ...). */
   onMessage(listener: (msg: DaemonMessage) => void): void;
   /** The socket closed. */
@@ -64,13 +64,13 @@ export function connectDaemon(sock: string, timeoutMs = REQUEST_TIMEOUT_MS): Pro
       socket.off("error", reject);
       socket.on("error", () => {});
       const port: DaemonPort = {
-        request(cmd) {
+        request(cmd, ms = timeoutMs) {
           const id = `b${++seq}`;
           return new Promise((res, rej) => {
             const timer = setTimeout(() => {
               pending.delete(id);
-              rej(new Error(`the daemon did not answer ${cmd.type} in ${Math.round(timeoutMs / 1000)} s`));
-            }, timeoutMs);
+              rej(new Error(`the daemon did not answer ${cmd.type} in ${Math.round(ms / 1000)} s`));
+            }, ms);
             timer.unref();
             pending.set(id, {
               resolve: (v) => {

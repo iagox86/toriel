@@ -10,11 +10,15 @@ export type ChatCommand = { kind: "command" | "shell"; name: string; args: strin
  * word has a second slash. A `!` followed by a space or nothing (`! really?`, `!!!`) is ordinary text.
  */
 export function parseChatCommand(text: string): ChatCommand | undefined {
-  const m = /^(!!|[/!])([^\s/]+)(?:\s+([\s\S]*))?$/.exec(text.trim());
-  if (!m || (m[1] !== "/" && !/^[\w.-]/.test(m[2]))) {
+  const shell = /^!!([^\s!][\s\S]*)$/.exec(text.trim());
+  if (shell) {
+    return { kind: "shell", name: "", args: shell[1].trim() }; // the whole rest is the command line: it may start with a path
+  }
+  const m = /^([/!])([^\s/]+)(?:\s+([\s\S]*))?$/.exec(text.trim());
+  if (!m || (m[1] === "!" && !/^[\w.-]/.test(m[2]))) {
     return undefined;
   }
-  return { kind: m[1] === "!!" ? "shell" : "command", name: m[2].toLowerCase(), args: (m[3] ?? "").trim() };
+  return { kind: "command", name: m[2].toLowerCase(), args: (m[3] ?? "").trim() };
 }
 
 /** Where a chat command works: in any channel, or only in a session's channel. */

@@ -42,7 +42,8 @@ describe("parseChatCommand", () => {
   it("takes /word, !word and !!word as the first word, and nothing that is only text", () => {
     assert.deepEqual(parseChatCommand("/abort"), { kind: "command", name: "abort", args: "" });
     assert.deepEqual(parseChatCommand("  !Model fast now "), { kind: "command", name: "model", args: "fast now" });
-    assert.deepEqual(parseChatCommand("!!ls -la"), { kind: "shell", name: "ls", args: "-la" });
+    assert.deepEqual(parseChatCommand("!!ls -la"), { kind: "shell", name: "", args: "ls -la" });
+    assert.deepEqual(parseChatCommand("!!./run.sh /tmp/x"), { kind: "shell", name: "", args: "./run.sh /tmp/x" });
     assert.equal(parseChatCommand("/etc/hosts is wrong"), undefined, "a path");
     assert.equal(parseChatCommand("! really?"), undefined);
     assert.equal(parseChatCommand("!!!"), undefined);
@@ -78,12 +79,43 @@ describe("commands never reach the agent", () => {
     assert.match(t.last(), /`group` needs the desktop/);
   });
 
-  it("refuses !!shell: it would bypass the permission prompts", async () => {
+  it("runs !!command as the desktop's ! does, says what it printed, and never prompts the agent", async () => {
     const t = await setup();
-    await t.write("!!rm -rf /");
+    t.daemon.answers.set("bash", { output: "hello\n", exitCode: 0, cancelled: false, truncated: false });
+    await t.write("!!echo hello");
+    await new Promise((r) => setImmediate(r));
+    await t.bridge.idle();
+    assert.deepEqual(t.daemon.of("bash"), [{ type: "bash", session: 1, command: "echo hello" }]);
     assert.equal(t.daemon.of("prompt").length, 0);
+    assert.ok(t.chat.postsIn(t.room.id).some((p) => /Running `echo hello`/.test(p.body)));
+    assert.match(t.last(), /exit 0\n```\nhello\n```/);
+  });
+
+  it("a !! command does not hold up the bridge, and !abort stops it", async () => {
+    const t = await setup();
+    let finish: (v: unknown) => void = () => undefined;
+    t.daemon.answers.set("bash", () => new Promise((r) => { finish = r; }));
+    await t.write("!!sleep 100");
+    await t.write("!status");
+    assert.match(t.last(), /Fix The Build/, "another command is answered while it runs");
+    await t.write("!!echo again");
+    assert.match(t.last(), /already running here/);
+    await t.write("!abort");
+    assert.deepEqual(t.daemon.of("abort_bash"), [{ type: "abort_bash", session: 1 }]);
+    finish({ output: "", exitCode: undefined, cancelled: true, truncated: false });
+    await new Promise((r) => setImmediate(r));
+    assert.match(t.last(), /stopped/);
+  });
+
+  it("a !! command in the inbox says where it works, and a failure is said", async () => {
+    const t = await setup();
+    await t.write("!!ls", t.inbox);
     assert.equal(t.daemon.of("bash").length, 0);
-    assert.match(t.last(), /shell commands are not available from chat/);
+    assert.match(t.last(t.inbox), /for a session's channel/);
+    t.daemon.failures.set("bash", "session is compacting");
+    await t.write("!!ls");
+    await new Promise((r) => setImmediate(r));
+    assert.match(t.last(), /⚠ `ls` failed: session is compacting/);
   });
 
   it("does not start a session from a command in the inbox, and a session command there says where it works", async () => {

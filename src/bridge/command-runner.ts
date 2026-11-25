@@ -22,7 +22,12 @@ export interface CommandEnv {
   pick(title: string, rows: string[], onPick: (row: string) => Promise<void>): Promise<void>;
   /** Send the session a prompt as if the user had written it. */
   prompt(text: string): Promise<void>;
+  /** The sessions (daemon numbers) with a `!!` shell command running, kept by the bridge. */
+  shells: Set<number>;
 }
+
+/** The longest a `!!` command may run (the desktop's limit for `!`). */
+const SHELL_TIMEOUT_MS = 11 * 60_000;
 
 /** The longest reply posted in one piece. */
 const MAX_REPLY = 7500;
@@ -39,7 +44,7 @@ function state(m: SessionMeta): string {
 /** Run a command typed in chat. A command the registry does not have is answered, never passed on. */
 export async function runChatCommand(cmd: ChatCommand, env: CommandEnv): Promise<void> {
   if (cmd.kind === "shell") {
-    await env.say("`!!` shell commands are not available from chat: a shell from a phone would bypass the permission prompts. Ask the agent to run it (it asks first), or use the desktop.");
+    await runShell(cmd, env);
     return;
   }
   const def = chatCommandNamed(cmd.name);
@@ -79,6 +84,42 @@ async function live(env: CommandEnv): Promise<number> {
   return r.sessionId;
 }
 
+/**
+ * `!!command`: a shell command in the session's directory, the desktop's `!command` (the daemon runs it and tells the agent what it
+ * printed). It runs without holding up the bridge's queue (a long command must not freeze every other chat), says what it printed
+ * when it ends, and `!abort` stops it. There is no permission prompt, by Ron's decision: the token file is what protects it.
+ */
+async function runShell(cmd: ChatCommand, env: CommandEnv): Promise<void> {
+  const m = env.meta;
+  if (!m) {
+    await env.say("`!!command` is for a session's channel: write it in the session you mean.");
+    return;
+  }
+  const command = cmd.args;
+  if (env.shells.has(m.id)) {
+    await env.say("A `!!` command is already running here: `!abort` stops it.");
+    return;
+  }
+  const session = await live(env);
+  env.shells.add(session);
+  env.shells.add(m.id);
+  await env.say(`Running \`${command}\` (\`!abort\` stops it)…`);
+  void env.daemon
+    .request({ type: "bash", session, command }, SHELL_TIMEOUT_MS)
+    .then(async (r) => {
+      const res = r as { output?: string; exitCode?: number; cancelled?: boolean; truncated?: boolean } | undefined;
+      const out = (res?.output ?? "").trimEnd();
+      const status = res?.cancelled ? "stopped" : res?.exitCode === undefined ? "done" : res.exitCode === 0 ? "exit 0" : `exit ${res.exitCode}`;
+      await env.say(`${status}${res?.truncated ? " (output cut)" : ""}${out ? `\n\`\`\`\n${clip(out.replaceAll("```", "ˋˋˋ"))}\n\`\`\`` : ""}`);
+    })
+    .catch((err: unknown) => env.say(`⚠ \`${command}\` failed: ${errText(err)}`))
+    .catch(() => undefined)
+    .finally(() => {
+      env.shells.delete(session);
+      env.shells.delete(m.id);
+    });
+}
+
 const busy = (env: CommandEnv): boolean => Boolean(env.meta?.streaming);
 
 type Run = (args: string, env: CommandEnv) => Promise<void>;
@@ -99,6 +140,11 @@ const RUN: Record<string, Run> = {
 
   abort: async (_a, env) => {
     const m = env.meta as SessionMeta;
+    if (env.shells.has(m.id)) {
+      await env.daemon.request({ type: "abort_bash", session: m.id });
+      await env.say("Stopping the `!!` command.");
+      return;
+    }
     if (!m.active || m.dead || (!m.streaming && !m.pendingDialog)) {
       await env.say("Nothing is running in this session.");
       return;

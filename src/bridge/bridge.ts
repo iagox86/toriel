@@ -151,6 +151,7 @@ export class Bridge {
   private metas: SessionMeta[] = [];
   private chain: Promise<void> = Promise.resolve();
   private readonly dialogs = new Map<string, OpenDialog>(); // by dialog id
+  private readonly shells = new Set<number>(); // sessions with a `!!` shell command running
   private readonly pickers = new Map<string, { messageId: string; rows: string[]; emojis: string[]; onPick: (row: string) => Promise<void>; body: string }>(); // by room: a numbered question of the bridge's own
   private readonly typingTimers = new Map<string, NodeJS.Timeout>(); // by room id
   private readonly typingSince = new Map<string, number>(); // by room id: when the indicator started
@@ -1245,6 +1246,7 @@ export class Bridge {
       meta: where.meta,
       metas: this.metas,
       say,
+      shells: this.shells,
       pick: (title, rows, onPick) => this.askPick(m.roomId, title, rows, onPick),
       prompt: async (t) => {
         if (where.meta) {
