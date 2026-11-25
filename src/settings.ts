@@ -28,17 +28,18 @@ export interface ChattoSettings {
   group: string;
   /** The channel for announcements and for starting sessions (default "inbox"). */
   inboxChannel: string;
-  /** The one chat user whose messages are acted on (user id). */
-  allowedUser: string;
+  /** The chat users whose messages, reactions and new channels are acted on (user ids); nobody else is. From `allowedUsers`, or the single `allowedUser`. */
+  allowedUsers: string[];
   /** Working directory of a session started from chat. */
   defaultCwd?: string;
   /** Model of a session started from chat, provider/id. */
   defaultModel?: string;
-  /** Chat users the bridge adds to every channel it creates (user ids). Default: just allowedUser; [] adds nobody. */
+  /** Chat users the bridge adds to every channel it creates (user ids). Default: the allowed users; [] adds nobody. */
   addUsers: string[];
 }
 
-const CHATTO_KEYS = ["url", "tokenFile", "tokenEnv", "group", "inboxChannel", "allowedUser", "defaultCwd", "defaultModel", "addUsers"] as const;
+const CHATTO_KEYS = ["url", "tokenFile", "tokenEnv", "group", "inboxChannel", "allowedUser", "allowedUsers", "defaultCwd", "defaultModel", "addUsers"] as const;
+const CHATTO_LISTS: readonly string[] = ["addUsers", "allowedUsers"];
 
 /** Validate the `chatto:` mapping; the problem text when it is unusable. */
 export function validChatto(value: unknown): { ok: true; chatto: ChattoSettings } | { ok: false; problem: string } {
@@ -50,29 +51,30 @@ export function validChatto(value: unknown): { ok: true; chatto: ChattoSettings 
     if (!(CHATTO_KEYS as readonly string[]).includes(k)) {
       return { ok: false, problem: `unknown chatto setting "${k}"` };
     }
-    if (k === "addUsers") {
+    if (CHATTO_LISTS.includes(k)) {
       if (!Array.isArray(o[k]) || !(o[k] as unknown[]).every((u) => typeof u === "string" && u.length > 0)) {
-        return { ok: false, problem: "chatto.addUsers must be a list of user ids (or [] to add nobody)" };
+        return { ok: false, problem: `chatto.${k} must be a list of user ids${k === "addUsers" ? " (or [] to add nobody)" : ""}` };
       }
     } else if (typeof o[k] !== "string" || (o[k] as string).length === 0) {
       return { ok: false, problem: `chatto.${k} must be a non-empty string` };
     }
   }
-  const s = o as Record<Exclude<(typeof CHATTO_KEYS)[number], "addUsers">, string | undefined>;
-  const addUsers = (o.addUsers as string[] | undefined) ?? (s.allowedUser ? [s.allowedUser] : []);
+  const s = o as Record<Exclude<(typeof CHATTO_KEYS)[number], "addUsers" | "allowedUsers">, string | undefined>;
+  const allowedUsers = [...new Set([...((o.allowedUsers as string[] | undefined) ?? []), ...(s.allowedUser ? [s.allowedUser] : [])])];
+  const addUsers = (o.addUsers as string[] | undefined) ?? allowedUsers;
   if (!s.url || !/^https?:\/\/\S+$/.test(s.url)) {
     return { ok: false, problem: "chatto.url must be the server's http(s) URL" };
   }
   if (!s.tokenFile === !s.tokenEnv) {
     return { ok: false, problem: "chatto needs exactly one of tokenFile and tokenEnv (the token itself never goes in this file)" };
   }
-  if (!s.allowedUser) {
-    return { ok: false, problem: "chatto.allowedUser (your chat user id) is required: only that user's messages are acted on" };
+  if (allowedUsers.length === 0) {
+    return { ok: false, problem: "chatto.allowedUsers (a list of chat user ids; allowedUser takes one) is required: only those users' messages are acted on" };
   }
   if (s.defaultModel && !/^[^/\s]+\/\S+$/.test(s.defaultModel)) {
     return { ok: false, problem: "chatto.defaultModel must be provider/id" };
   }
-  return { ok: true, chatto: { url: s.url, tokenFile: s.tokenFile, tokenEnv: s.tokenEnv, group: s.group ?? "Toriel", inboxChannel: s.inboxChannel ?? "inbox", allowedUser: s.allowedUser, defaultCwd: s.defaultCwd, defaultModel: s.defaultModel, addUsers } };
+  return { ok: true, chatto: { url: s.url, tokenFile: s.tokenFile, tokenEnv: s.tokenEnv, group: s.group ?? "Toriel", inboxChannel: s.inboxChannel ?? "inbox", allowedUsers, defaultCwd: s.defaultCwd, defaultModel: s.defaultModel, addUsers } };
 }
 
 export interface TorielSettings {

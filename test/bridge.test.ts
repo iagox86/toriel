@@ -16,7 +16,7 @@ afterEach(() => {
   }
 });
 
-const settings: ChattoSettings = { url: "https://chat.example.com", tokenEnv: "X", group: "Toriel", inboxChannel: "inbox", allowedUser: RON, defaultCwd: "/work", addUsers: [RON] };
+const settings: ChattoSettings = { url: "https://chat.example.com", tokenEnv: "X", group: "Toriel", inboxChannel: "inbox", allowedUsers: [RON], defaultCwd: "/work", addUsers: [RON] };
 
 async function setup(over: Partial<ChattoSettings> = {}, existing?: FakeChat) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-"));
@@ -65,7 +65,7 @@ describe("settings, token and guards", () => {
     assert.match((validChatto({ url: "https://c", allowedUser: "u" }) as { problem: string }).problem, /tokenFile and tokenEnv/);
     assert.match((validChatto({ url: "https://c", tokenFile: "t", tokenEnv: "E", allowedUser: "u" }) as { problem: string }).problem, /exactly one/);
     assert.match((validChatto({ url: "nope", tokenFile: "t", allowedUser: "u" }) as { problem: string }).problem, /URL/);
-    assert.match((validChatto({ url: "https://c", tokenFile: "t" }) as { problem: string }).problem, /allowedUser/);
+    assert.match((validChatto({ url: "https://c", tokenFile: "t" }) as { problem: string }).problem, /allowedUsers/);
     assert.match((validChatto({ url: "https://c", tokenFile: "t", allowedUser: "u", token: "secret" }) as { problem: string }).problem, /unknown chatto setting/);
     const ok = validChatto({ url: "https://c", tokenFile: "t", allowedUser: "u" });
     assert.ok(ok.ok && ok.chatto.group === "Toriel" && ok.chatto.inboxChannel === "inbox");
@@ -165,12 +165,29 @@ describe("the bridge: a channel per published session", () => {
     d.sessions([meta()]);
     await third.idle();
     assert.equal([...t.chat.rooms.values()].filter((r) => r.name.startsWith("fix-the-build")).length, 1);
-    assert.equal(t.chat.postsIn(room.id).length, 1, "no second first message");
+    assert.equal(t.chat.postsIn(room.id).length, 2, "the old first message says closed, a new one opens the channel again");
+    assert.match(t.chat.postsIn(room.id)[0]?.body ?? "", /^\*\*closed\*\*/);
+    assert.equal(room.archived, false);
+  });
+  it("clears its channels when it is told to stop, and again when it starts after a crash", async () => {
+    const t = await setup();
+    const room = await openSession(t);
+    await t.bridge.shutdown();
+    assert.equal(room.archived, true);
+    assert.match(t.chat.postsIn(room.id)[0]?.body ?? "", /^\*\*closed\*\*[\s\S]*toriel stopped/);
+    assert.equal(t.daemon.of("chat_status").at(-1)?.up, false);
+    // a bridge that died without cleaning up leaves an open channel: the next start clears it
+    const t2 = await setup();
+    const room2 = await openSession(t2);
+    const again = new Bridge({ adapter: t2.chat, daemon: new FakeDaemon(), settings, stateFile: t2.stateFile, log: () => undefined });
+    await again.start();
+    assert.equal(room2.archived, true);
+    assert.match(t2.chat.postsIn(room2.id)[0]?.body ?? "", /toriel was restarted/);
   });
 });
 
 describe("the bridge: who joins the channels it makes", () => {
-  it("adds the configured users to the inbox and to each new session channel, not to a reused one", async () => {
+  it("adds the configured users to the inbox and to each new session channel, and again when a closed one reopens", async () => {
     const t = await setup({ addUsers: [RON, "friend1"] });
     const inbox = t.chat.roomByName("inbox");
     assert.deepEqual(t.chat.added, [[inbox?.id, RON], [inbox?.id, "friend1"]]);
@@ -180,7 +197,7 @@ describe("the bridge: who joins the channels it makes", () => {
     await t.bridge.idle();
     t.daemon.sessions([meta()]);
     await t.bridge.idle();
-    assert.equal(t.chat.added.length, 4, "republishing reuses the channel and its members");
+    assert.deepEqual(t.chat.added.slice(4), [[room.id, RON], [room.id, "friend1"]], "republishing reuses the channel and puts the users back");
   });
   it("adds nobody when the list is empty, and carries on when the server refuses", async () => {
     const none = await setup({ addUsers: [] });
@@ -199,6 +216,64 @@ describe("the bridge: who joins the channels it makes", () => {
     const none = validChatto({ url: "https://c", tokenFile: "t", allowedUser: "u1", addUsers: [] });
     assert.ok(none.ok && none.chatto.addUsers.length === 0);
     assert.match((validChatto({ url: "https://c", tokenFile: "t", allowedUser: "u1", addUsers: "u2" }) as { problem: string }).problem, /list of user ids/);
+  });
+});
+
+describe("the bridge: more than one allowed user, renames, numbered options", () => {
+  it("acts on every allowed user and on nobody else", async () => {
+    const t = await setup({ allowedUsers: [RON, "friend1"] });
+    const room = await openSession(t);
+    t.chat.say(room.id, "from the friend", { userId: "friend1" });
+    t.chat.say(room.id, "from a stranger", { userId: "stranger" });
+    await t.bridge.idle();
+    assert.deepEqual(t.daemon.of("prompt").map((p) => p.message), ["from the friend"]);
+  });
+  it("accepts allowedUsers as a list and allowedUser as one, together", () => {
+    const both = validChatto({ url: "https://c", tokenFile: "t", allowedUsers: ["a", "b"], allowedUser: "c" });
+    assert.ok(both.ok && both.chatto.allowedUsers.join() === "a,b,c" && both.chatto.addUsers.join() === "a,b,c");
+    assert.match((validChatto({ url: "https://c", tokenFile: "t", allowedUsers: "a" }) as { problem: string }).problem, /list of user ids/);
+  });
+  it("renames the session when the user renames its channel in chat, and does not rename the channel back", async () => {
+    const t = await setup();
+    const room = await openSession(t);
+    room.name = "ship-it-now";
+    t.chat.emit({ type: "room", room: { id: room.id, name: "ship-it-now", archived: false }, by: RON, change: "renamed" });
+    await t.bridge.idle();
+    assert.deepEqual(t.daemon.of("rename"), [{ type: "rename", session: 1, name: "Ship It Now" }]);
+    t.daemon.sessions([meta({ sessionName: "Ship It Now" })]);
+    await t.bridge.idle();
+    assert.equal(room.name, "ship-it-now");
+    // somebody else's rename, or the bridge's own, is not acted on
+    t.chat.emit({ type: "room", room: { id: room.id, name: "other-name", archived: false }, by: "stranger", change: "renamed" });
+    await t.bridge.idle();
+    assert.equal(t.daemon.of("rename").length, 1);
+  });
+  it("does not number options an extension numbered already", async () => {
+    const t = await setup();
+    const room = await openSession(t);
+    t.daemon.push({ type: "ui_request", session: 1, request: { id: "q1", method: "select", title: "Which?", options: ["1. Single select — x", "2. Multi select — y", "3. Type something."] } });
+    await t.bridge.idle();
+    const body = t.chat.postsIn(room.id).at(-1)?.body ?? "";
+    assert.match(body, /\n1\. Single select — x\n2\. Multi select — y\n3\. Type something\.\n/);
+    assert.doesNotMatch(body, /1\. 1\./);
+    t.chat.say(room.id, "2");
+    await t.bridge.idle();
+    assert.equal(((t.daemon.of("ui_response")[0] as { response: { value: string } }).response).value, "2. Multi select — y");
+  });
+  it("keeps the channel the user made open while the daemon catches up with publishing the new session", async () => {
+    const t = await setup();
+    const made = await t.chat.createRoom("g1", "ron-test", "");
+    t.chat.emit({ type: "room", room: made, by: RON, change: "created" });
+    t.chat.say(made.id, "hello");
+    await t.bridge.idle();
+    t.daemon.sessions([meta({ id: 100, sessionId: "uuid-new", sessionName: undefined, published: undefined })]);
+    await t.bridge.idle();
+    assert.equal(made.archived, false, "not closed in the list that still says unpublished");
+    assert.equal(made.name, "ron-test", "and not renamed to nothing");
+    t.daemon.sessions([meta({ id: 100, sessionId: "uuid-new", sessionName: "Ron Test" })]);
+    await t.bridge.idle();
+    assert.equal(made.archived, false);
+    assert.ok(t.chat.postsIn(made.id).some((p) => /Ron Test/.test(p.body)));
   });
 });
 

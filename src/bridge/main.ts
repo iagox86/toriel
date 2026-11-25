@@ -23,19 +23,24 @@ async function main(): Promise<void> {
     process.exit(2); // a setup problem: the daemon does not retry it in a loop
   }
   const daemon = await connectDaemon(SOCK);
-  daemon.onClose(() => {
-    say("the daemon went away: bridge exits");
-    process.exit(0);
-  });
-  const adapter = await connectChatto({ url: settings.chatto.url, token: token.token });
-  const bridge = new Bridge({ adapter, daemon, settings: settings.chatto, stateFile: path.join(DATA_DIR, "toriel", "chat-bridge.json"), log: say });
-  await bridge.start();
-  const stop = (): void => {
-    bridge.stop();
-    setTimeout(() => process.exit(0), 200).unref();
+  let bridge: Bridge | undefined;
+  /** Clear the channels (a few seconds at most), then end. */
+  let leaving = false;
+  const leave = (why: string): void => {
+    if (leaving) {
+      return;
+    }
+    leaving = true;
+    say(why);
+    setTimeout(() => process.exit(0), 10_000).unref();
+    void (bridge ? bridge.shutdown() : Promise.resolve()).finally(() => process.exit(0));
   };
-  process.on("SIGTERM", stop);
-  process.on("SIGINT", stop);
+  daemon.onClose(() => leave("the daemon went away: clearing the channels and exiting"));
+  const adapter = await connectChatto({ url: settings.chatto.url, token: token.token });
+  bridge = new Bridge({ adapter, daemon, settings: settings.chatto, stateFile: path.join(DATA_DIR, "toriel", "chat-bridge.json"), log: say });
+  await bridge.start();
+  process.on("SIGTERM", () => leave("told to stop: clearing the channels and exiting"));
+  process.on("SIGINT", () => leave("interrupted: clearing the channels and exiting"));
 }
 
 main().catch((err: unknown) => {

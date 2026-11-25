@@ -61,7 +61,7 @@ export class ChatSupervisor {
   private launch(): void {
     const startedAt = Date.now();
     // the bridge's environment: the daemon's own plus the socket to talk to; tokenEnv, when used, is read from it
-    const child = spawn(process.execPath, [MAIN], { env: { ...process.env, TORIEL_SOCK: SOCK }, stdio: ["ignore", "ignore", "pipe"] });
+    const child = spawn(process.execPath, ["--disable-warning=ExperimentalWarning", MAIN], { env: { ...process.env, TORIEL_SOCK: SOCK }, stdio: ["ignore", "ignore", "pipe"] });
     this.child = child;
     let tail = "";
     child.stderr?.setEncoding("utf8");

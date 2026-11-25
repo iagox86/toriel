@@ -8,6 +8,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { DaemonMessage, SessionMeta } from "../shared.ts";
 import { DIALOG_METHODS } from "../config.ts";
+import { optionsNumberedAlready } from "../dialogs.ts";
 import type { ChattoSettings } from "../settings.ts";
 import { type ChatAdapter, type ChatEvent, type ChatMessage, MAX_BODY } from "./adapter.ts";
 import type { DaemonPort } from "./daemon-client.ts";
@@ -118,7 +119,9 @@ export class Bridge {
   /** Prompts this bridge sent, so the user message pi echoes back is not posted a second time. */
   private readonly echoes: string[] = [];
   /** A session started from chat that has no UUID yet: publish it (and bind a channel, when one exists) once it has. */
-  private readonly awaiting = new Map<number, { roomId?: string; inbox?: boolean }>();
+  private readonly awaiting = new Map<number, { roomId?: string; channelName?: string; inbox?: boolean }>();
+  /** Sessions whose channel was bound before the daemon listed them as published. */
+  private readonly binding = new Set<string>();
   /** Channels the user made that wait for a first message before a session exists. */
   private readonly emptyChannels = new Map<string, string>(); // room id -> channel name
 
@@ -148,6 +151,8 @@ export class Bridge {
     }
     this.groupId = group;
     await this.ensureInbox();
+    // channels left open by a bridge that did not get to clean up (a crash, a kill) are cleared: the published sessions reopen theirs
+    await this.closeAll("toriel was restarted; this channel reopens when the session is published and listed again.");
     this.daemon.onMessage((msg) => this.run(`daemon ${msg.type}`, () => this.onDaemon(msg)));
     this.adapter.onEvent((e) => this.run(`chat ${e.type}`, () => this.onChat(e)));
     await this.daemon.request({ type: "observe_dialogs" });
@@ -155,12 +160,24 @@ export class Bridge {
     this.log(`bridge up: group ${this.settings.group}, ${Object.keys(this.state.channels).length} channel(s) known`);
   }
 
-  stop(): void {
+  /** Close (edit and archive) every open channel; they reopen when their sessions are listed as published again. */
+  private async closeAll(why: string): Promise<void> {
+    for (const [sessionId, rec] of Object.entries(this.state.channels)) {
+      if (!rec.closed) {
+        await this.closeChannel(sessionId, rec, undefined, why).catch((err: unknown) => this.log(`could not close channel ${rec.name}: ${err instanceof Error ? err.message : String(err)}`));
+      }
+    }
+  }
+
+  /** The daemon is stopping, or this process was told to: clear the channels, then say so. Resolves when done. */
+  async shutdown(): Promise<void> {
     for (const t of this.typingTimers.values()) {
       clearInterval(t);
     }
     this.typingTimers.clear();
-    void this.daemon.request({ type: "chat_status", up: false }).catch(() => undefined);
+    await this.chain; // what was queued still runs, in order
+    await this.closeAll("toriel stopped; this channel reopens when it is back and the session is published.");
+    await this.daemon.request({ type: "chat_status", up: false }).catch(() => undefined);
   }
 
   private load(): void {
@@ -229,7 +246,9 @@ export class Bridge {
       if (meta?.sessionId) {
         this.awaiting.delete(num);
         if (want.roomId) {
-          this.state.channels[meta.sessionId] = { roomId: want.roomId, name: meta.sessionName ?? "", closed: false };
+          // the user's own channel becomes this session's; it is not "unpublished" just because the daemon has not caught up yet
+          this.state.channels[meta.sessionId] = { roomId: want.roomId, name: want.channelName ?? meta.sessionName ?? "", closed: false };
+          this.binding.add(meta.sessionId);
           this.save();
         }
         await this.daemon.request({ type: "publish", sessionId: meta.sessionId, on: true });
@@ -244,12 +263,13 @@ export class Bridge {
       }
       const rec = this.state.channels[meta.sessionId];
       if (meta.published) {
+        this.binding.delete(meta.sessionId);
         if (!rec || rec.closed || !rec.rootId) {
           await this.openChannel(meta);
         } else {
           await this.refreshChannel(meta, rec);
         }
-      } else if (rec && !rec.closed) {
+      } else if (rec && !rec.closed && !this.binding.has(meta.sessionId)) {
         await this.closeChannel(meta.sessionId, rec, meta);
       }
     }
@@ -281,7 +301,12 @@ export class Bridge {
   /** Put the configured users (default: the allowed user) into a channel the bridge just made; a refusal is logged, not fatal. */
   private async addUsers(roomId: string): Promise<void> {
     for (const user of this.settings.addUsers) {
-      await this.adapter.addMember(roomId, user).catch((err: unknown) => this.log(`could not add user ${user} to a channel: ${err instanceof Error ? err.message : String(err)}`));
+      await this.adapter.addMember(roomId, user).catch((err: unknown) => {
+        const why = err instanceof Error ? err.message : String(err);
+        if (!/already/i.test(why)) {
+          this.log(`could not add user ${user} to a channel: ${why}`);
+        }
+      });
     }
   }
 
@@ -294,6 +319,7 @@ export class Bridge {
         await this.adapter.unarchiveRoom(rec.roomId);
       }
       rec.closed = false;
+      await this.addUsers(rec.roomId); // a channel from before addUsers existed, or one the user left, has the users again
     } else {
       const name = await this.uniqueChannelName(wanted);
       const room = await this.adapter.createRoom(this.groupId, name, "starting");
@@ -343,13 +369,13 @@ export class Bridge {
     }
   }
 
-  private async closeChannel(sessionId: string, rec: ChannelRecord, meta: SessionMeta): Promise<void> {
+  private async closeChannel(sessionId: string, rec: ChannelRecord, meta: SessionMeta | undefined, why = "This session is no longer published. /publish in toriel shows it again."): Promise<void> {
     this.stopTyping(rec.roomId);
     rec.closed = true;
     this.save();
     this.lastLabel.delete(sessionId);
     if (rec.rootId) {
-      await this.adapter.edit(rec.roomId, rec.rootId, `**closed** · ${meta.sessionName ?? rec.name}\nThis session is no longer published. /publish in toriel shows it again.`).catch(() => undefined);
+      await this.adapter.edit(rec.roomId, rec.rootId, `**closed** · ${meta?.sessionName ?? rec.name}\n${why}`).catch(() => undefined);
     }
     await this.adapter.setDescription(rec.roomId, "closed").catch(() => undefined);
     await this.adapter.archiveRoom(rec.roomId);
@@ -443,7 +469,8 @@ export class Bridge {
       emojis = ["white_check_mark", "x"];
     } else if (method === "select") {
       const options = req.options ?? [];
-      const lines = options.map((o, i) => `${i + 1}. ${o}`);
+      // an extension that numbered its own rows (ask_user_question) would show every number twice (chat renders a list's numbers itself)
+      const lines = optionsNumberedAlready(options) ? options : options.map((o, i) => `${i + 1}. ${o}`);
       body = `**${meta.sessionName ?? rec.name} asks:**\n\`\`\`\n${title}\n\`\`\`\n${lines.join("\n")}\n\nReact with the number, or write it.`;
       emojis = NUMBER_EMOJI.slice(0, Math.min(options.length, NUMBER_EMOJI.length));
     } else {
@@ -527,7 +554,7 @@ export class Bridge {
 
   private async onChat(e: ChatEvent): Promise<void> {
     if (e.type === "reaction") {
-      if (!e.added || e.userId !== this.settings.allowedUser) {
+      if (!e.added || !this.settings.allowedUsers.includes(e.userId)) {
         return;
       }
       for (const d of this.dialogs.values()) {
@@ -539,21 +566,39 @@ export class Bridge {
       return;
     }
     if (e.type === "room") {
-      if (e.change === "created" && e.by === this.settings.allowedUser && e.room.id !== this.state.inboxRoomId && !Object.values(this.state.channels).some((c) => c.roomId === e.room.id)) {
+      if (e.change === "created" && this.settings.allowedUsers.includes(e.by) && e.room.id !== this.state.inboxRoomId && !Object.values(this.state.channels).some((c) => c.roomId === e.room.id)) {
         this.emptyChannels.set(e.room.id, e.room.name);
         this.log(`channel ${e.room.name} made in chat: a session starts with its first message`);
         await this.adapter.joinRoom(e.room.id).catch(() => undefined);
+      } else if (e.change === "renamed" && this.settings.allowedUsers.includes(e.by)) {
+        await this.renamedInChat(e.room.id, e.room.name);
       }
       return;
     }
     await this.onMessage(e.message);
   }
 
+  /** A channel the user renamed in chat renames its session (My Toriel Room from my-toriel-room); the channel then keeps the user's spelling until the session is renamed. */
+  private async renamedInChat(roomId: string, channelName: string): Promise<void> {
+    const entry = Object.entries(this.state.channels).find(([, c]) => c.roomId === roomId && !c.closed);
+    const meta = entry ? this.metas.find((x) => x.sessionId === entry[0]) : undefined;
+    if (!entry || !meta || entry[1].name === channelName) {
+      return;
+    }
+    entry[1].name = channelName;
+    this.save();
+    const name = sessionNameFromChannel(channelName);
+    if (name && name !== meta.sessionName) {
+      await this.daemon.request({ type: "rename", session: meta.id, name });
+      this.log(`session ${meta.id} renamed to ${name} from its channel`);
+    }
+  }
+
   private async onMessage(m: ChatMessage): Promise<void> {
     if (m.authorId === this.adapter.selfId) {
       return;
     }
-    if (m.authorId !== this.settings.allowedUser) {
+    if (!this.settings.allowedUsers.includes(m.authorId)) {
       this.log(`ignored a message from user ${m.authorId}`); // the actor id only, never the content
       return;
     }
@@ -566,9 +611,9 @@ export class Bridge {
       return;
     }
     if (this.emptyChannels.has(m.roomId)) {
-      const name = sessionNameFromChannel(this.emptyChannels.get(m.roomId) ?? "");
+      const channelName = this.emptyChannels.get(m.roomId) ?? "";
       this.emptyChannels.delete(m.roomId);
-      await this.startSession(text, { roomId: m.roomId, name });
+      await this.startSession(text, { roomId: m.roomId, channelName, name: sessionNameFromChannel(channelName) });
       return;
     }
     const entry = Object.entries(this.state.channels).find(([, c]) => c.roomId === m.roomId && !c.closed);
@@ -614,12 +659,12 @@ export class Bridge {
   }
 
   /** A message in the inbox, or the first message in a channel the user made: start a session with it and publish it. */
-  private async startSession(text: string, opts: { inbox?: boolean; roomId?: string; name?: string }): Promise<void> {
+  private async startSession(text: string, opts: { inbox?: boolean; roomId?: string; channelName?: string; name?: string }): Promise<void> {
     const cwd = this.settings.defaultCwd ? this.settings.defaultCwd.replace(/^~(?=\/|$)/, os.homedir()) : os.homedir();
     const spawned = (await this.daemon.request({ type: "spawn", cwd, ...(opts.name ? { name: opts.name } : {}), ...(this.settings.defaultModel ? { model: this.settings.defaultModel } : {}) })) as { sessionId: number };
     // a spawn attaches the spawning controller, which would lock the desktop out of the session: the bridge only watches and prompts
     await this.daemon.request({ type: "detach", session: spawned.sessionId }).catch(() => undefined);
-    this.awaiting.set(spawned.sessionId, { roomId: opts.roomId, inbox: opts.inbox });
+    this.awaiting.set(spawned.sessionId, { roomId: opts.roomId, channelName: opts.channelName, inbox: opts.inbox });
     this.echoes.push(text);
     await this.daemon.request({ type: "prompt", session: spawned.sessionId, message: text, source: "chatto" });
     this.log(`session ${spawned.sessionId} started from chat`);
