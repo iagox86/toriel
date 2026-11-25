@@ -5,6 +5,8 @@ export interface ChatRoom {
   id: string;
   name: string;
   archived: boolean;
+  /** The room's description, when the server gave it (the bridge keeps a session tag in it). */
+  description?: string;
 }
 
 export interface ChatMessage {

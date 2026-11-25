@@ -47,6 +47,16 @@ export interface BridgeDeps {
   log: (text: string) => void;
 }
 
+/**
+ * The link from a channel to its session lives in the channel itself: its description ends with `[toriel:<session uuid>]`, so the
+ * bridge can tell which channel is whose from the chat server alone (after its own state file was lost, say) and notice a channel
+ * whose tag disagrees with what it believes. The description is the one place every chat client shows and the bot can always set.
+ */
+export const sessionTag = (sessionId: string): string => `[toriel:${sessionId}]`;
+export function sessionFromDescription(description: string | undefined): string | undefined {
+  return /\[toriel:([\w-]+)\]\s*$/.exec(description ?? "")?.[1];
+}
+
 /** `my-toriel-room` -> `My Toriel Room` (a session name from a channel name). */
 export function sessionNameFromChannel(channel: string): string {
   return channel
@@ -152,12 +162,40 @@ export class Bridge {
     this.groupId = group;
     await this.ensureInbox();
     // channels left open by a bridge that did not get to clean up (a crash, a kill) are cleared: the published sessions reopen theirs
+    await this.reconcile();
     await this.closeAll("toriel was restarted; this channel reopens when the session is published and listed again.");
     this.daemon.onMessage((msg) => this.run(`daemon ${msg.type}`, () => this.onDaemon(msg)));
     this.adapter.onEvent((e) => this.run(`chat ${e.type}`, () => this.onChat(e)));
     await this.daemon.request({ type: "observe_dialogs" });
     await this.daemon.request({ type: "chat_status", up: true });
     this.log(`bridge up: group ${this.settings.group}, ${Object.keys(this.state.channels).length} channel(s) known`);
+  }
+
+  /** Rebuild and check the session-to-channel map from the tags in the channels' descriptions. */
+  private async reconcile(): Promise<void> {
+    const rooms = await this.adapter.listRooms(this.groupId);
+    for (const room of rooms) {
+      const uuid = sessionFromDescription(room.description);
+      if (!uuid) {
+        continue;
+      }
+      const have = this.state.channels[uuid];
+      if (!have) {
+        this.state.channels[uuid] = { roomId: room.id, name: room.name, closed: false };
+        this.log(`channel ${room.name} adopted for session ${uuid} from its tag`);
+      } else if (have.roomId !== room.id) {
+        this.log(`channel ${room.name} is tagged for session ${uuid}, which the bridge keeps in another channel: left alone`);
+      }
+    }
+    for (const [uuid, rec] of Object.entries(this.state.channels)) {
+      const room = rooms.find((r) => r.id === rec.roomId);
+      const tagged = room ? sessionFromDescription(room.description) : undefined;
+      if (tagged !== undefined && tagged !== uuid) {
+        this.log(`channel ${rec.name} is tagged for session ${tagged}, not ${uuid}: the bridge forgets that link`);
+        delete this.state.channels[uuid];
+      }
+    }
+    this.save();
   }
 
   /** Close (edit and archive) every open channel; they reopen when their sessions are listed as published again. */
@@ -295,7 +333,7 @@ export class Bridge {
   }
 
   private rootText(meta: SessionMeta, name: string): string {
-    return `**${meta.sessionName ?? name}**\n\`${meta.cwd}\` · ${meta.model}\nWrite here to message this session. Dialogs show up with reactions to click.`;
+    return `**${meta.sessionName ?? name}**\n\`${meta.cwd}\` · ${meta.model}\nWrite here to message this session. Dialogs show up with reactions to click.\n_session ${meta.sessionId}_`;
   }
 
   /** Put the configured users (default: the allowed user) into a channel the bridge just made; a refusal is logged, not fatal. */
@@ -322,7 +360,7 @@ export class Bridge {
       await this.addUsers(rec.roomId); // a channel from before addUsers existed, or one the user left, has the users again
     } else {
       const name = await this.uniqueChannelName(wanted);
-      const room = await this.adapter.createRoom(this.groupId, name, "starting");
+      const room = await this.adapter.createRoom(this.groupId, name, `starting ${sessionTag(sessionId)}`);
       rec = { roomId: room.id, name, closed: false };
       this.state.channels[sessionId] = rec;
       await this.addUsers(room.id);
@@ -365,7 +403,7 @@ export class Bridge {
     const label = this.stateLabel(meta);
     if (this.lastLabel.get(sessionId) !== label) {
       this.lastLabel.set(sessionId, label);
-      await this.adapter.setDescription(rec.roomId, `${label} · ${meta.cwd} · ${meta.model}`).catch(() => undefined);
+      await this.adapter.setDescription(rec.roomId, `${label} · ${meta.cwd} · ${meta.model} ${sessionTag(sessionId)}`).catch(() => undefined);
     }
   }
 
@@ -377,7 +415,7 @@ export class Bridge {
     if (rec.rootId) {
       await this.adapter.edit(rec.roomId, rec.rootId, `**closed** · ${meta?.sessionName ?? rec.name}\n${why}`).catch(() => undefined);
     }
-    await this.adapter.setDescription(rec.roomId, "closed").catch(() => undefined);
+    await this.adapter.setDescription(rec.roomId, `closed ${sessionTag(sessionId)}`).catch(() => undefined);
     await this.adapter.archiveRoom(rec.roomId);
     this.log(`channel ${rec.name} closed`);
   }

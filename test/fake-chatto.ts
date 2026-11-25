@@ -36,7 +36,7 @@ export class FakeChat implements ChatAdapter {
     return this.groups.get(name);
   }
   async listRooms(): Promise<ChatRoom[]> {
-    return [...this.rooms.values()].filter((r) => !r.archived).map(({ id, name, archived }) => ({ id, name, archived }));
+    return [...this.rooms.values()].filter((r) => !r.archived).map(({ id, name, archived, description }) => ({ id, name, archived, description }));
   }
   async createRoom(_group: string, name: string, description: string): Promise<ChatRoom> {
     if ([...this.rooms.values()].some((r) => r.name.toLowerCase() === name.toLowerCase())) {

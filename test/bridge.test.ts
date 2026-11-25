@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { Bridge, channelNameFor, messageText, sessionNameFromChannel, splitBody } from "../src/bridge/bridge.ts";
+import { Bridge, channelNameFor, messageText, sessionFromDescription, sessionNameFromChannel, splitBody } from "../src/bridge/bridge.ts";
 import { readToken } from "../src/bridge/token.ts";
 import { chatDisabledReason } from "../src/daemon-chat.ts";
 import { type ChattoSettings, validChatto } from "../src/settings.ts";
@@ -274,6 +274,52 @@ describe("the bridge: more than one allowed user, renames, numbered options", ()
     await t.bridge.idle();
     assert.equal(made.archived, false);
     assert.ok(t.chat.postsIn(made.id).some((p) => /Ron Test/.test(p.body)));
+  });
+});
+
+describe("the bridge: a channel carries its session's id", () => {
+  it("tags the description with the session uuid from the start, through every status change and a close, and shows it in the first message", async () => {
+    const t = await setup();
+    const room = await openSession(t);
+    assert.equal(sessionFromDescription(room.description), "uuid-1");
+    t.daemon.sessions([meta({ streaming: true })]);
+    await t.bridge.idle();
+    assert.match(room.description, /^working .*\[toriel:uuid-1\]$/);
+    assert.match(t.chat.postsIn(room.id)[0]?.body ?? "", /_session uuid-1_/);
+    t.daemon.sessions([meta({ published: undefined })]);
+    await t.bridge.idle();
+    assert.equal(room.description, "closed [toriel:uuid-1]");
+    assert.equal(sessionFromDescription("no tag here"), undefined);
+    assert.equal(sessionFromDescription("[toriel:a] then more"), undefined, "the tag is the end of the description");
+  });
+  it("finds its channels again from the tags when its own state file is lost, instead of making a second one", async () => {
+    const t = await setup();
+    const room = await openSession(t);
+    // a bridge that died without clearing, and whose state file is gone
+    fs.rmSync(t.stateFile);
+    const d = new FakeDaemon();
+    const lost = new Bridge({ adapter: t.chat, daemon: d, settings, stateFile: t.stateFile, log: () => undefined });
+    await lost.start();
+    d.sessions([meta()]);
+    await lost.idle();
+    assert.equal([...t.chat.rooms.values()].filter((r) => r.name.startsWith("fix-the-build")).length, 1);
+    assert.equal(room.archived, false);
+    assert.equal(sessionFromDescription(room.description), "uuid-1");
+  });
+  it("forgets a link the channel's own tag contradicts, and leaves a channel tagged for a session it keeps elsewhere alone", async () => {
+    const t = await setup();
+    const room = await openSession(t);
+    // someone (or a copy of the state file) points session uuid-2 at the channel of uuid-1
+    const state = JSON.parse(fs.readFileSync(t.stateFile, "utf8"));
+    state.channels["uuid-2"] = { roomId: room.id, name: room.name, closed: false };
+    fs.writeFileSync(t.stateFile, JSON.stringify(state));
+    const logs: string[] = [];
+    const again = new Bridge({ adapter: t.chat, daemon: new FakeDaemon(), settings, stateFile: t.stateFile, log: (l) => logs.push(l) });
+    await again.start();
+    assert.ok(logs.some((l) => l.includes("tagged for session uuid-1, not uuid-2")));
+    const after = JSON.parse(fs.readFileSync(t.stateFile, "utf8"));
+    assert.equal(after.channels["uuid-2"], undefined);
+    assert.equal(after.channels["uuid-1"].roomId, room.id);
   });
 });
 

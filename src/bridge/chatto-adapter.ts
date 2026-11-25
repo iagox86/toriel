@@ -15,7 +15,7 @@ interface Server {
   createMessage(dest: { roomId: string; threadRootId: string }, body: string, opts?: { inReplyTo?: string }): Promise<{ id: string }>;
   addReaction(msg: { roomId: string; messageId: string }, emoji: string): Promise<void>;
   refreshTyping(dest: { roomId: string; threadRootId: string }): Promise<void>;
-  roomList: { rooms: Array<{ id: string; name: string }>; roomGroups: Array<{ id: string; name: string; roomIds: string[] }> };
+  roomList: { rooms: Array<{ id: string; name: string; description?: string | null }>; roomGroups: Array<{ id: string; name: string; roomIds: string[] }> };
 }
 
 interface RealtimeEvent {
@@ -50,7 +50,7 @@ export async function connectChatto(opts: ChattoConnect): Promise<ChatAdapter> {
     const byId = new Map(server.roomList.rooms.map((r) => [r.id, r]));
     return (g?.roomIds ?? []).flatMap((id) => {
       const r = byId.get(id);
-      return r ? [{ id, name: r.name, archived: false }] : [];
+      return r ? [{ id, name: r.name, archived: false, description: r.description ?? undefined }] : [];
     });
   };
   const rediff = (by: string, change: "created" | "renamed" | "archived" | "unarchived"): void => {
