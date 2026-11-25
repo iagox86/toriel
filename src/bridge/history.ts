@@ -1,12 +1,31 @@
 // A session's past as chat posts (ticket 279): what the bridge shows in a channel for the turns that happened before the channel existed,
 // or while it was closed. Pure: the bridge fetches the digest (`read_history`) and posts what this returns.
 import type { HistoryTurn } from "../shared.ts";
+import { parseLocalCommand } from "../local-command.ts";
 
 /** How many turns a new channel is given at most, and the most text (characters) the whole past may come to. */
 export const HISTORY_TURNS = 40;
 export const HISTORY_CHARS = 30_000;
 /** A typed prompt is quoted, not copied: a long one is cut here. */
 const QUOTE_CHARS = 500;
+
+/**
+ * A user turn as a post. toriel injects a `!command`'s result as a user message in a wrapper meant for the model
+ * (`local-command.ts`); like the desktop's transcript, this shows the command and its output instead of the wrapper. `who` is
+ * `typed in toriel` live, `you` for the past (which does not know where it was typed).
+ */
+export function quoteUser(text: string, who: string): string {
+  const local = parseLocalCommand(text);
+  if (local) {
+    const status = local.cancelled ? "stopped" : local.exitCode === undefined ? "" : `exit ${local.exitCode}`;
+    const out = local.output.trim().replaceAll("```", "ˋˋˋ");
+    const body = out.length > QUOTE_CHARS ? `${out.slice(0, QUOTE_CHARS)}…` : out;
+    return `> **ran in toriel:** \`${oneLineCmd(local.command)}\`${status ? ` (${status})` : ""}${body ? `\n\`\`\`\n${body}\n\`\`\`` : ""}`;
+  }
+  return `> **${who}:** ${text.length > QUOTE_CHARS ? `${text.slice(0, QUOTE_CHARS)}…` : text}`;
+}
+
+const oneLineCmd = (c: string): string => c.replace(/\s+/g, " ").trim().replaceAll("`", "ˋ");
 
 const tools = (n: number): string => `_${n} tool${n === 1 ? "" : "s"} ran_`;
 
@@ -26,7 +45,7 @@ export function renderHistory(turns: readonly HistoryTurn[], maxChars = HISTORY_
     } else if (t.role === "user") {
       const text = t.text.trim();
       if (text) {
-        posts.push({ text: `> **you:** ${text.length > QUOTE_CHARS ? `${text.slice(0, QUOTE_CHARS)}…` : text}`, turns: 1 });
+        posts.push({ text: quoteUser(text, "you"), turns: 1 });
       }
     } else {
       const text = t.text.trim();

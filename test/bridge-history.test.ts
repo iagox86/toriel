@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { Bridge } from "../src/bridge/bridge.ts";
 import { renderHistory } from "../src/bridge/history.ts";
+import { formatLocalCommand } from "../src/local-command.ts";
 import type { ChattoSettings } from "../src/settings.ts";
 import type { HistoryTurn } from "../src/shared.ts";
 import { digestHistory } from "../src/daemon-history.ts";
@@ -69,6 +70,12 @@ describe("the digest of a conversation", () => {
 });
 
 describe("history as posts", () => {
+  it("shows an injected !command as the command and its output, not the wrapper meant for the model", () => {
+    const wrapped = formatLocalCommand("head -n1 /etc/passwd", { output: "root:x:0:0\n", exitCode: 0, cancelled: false, truncated: false });
+    const { posts } = renderHistory([turn("user", wrapped)]);
+    assert.deepEqual(posts, ["> **ran in toriel:** `head -n1 /etc/passwd` (exit 0)\n```\nroot:x:0:0\n```"]);
+    assert.ok(!posts[0].includes("local-command"));
+  });
   it("quotes what was typed, shows replies with the tools run since the last one, and says where it was compacted or interrupted", () => {
     const { posts, shown, dropped } = renderHistory([
       turn("user", "fix the build"),

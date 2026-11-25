@@ -7,6 +7,7 @@ import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { Bridge } from "../src/bridge/bridge.ts";
 import { CHAT_COMMANDS, CHAT_ONLY, chatHelp, parseChatCommand, torielCommandNames } from "../src/bridge/chat-commands.ts";
+import { formatLocalCommand } from "../src/local-command.ts";
 import type { ChattoSettings } from "../src/settings.ts";
 import { FakeChat, FakeDaemon, meta, RON } from "./fake-chatto.ts";
 
@@ -89,6 +90,25 @@ describe("commands never reach the agent", () => {
     assert.equal(t.daemon.of("prompt").length, 0);
     assert.ok(t.chat.postsIn(t.room.id).some((p) => /Running `echo hello`/.test(p.body)));
     assert.match(t.last(), /exit 0\n```\nhello\n```/);
+  });
+
+  it("does not post the wrapper the daemon injects: not for a !! the bridge ran, and a console ! shows as a command and output", async () => {
+    const t = await setup();
+    const inject = (command: string, output: string) =>
+      t.daemon.push({ type: "event", session: 1, event: { type: "message_end", message: { role: "user", content: formatLocalCommand(command, { output, exitCode: 0, cancelled: false, truncated: false }) } } });
+    t.daemon.answers.set("bash", { output: "hello\n", exitCode: 0, cancelled: false, truncated: false });
+    await t.write("!!echo hello");
+    inject("echo hello", "hello\n");
+    await new Promise((r) => setImmediate(r));
+    await t.bridge.idle();
+    const before = t.chat.postsIn(t.room.id).length;
+    assert.ok(!t.chat.postsIn(t.room.id).some((p) => p.body.includes("local-command")));
+    inject("ls /tmp", "a\nb\n");
+    await t.bridge.idle();
+    const posts = t.chat.postsIn(t.room.id);
+    assert.equal(posts.length, before + 1);
+    assert.match(posts[posts.length - 1].body, /ran in toriel:\*\* `ls \/tmp` \(exit 0\)\n```\na\nb\n```/);
+    assert.ok(!posts.some((p) => p.body.includes("local-command")));
   });
 
   it("a !! command does not hold up the bridge, and !abort stops it", async () => {
@@ -194,7 +214,7 @@ describe("the commands chat has", () => {
     const ask = t.chat.postsIn(t.room.id).at(-1);
     assert.ok(ask);
     assert.match(ask.body, /2\. prov\/b/);
-    assert.deepEqual([...ask.reactions].sort(), ["one", "three", "two"]);
+    assert.deepEqual([...ask.reactions].sort(), ["one", "three", "two", "x"]);
     t.chat.react$(t.room.id, ask.id, "two");
     await t.bridge.idle();
     assert.deepEqual(t.daemon.of("model").at(-1), { type: "model", session: 1, query: "prov/b" });
@@ -203,6 +223,24 @@ describe("the commands chat has", () => {
     await t.write("3");
     assert.deepEqual(t.daemon.of("model").at(-1), { type: "model", session: 1, query: "prov/c" });
     assert.equal(t.daemon.of("prompt").length, 0, "a typed number answers the question, it is not a prompt");
+  });
+
+  it("a question can be dismissed with the red cross or by writing cancel, and nothing is run", async () => {
+    const t = await setup();
+    t.daemon.answers.set("model", { current: "prov/a", models: ["prov/a", "prov/b"] });
+    await t.write("!model");
+    const ask = t.chat.postsIn(t.room.id).at(-1);
+    assert.ok(ask);
+    t.chat.react$(t.room.id, ask.id, "x");
+    await t.bridge.idle();
+    assert.match(t.chat.postsIn(t.room.id).find((p) => p.id === ask.id)?.body ?? "", /→ cancelled/);
+    assert.equal(ask.reactions.size, 0);
+    assert.equal(t.daemon.of("model").length, 1, "nothing was switched");
+    await t.write("!model");
+    const again = t.chat.postsIn(t.room.id).at(-1);
+    await t.write("cancel");
+    assert.match(t.chat.postsIn(t.room.id).find((p) => p.id === again?.id)?.body ?? "", /→ cancelled/);
+    assert.equal(t.daemon.of("prompt").length, 0, "writing cancel is not a prompt");
   });
 
   it("a long model list is posted as text, not asked", async () => {

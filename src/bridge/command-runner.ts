@@ -24,6 +24,8 @@ export interface CommandEnv {
   prompt(text: string): Promise<void>;
   /** The sessions (daemon numbers) with a `!!` shell command running, kept by the bridge. */
   shells: Set<number>;
+  /** The `!!` command lines the bridge ran: the injected result is told apart from one typed in toriel by this. */
+  shellCommands: string[];
 }
 
 /** The longest a `!!` command may run (the desktop's limit for `!`). */
@@ -103,6 +105,10 @@ async function runShell(cmd: ChatCommand, env: CommandEnv): Promise<void> {
   const session = await live(env);
   env.shells.add(session);
   env.shells.add(m.id);
+  env.shellCommands.push(command);
+  if (env.shellCommands.length > 20) {
+    env.shellCommands.shift();
+  }
   await env.say(`Running \`${command}\` (\`!abort\` stops it)…`);
   void env.daemon
     .request({ type: "bash", session, command }, SHELL_TIMEOUT_MS)
