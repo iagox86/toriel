@@ -469,6 +469,8 @@ export async function handleClear(
   );
   ctx.hub.broadcastSessions();
   await sendHistory(ctx, socket, s);
+  // the other controllers (the chat bridge) hear that the conversation went; the one that asked flashes its own line
+  ctx.hub.broadcast({ type: "notice", session: s.id, text: "conversation cleared: same session, empty conversation (the old contents are in the trash)" });
   res(true, undefined, { removed: result.removed });
 }
 

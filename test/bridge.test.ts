@@ -386,6 +386,58 @@ describe("the bridge: the group belongs to toriel", () => {
   });
 });
 
+describe("the bridge: commands that change a session say so in its channel", () => {
+  const lines = (t: Awaited<ReturnType<typeof setup>>, roomId: string) => t.chat.postsIn(roomId).map((p) => p.body);
+
+  it("posts the notices the daemon sends (modes, schedules, grants, a cleared conversation), for a published session only", async () => {
+    const t = await setup();
+    const room = await openSession(t);
+    t.daemon.push({ type: "notice", session: 1, text: "auto mode ON: permission prompts are allowed without asking", durable: true });
+    t.daemon.push({ type: "notice", session: 1, text: "conversation cleared: same session, empty conversation (the old contents are in the trash)" });
+    t.daemon.sessions([meta(), meta({ id: 2, sessionId: "uuid-2", sessionName: "Other", published: undefined })]);
+    t.daemon.push({ type: "notice", session: 2, text: "not mine" });
+    await t.bridge.idle();
+    const said = lines(t, room.id);
+    assert.ok(said.includes("ℹ auto mode ON: permission prompts are allowed without asking"));
+    assert.ok(said.some((b) => b.startsWith("ℹ conversation cleared")));
+    assert.equal(t.chat.posts.some((p) => p.body.includes("not mine")), false);
+  });
+  it("says when the model, thinking level or directory changed, and when the session crashed, but not when the list merely repeats", async () => {
+    const t = await setup();
+    const room = await openSession(t, { model: "prov/a", thinkingLevel: "low" });
+    const before = t.chat.postsIn(room.id).length;
+    t.daemon.sessions([meta({ model: "prov/a", thinkingLevel: "low" })]);
+    await t.bridge.idle();
+    assert.equal(t.chat.postsIn(room.id).length, before, "nothing changed, nothing said");
+    t.daemon.sessions([meta({ model: "prov/b", thinkingLevel: "high", cwd: "/elsewhere" })]);
+    await t.bridge.idle();
+    t.daemon.sessions([meta({ model: "prov/b", thinkingLevel: "high", cwd: "/elsewhere", dead: true })]);
+    await t.bridge.idle();
+    const said = lines(t, room.id);
+    assert.ok(said.includes("ℹ model is now prov/b"));
+    assert.ok(said.includes("ℹ thinking level is now high"));
+    assert.ok(said.includes("ℹ moved to /elsewhere"));
+    assert.ok(said.some((b) => b.includes("stopped unexpectedly")));
+  });
+  it("says when context is compacted, when a run is interrupted, and when a scheduled prompt fires", async () => {
+    const t = await setup();
+    const room = await openSession(t);
+    const ev = (event: Record<string, unknown>) => t.daemon.push({ type: "event", session: 1, event });
+    ev({ type: "compaction_start" });
+    ev({ type: "compaction_end", reason: "manual" });
+    ev({ type: "message_end", message: { role: "assistant", content: [], stopReason: "aborted" } });
+    ev({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "half an answer" }], stopReason: "aborted" } });
+    ev({ type: "message_end", message: { role: "user", content: '[scheduled #3 "nightly", run 2/20]: check the build' } });
+    await t.bridge.idle();
+    const said = lines(t, room.id);
+    assert.ok(said.includes("ℹ compacting the context…"));
+    assert.ok(said.includes("ℹ context compacted"));
+    assert.ok(said.includes("⏹ interrupted"));
+    assert.ok(said.includes("half an answer\n\n⏹ interrupted"));
+    assert.ok(said.includes('⏰ [scheduled #3 "nightly", run 2/20]: check the build'));
+  });
+});
+
 describe("the bridge: output", () => {
   it("posts the assistant's text with a count of the tools that ran, and shows typing while it works", async () => {
     const t = await setup();

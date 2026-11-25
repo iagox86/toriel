@@ -272,8 +272,13 @@ export class Bridge {
   private async onDaemon(msg: DaemonMessage): Promise<void> {
     switch (msg.type) {
       case "sessions":
+        await this.noteChanges(this.metas, msg.sessions);
         this.metas = msg.sessions;
         await this.syncSessions();
+        return;
+      case "notice":
+        // what toriel says about a session outside its transcript (a mode switched, a schedule that ended, a grant that answered a prompt)
+        await this.say(msg.session, msg.text);
         return;
       case "event":
         await this.onPiEvent(msg.session, msg.event);
@@ -286,6 +291,41 @@ export class Bridge {
         return;
       default:
         return;
+    }
+  }
+
+  /** One short line in a published session's channel, for something that happened that the transcript does not show. */
+  private async say(session: number, text: string): Promise<void> {
+    const rec = this.channelOf(this.metaOf(session));
+    if (rec && text.trim()) {
+      await this.postLong(rec.roomId, `ℹ ${text.trim()}`);
+    }
+  }
+
+  /** The commands that change a session without a transcript line (/model, /think, /cd, a crash) say so in its channel. */
+  private async noteChanges(before: SessionMeta[], after: SessionMeta[]): Promise<void> {
+    for (const now of after) {
+      const was = before.find((m) => m.sessionId !== undefined && m.sessionId === now.sessionId);
+      const rec = this.channelOf(now);
+      if (!was || !rec) {
+        continue;
+      }
+      const lines: string[] = [];
+      if (now.model !== was.model && was.model !== "loading" && now.model !== "loading") {
+        lines.push(`model is now ${now.model}`);
+      }
+      if (now.thinkingLevel !== undefined && was.thinkingLevel !== undefined && now.thinkingLevel !== was.thinkingLevel) {
+        lines.push(`thinking level is now ${now.thinkingLevel}`);
+      }
+      if (now.cwd !== was.cwd) {
+        lines.push(`moved to ${now.cwd}`);
+      }
+      if (now.dead && !was.dead) {
+        lines.push("⚠ the session stopped unexpectedly; a message here starts it again");
+      }
+      for (const line of lines) {
+        await this.postLong(rec.roomId, `ℹ ${line}`);
+      }
     }
   }
 
@@ -476,9 +516,11 @@ export class Bridge {
     } else if (type === "message_end") {
       const message = event.message as { role?: string; content?: unknown; errorMessage?: string } | undefined;
       const text = messageText(message).trim();
-      if (message?.role === "assistant") {
+      if (message?.role === "assistant" && (message as { stopReason?: string }).stopReason === "aborted" && !text) {
+        await this.adapter.post(rec.roomId, "⏹ interrupted");
+      } else if (message?.role === "assistant") {
         const tools = this.toolsRun.get(session) ?? 0;
-        const parts = [text, message.errorMessage ? `⚠ ${message.errorMessage}` : ""].filter(Boolean);
+        const parts = [text, message.errorMessage ? `⚠ ${message.errorMessage}` : "", (message as { stopReason?: string }).stopReason === "aborted" ? "⏹ interrupted" : ""].filter(Boolean);
         if (parts.length > 0) {
           if (tools > 0) {
             parts.push(`_${tools} tool${tools === 1 ? "" : "s"} ran_`);
@@ -486,6 +528,8 @@ export class Bridge {
           }
           await this.postLong(rec.roomId, parts.join("\n\n"));
         }
+      } else if (message?.role === "user" && /^\[scheduled /.test(text)) {
+        await this.postLong(rec.roomId, `⏰ ${text.length > 300 ? `${text.slice(0, 300)}…` : text}`);
       } else if (message?.role === "user" && text) {
         const echo = this.echoes.indexOf(text);
         if (echo >= 0) {
@@ -494,6 +538,11 @@ export class Bridge {
           await this.postLong(rec.roomId, `> **typed in toriel:** ${text.length > 500 ? `${text.slice(0, 500)}…` : text}`);
         }
       }
+    } else if (type === "compaction_start") {
+      await this.adapter.post(rec.roomId, "ℹ compacting the context…");
+    } else if (type === "compaction_end") {
+      const failed = (event as { errorMessage?: unknown }).errorMessage;
+      await this.adapter.post(rec.roomId, failed ? `ℹ ⚠ compaction failed: ${String(failed)}` : "ℹ context compacted");
     } else if (type === "agent_settled") {
       this.stopTyping(rec.roomId);
       const tools = this.toolsRun.get(session) ?? 0;
