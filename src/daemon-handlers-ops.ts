@@ -164,7 +164,20 @@ export function handlePlanMode(ctx: DaemonContext, cmd: Cmd<"plan_mode">, res: R
   res(true, undefined, { on });
 }
 
-const autoNotice = (on: boolean, until: number | undefined): string =>
+/**
+ * Publish a session to chat, or stop (ticket 269). Keyed by UUID and only a flag: it never wakes a sleeping session, and the chat
+ * bridge (when there is one) reacts to the change. Chat itself has no way to publish.
+ */
+export function handlePublish(ctx: DaemonContext, cmd: Cmd<"publish">, res: Responder): void {
+  const on = cmd.on ?? !ctx.published.has(cmd.sessionId);
+  if (ctx.published.set(cmd.sessionId, on)) {
+    log(`session ${cmd.sessionId} ${on ? "published to chat" : "no longer published"}`);
+    ctx.hub.broadcastSessions();
+  }
+  res(true, undefined, { published: on });
+}
+
+const autoNotice =(on: boolean, until: number | undefined): string =>
   on
     ? `auto mode ON${until !== undefined ? ` until ${fmtClock(until, new Date())}` : ""}: permission prompts are allowed without asking, except the ones that always ask (credentials, destructive commands, pushes, writes outside the directory); /auto off ends it (shift+tab moves on to the next mode)`
     : "auto mode OFF: permission prompts ask again";

@@ -242,6 +242,7 @@ export async function removeSession(ctx: DaemonContext, s: DaemonSession | undef
     if (gone.length > 0) {
       log(`removed ${gone.length} schedule(s) of the deleted session ${uuid}`);
     }
+    ctx.published.set(uuid, false);
     const grants = ctx.grants.removeSession(uuid);
     if (grants.length > 0) {
       log(`removed ${grants.length} permission grant(s) of the deleted session ${uuid}`);

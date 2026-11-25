@@ -20,7 +20,7 @@ import { buildInfo } from "./build-id.ts";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { checkGatewaysAtStart } from "./litellm-models.ts";
 import { piAgentDir } from "./pi-dir.ts";
-import { LITELLM_CACHE_FILE, LOG, PERMISSIONS_FILE, PID_FILE, PROFILE, SCHEDULES_FILE, SANDBOX_TMP_DIR, SHARED_DIR, SOCK, TRASH_DIR } from "./config.ts";
+import { LITELLM_CACHE_FILE, LOG, PERMISSIONS_FILE, PID_FILE, PROFILE, PUBLISHED_FILE, SCHEDULES_FILE, SANDBOX_TMP_DIR, SHARED_DIR, SOCK, TRASH_DIR } from "./config.ts";
 import { BridgeTracker } from "./daemon-bridge.ts";
 import { ChildManager } from "./daemon-children.ts";
 import type { DaemonContext } from "./daemon-context.ts";
@@ -36,6 +36,7 @@ import { SessionRegistry } from "./daemon-session.ts";
 import { log } from "./log.ts";
 import { DEFAULT_GRANT_LIMITS, GrantStore } from "./permissions.ts";
 import { Presence } from "./presence.ts";
+import { PublishedStore } from "./published.ts";
 import { DEFAULT_LIMITS, Scheduler } from "./scheduler.ts";
 import { SubagentManager } from "./daemon-subagents.ts";
 import { pruneSessionState } from "./state-prune.ts";
@@ -60,7 +61,7 @@ function createContext(shutdown: () => void): DaemonContext {
   const registry = new SessionRegistry();
   const presence = new Presence();
   const usage = new Map<string, UsageReport>();
-  const hub = new ClientHub((socket) => sessionMetas(registry, presence, usage, socket, ctx.scheduler, ctx.grants, ctx.subagents.book, (id) => watchHeldReason(ctx.watches?.problem(id))), {
+  const hub = new ClientHub((socket) => sessionMetas(registry, presence, usage, socket, ctx.scheduler, ctx.grants, ctx.subagents.book, (id) => watchHeldReason(ctx.watches?.problem(id)), ctx.published), {
     type: "hello",
     protocol: PROTOCOL,
     build: buildInfo(),
@@ -118,7 +119,7 @@ function createContext(shutdown: () => void): DaemonContext {
     },
   );
   const naming = new DaemonNaming(registry, hub);
-  const ctx: DaemonContext = { registry, hub, children, presence, bridges, scheduler, watches: new WatchManager(scheduler, new FileWatcher()), grants, subagents: new SubagentManager(() => ctx, subagentLimits, subagentKeepMs(startSettings, process.env.TORIEL_SUBAGENT_KEEP_MS)), naming, shutdown };
+  const ctx: DaemonContext = { registry, hub, children, presence, bridges, scheduler, watches: new WatchManager(scheduler, new FileWatcher()), grants, published: new PublishedStore(PUBLISHED_FILE), subagents: new SubagentManager(() => ctx, subagentLimits, subagentKeepMs(startSettings, process.env.TORIEL_SUBAGENT_KEEP_MS)), naming, shutdown };
   // a session going idle is what a waiting schedule is looking for, and what starts a gap loop's countdown
   const autoNamer = new AutoNamer(naming, { log });
   children.onSettled = (s) => {
@@ -213,6 +214,7 @@ async function main(): Promise<void> {
   ctx.scheduler.start();
   ctx.watches?.sync(); // re-arm the file watches of the schedules the file brought back
   ctx.grants.load();
+  ctx.published.load();
   // timed grants lapse by themselves (the store never matches an expired one); this only says so
   const grantKeeper = setInterval(() => announceExpired(ctx, ctx.grants.sweep()), 30_000);
   grantKeeper.unref();

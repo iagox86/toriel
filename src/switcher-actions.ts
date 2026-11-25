@@ -584,6 +584,10 @@ export class SwitcherActions {
         const undo = call.opts.undo === true;
         this.groups.parked = withParked(this.groups, t.sessionId, !undo);
         saveGroups(this.groups);
+        if (!undo && t.published) {
+          // parking closes the chat channel and the session stays unpublished until /publish says otherwise (ticket 269)
+          await this.h.request({ type: "publish", sessionId: t.sessionId, on: false }).catch(() => undefined);
+        }
         this.refresh();
         this.h.switcher.hint = undo ? `${t.name} unparked` : `${t.name} parked (using it again unparks it)`;
       }),

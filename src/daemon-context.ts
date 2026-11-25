@@ -9,6 +9,7 @@ import type { WatchManager } from "./daemon-watch.ts";
 import type { SessionRegistry } from "./daemon-session.ts";
 import type { GrantStore } from "./permissions.ts";
 import type { Presence } from "./presence.ts";
+import type { PublishedStore } from "./published.ts";
 import type { Scheduler } from "./scheduler.ts";
 import type { SubagentManager } from "./daemon-subagents.ts";
 import type { ClientCommand } from "./shared.ts";
@@ -25,6 +26,8 @@ export interface DaemonContext {
   scheduler: Scheduler;
   /** File watches behind the "on change" schedules (board 98); absent in a context built without them. */
   watches?: WatchManager;
+  /** Sessions published to chat (ticket 269). */
+  published: PublishedStore;
   /** Permission grants (docs/permissions.md). */
   grants: GrantStore;
   /** Subagents started by the toriel_agent tool (docs/design.md item 9). */

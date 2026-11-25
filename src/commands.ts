@@ -278,6 +278,15 @@ export const SESSION_COMMANDS = [
   { name: "quit", description: "back to the session list",
     help: "Goes back to the list without stopping this session (use /park to also stop it)." },
   {
+    name: "publish",
+    description: "show this session in chat (a channel of its own); /publish off stops",
+    help: "Publishes the session to the chat bridge: it gets a channel, the transcript follows there, and you can answer its questions and reply from chat. Nothing is published unless you ask, and chat cannot publish. /publish off closes the channel and stops; /park and /delete also stop it, and it stays off until you run /publish again. Only sets a flag: a sleeping session is not woken. Takes effect once the chat bridge is configured and running.\n\nExamples:\n  /publish\n  /publish off",
+    complete: (typed) => ["off"].filter((w) => w.startsWith(typed.trim().toLowerCase())),
+    build: (cmd) => {
+      cmd.argument("[state]", "off to stop publishing; leave out to publish");
+    },
+  },
+  {
     name: "park",
     description: "park this session (oldest colour in the switcher until used again), stop it if idle, and go back to the list",
     help: "Marks the session parked (oldest colour in the list; hidden if it is a subagent), stops it if it is idle, and goes back to the list. Using it again unparks it.",

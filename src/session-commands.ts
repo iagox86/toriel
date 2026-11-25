@@ -112,6 +112,7 @@ export class SessionCommands {
       exit: () => this.h.dispose(),
       quit: () => this.h.switching.open(),
       park: () => this.park(),
+      publish: (c) => this.publish(c.args[0]),
       btw: (c) => this.btw(c.args.join(" "), c.opts.model as string | undefined),
       performance: (c) => this.performance(c.opts.model as string | undefined),
       comment: (c) => this.comment(c.args.join(" "), c.opts.clear === true),
@@ -181,6 +182,31 @@ export class SessionCommands {
     this.h.notify(clear ? "comment removed" : "comment saved");
   }
 
+  /**
+   * Publish the viewed session to chat, or stop (ticket 269). Does NOT wake a sleeping session: it only sets the daemon's flag,
+   * keyed by the session's id.
+   */
+  private async publish(state: string | undefined): Promise<void> {
+    const word = state?.trim().toLowerCase();
+    if (word !== undefined && word !== "" && word !== "off" && word !== "on") {
+      this.h.notify("publish: say /publish or /publish off");
+      return;
+    }
+    const key = this.h.viewing;
+    const sessionId = this.viewedMeta()?.sessionId ?? (key ? this.h.local.get(key)?.id : undefined);
+    if (!sessionId) {
+      this.h.notify("nothing to publish yet - send a message first");
+      return;
+    }
+    try {
+      const on = word !== "off";
+      await this.h.request({ type: "publish", sessionId, on });
+      this.h.notify(on ? "published to chat (shows once the chat bridge runs; /park or /publish off stops)" : "no longer published to chat");
+    } catch (err) {
+      this.h.notify(`publish failed: ${errText(err)}`);
+    }
+  }
+
   /** Mark the viewed session parked, stop its process unless it is busy, and return to the switcher. */
   private async park(): Promise<void> {
     const key = this.h.viewing;
@@ -193,6 +219,10 @@ export class SessionCommands {
     const groups = loadGroups();
     groups.parked = withParked(groups, sessionId, true);
     saveGroups(groups);
+    if (meta?.published) {
+      // parking closes the chat channel and the session stays unpublished until /publish says otherwise (ticket 269)
+      await this.h.request({ type: "publish", sessionId, on: false }).catch(() => undefined);
+    }
     let note = "parked";
     if (meta?.active) {
       if (meta.streaming || meta.pendingDialog) {

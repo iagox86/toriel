@@ -30,7 +30,12 @@ export function scheduleBadge(s: Pick<SwitcherSession, "schedules" | "nextFire">
   return ` @${fmtClockShort(s.nextFire, now)}${(s.schedules ?? 0) > 1 ? ` x${s.schedules}` : ""}`;
 }
 
-export type SessionState = "streaming" | "idle" | "inactive" | "dead" | "compacting";
+/** The text after a row's name: the schedule clock, then " chat" for a session published to chat (ticket 269). */
+export function rowBadge(s: Pick<SwitcherSession, "schedules" | "nextFire" | "published">, now: Date): string {
+  return scheduleBadge(s, now) + (s.published ? " chat" : "");
+}
+
+export type SessionState ="streaming" | "idle" | "inactive" | "dead" | "compacting";
 
 /** Has a live pi child (as opposed to a file on disk, or a child that died). */
 export function isLiveState(state: SessionState): boolean {
@@ -51,6 +56,8 @@ export interface SwitcherSession {
   note?: string;
   /** Active schedules and the soonest next fire (epoch ms), for the row's clock marker. */
   schedules?: number;
+  /** Published to chat (ticket 269): the row says so. */
+  published?: boolean;
   nextFire?: number;
   /** The /comment text: not drawn, only searched by the filter. */
   comment?: string;
@@ -327,7 +334,7 @@ export class Switcher extends Container implements Focusable {
     // summary first, then model. Age always stays.
     let maxName = 0;
     for (const s of this.sessions) {
-      maxName = Math.max(maxName, visibleLen(`${MARKERS[s.state]} ${this.treePrefix(s)}${s.name}${scheduleBadge(s, new Date())}`) + 3);
+      maxName = Math.max(maxName, visibleLen(`${MARKERS[s.state]} ${this.treePrefix(s)}${s.name}${rowBadge(s, new Date())}`) + 3);
     }
     const nameWidth = Math.max(18, maxName + 1);
     const hasModel = this.sessions.some((s) => s.model);
@@ -389,7 +396,7 @@ export class Switcher extends Container implements Focusable {
       const marker = s.note === WAITING_NOTE || s.descendantsWaiting ? attention("!") : s.state === "streaming" ? streamingStyle(spinnerFrame(Date.now())) : MARKERS[s.state];
       const markerText = isSel ? marker : dim(marker);
       const displayName = this.treePrefix(s) + (s.muted ? `[pi] ${oneLine(s.name)}` : oneLine(s.name));
-      const badge = scheduleBadge(s, new Date());
+      const badge = rowBadge(s, new Date());
       const bodyCell = truncateToWidth(displayName, nameWidth - 3 - badge.length).padEnd(nameWidth - 3 - badge.length);
       // recency colours; the selected row keeps its accent, external ones stay dim
       const body = (isSel ? bodyCell : s.muted || s.finished ? dim(bodyCell) : byAge(s.ageMs, bodyCell)) + (isSel ? badge : dim(badge));

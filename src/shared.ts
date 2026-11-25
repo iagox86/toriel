@@ -35,7 +35,7 @@ export const AUTO_DENIED_NOTICE = "denied automatically";
 /** The notice for a question nobody answered in time (deny-after), dismissed as if cancelled. */
 export const AUTO_DISMISSED_NOTICE = "dismissed automatically";
 
-export const PROTOCOL = 15; // 15: auto_mode/plan_mode's optional `quiet` and the mode_notice command (the shift+tab cycle announces only the mode it settles on, ticket 236); 14: spawn's optional `model` (a new session starts on that model, /new -m, ticket 247); 13: the feedback_snapshot command (the daemon's state for a /feedback bundle, ticket 239); 12: the plan_mode command and SessionMeta.plan/tasks (a read-only session until the user approves a plan, ticket 229; the agent's task list, ticket 228); 11: the deny_after command (deny a permission prompt nobody answers in time, ticket 88); 10: the auto_mode command and SessionMeta.auto/autoUntil (a session that allows its permission prompts except the sketchy ones, ticket 213); 9: watch_add's optional `by` ("agent": a file trigger an agent made through toriel_watch_create, held to the agent limits); 8: permission_check's optional `probe` (answer from the grants without remembering a suggestion for a dialog; the reply says `expiresAt`), for the toriel_permission_check tool; 7: spawn's optional `wake` (start a sleeping session because the user typed a command into it; answers `woke: false` with a reason instead of starting a file another pi may have open); 6: 6: rename and adopt answer with the applied `name` and `nameVerified` (the daemon makes names unique); 5: file-path prompts carry grant rows, and permission_add's `dialog` (4: the watch_add command (file-trigger schedules); 3: agent_spawn's optional cwd; 2: the `cd` command and adopt's `keepPermissions`)
+export const PROTOCOL = 16; // 16: the publish command and SessionMeta.published/chatUp (a session shown in chat, ticket 269); 15: auto_mode/plan_mode's optional `quiet` and the mode_notice command (the shift+tab cycle announces only the mode it settles on, ticket 236); 14: spawn's optional `model` (a new session starts on that model, /new -m, ticket 247); 13: the feedback_snapshot command (the daemon's state for a /feedback bundle, ticket 239); 12: the plan_mode command and SessionMeta.plan/tasks (a read-only session until the user approves a plan, ticket 229; the agent's task list, ticket 228); 11: the deny_after command (deny a permission prompt nobody answers in time, ticket 88); 10: the auto_mode command and SessionMeta.auto/autoUntil (a session that allows its permission prompts except the sketchy ones, ticket 213); 9: watch_add's optional `by` ("agent": a file trigger an agent made through toriel_watch_create, held to the agent limits); 8: permission_check's optional `probe` (answer from the grants without remembering a suggestion for a dialog; the reply says `expiresAt`), for the toriel_permission_check tool; 7: spawn's optional `wake` (start a sleeping session because the user typed a command into it; answers `woke: false` with a reason instead of starting a file another pi may have open); 6: 6: rename and adopt answer with the applied `name` and `nameVerified` (the daemon makes names unique); 5: file-path prompts carry grant rows, and permission_add's `dialog` (4: the watch_add command (file-trigger schedules); 3: agent_spawn's optional cwd; 2: the `cd` command and adopt's `keepPermissions`)
 
 /** Which toriel code a process runs (build-id.ts). */
 export interface BuildInfo {
@@ -94,6 +94,9 @@ export interface SessionMeta {
   /** False when the child has been deactivated (session is file-only). */
   active: boolean;
   pendingDialog: boolean;
+  /** The session is published to chat (ticket 269), and whether the chat bridge is connected right now (set only on a published session). */
+  published?: boolean;
+  chatUp?: boolean;
   /** toriel settings-file mtime this child started with (null = no file); undefined when inactive. */
   settingsMtime?: number | null;
   /** Problems the settings file had when this child started. */
@@ -289,6 +292,8 @@ type ClientCommandBody =
   | { type: "permission_restore"; id?: string; session?: number; uuid?: string }
   /** Find a session from a UUID, UUID prefix, `#number` or name; the response is {uuid, name, file, id?} (id = daemon number when the daemon holds it). */
   | { type: "resolve"; id?: string; query: string }
+  /** Show a session in chat (`on` omitted: toggle) or stop showing it; keyed by UUID, so a sleeping session can be published. Answers `{ published }`. */
+  | { type: "publish"; id?: string; sessionId: string; on?: boolean }
   /** pi's slash commands (extensions, skills, prompt templates). Without a
    * live session the daemon answers from the last list any child reported. */
   | { type: "commands"; id?: string; session?: number }

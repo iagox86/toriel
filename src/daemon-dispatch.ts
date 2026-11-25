@@ -21,6 +21,7 @@ import {
   handleAutoMode,
   handleModeNotice,
   handlePlanMode,
+  handlePublish,
   handleDenyAfter,
   handleBackground,
   handleBash,
@@ -82,6 +83,8 @@ export async function dispatch(ctx: DaemonContext, cmd: ClientCommand, socket: n
       return handleDenyAfter(ctx, cmd, res);
     case "auto_mode":
       return handleAutoMode(ctx, cmd, res);
+    case "publish":
+      return handlePublish(ctx, cmd, res);
     case "plan_mode":
       return handlePlanMode(ctx, cmd, res);
     case "mode_notice":
