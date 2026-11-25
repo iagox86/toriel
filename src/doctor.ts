@@ -23,6 +23,7 @@ import { legacySettingsFile, loadSettings, resolveChildConfig, settingsFile, yam
 import { addMcpServer, importMcpJson, readMcpYaml, redactEntry, renderMcpYaml, setMcpServerKey } from "./mcp-config.ts";
 import { convertLegacySettings, renderSettings } from "./settings-file.ts";
 import { mcpYamlFile } from "./config-dir.ts";
+import { chatClientInstalled, readToken } from "./bridge/token.ts";
 import { onPathDirs as onPath, writeFileAtomic } from "./util.ts";
 
 import { type BundledPackage, BUNDLED_PACKAGES, NODE_MODULES_DIR, packageState } from "./bundled-packages.ts";
@@ -76,6 +77,8 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: "bifrost-models", level: "feature", title: "pi's models.json matches what the bifrost gateway says about each route (context window, output limit)", needsProbe: "bifrost" },
   { id: "mcp-yaml", level: "recommended", title: "toriel's mcp.yaml (the MCP servers) is valid" },
   { id: "mcp-json", level: "recommended", title: "pi's own mcp.json holds no servers (toriel keeps them in mcp.yaml and pi would start the old ones itself)" },
+  { id: "chat-bridge-token", level: "feature", title: "the chat bridge's token (the chatto setting's tokenFile or tokenEnv) can be read, and a token file is owner-only" },
+  { id: "chat-bridge-package", level: "feature", title: "the chat bridge's package (@chatto/client) is installed, when the chatto setting is on" },
   { id: "sandbox-bwrap", level: "feature", title: 'bubblewrap works (needed only when the "sandbox" setting is "bwrap": scoped sessions run each bash command sandboxed)' },
   { id: "sleep-lock", level: "feature", title: "the machine is kept awake for scheduled runs (systemd-inhibit)" },
   { id: "notify-send", level: "feature", title: "desktop notifications for prompts in background sessions (notify-send)" },
@@ -116,6 +119,8 @@ export interface DoctorOptions extends AuditOptions {
   tty?: boolean;
   /** Runs bwrap once and says why it cannot, or undefined when it works (default: really runs it; tests inject). */
   probeBwrap?: () => string | undefined;
+  /** Whether the chat bridge's package loads (tests say it does not). */
+  chatClientInstalled?: () => boolean;
   /** What tmux says about keys (default: asks the server this process runs under; tests inject). */
   probeTmux?: () => TmuxKeys;
   /** Asks the litellm proxy about its routes (ticket 215). Not set: the check is skipped ("run toriel doctor"). `toriel doctor` passes the real one. */
@@ -282,6 +287,16 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
     out.push({ id: "settings", level: "recommended", message: `toriel settings: ${problem}`, manual: "the settings file is yours; doctor will not guess which value you meant" });
   }
   out.push(...settingsFileFindings(opts.settingsFile, env));
+  if (loaded.settings.chatto) {
+    // the chat bridge (ticket 271): only when it is configured, so a machine that never uses it hears nothing
+    const token = readToken(loaded.settings.chatto, env);
+    if (!token.ok) {
+      out.push({ id: "chat-bridge-token", level: "feature", message: `the chat bridge cannot start: ${token.problem}`, manual: "the token and where it is kept are yours (the bot's token from the chat server's settings; keep the file mode 600)" });
+    }
+    if (!(opts.chatClientInstalled ?? chatClientInstalled)()) {
+      out.push({ id: "chat-bridge-package", level: "feature", message: "the chat bridge's package @chatto/client is not installed: run npm install in the toriel checkout", manual: "a package install in the checkout, which doctor does not run" });
+    }
+  }
   const piCli = opts.piCli ?? resolveChildConfig(loaded.settings, env).piCli;
   if (!existsSync(piCli)) {
     out.push({ id: "pi-cli", level: "required", message: `pi's cli.js is not at ${piCli}: run npm install in the toriel checkout, or set piCli in the toriel settings`, manual: "needs npm install in the checkout (a package install) or a piCli path only you know" });

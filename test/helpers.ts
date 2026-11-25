@@ -63,6 +63,8 @@ export async function startDaemon(extraEnv: Record<string, string> = {}): Promis
     TORIEL_SCHEDULES: path.join(dir, "schedules.json"),
     TORIEL_PERMISSIONS: path.join(dir, "permissions.json"),
     TORIEL_PUBLISHED: path.join(dir, "published.json"),
+    // a test daemon never starts a chat bridge, whatever settings it finds (ticket 271)
+    TORIEL_NO_CHAT: "1",
     // where the write/edit tools journal what they change (ticket 11): not the real state directory
     TORIEL_FILE_HISTORY_DIR: path.join(dir, "file-history"),
     TORIEL_PLAN_DIR: path.join(dir, "plan-mode"),

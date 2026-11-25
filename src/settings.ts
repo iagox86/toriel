@@ -16,7 +16,61 @@ import { parseDurationText } from "./when.ts";
 
 export type SteeringMode = "all" | "one-at-a-time";
 
+/** The chat bridge's settings (ticket 271): the `chatto:` mapping. The token is never here, only where to read it from. */
+export interface ChattoSettings {
+  /** Server URL, e.g. https://chat.example.com. */
+  url: string;
+  /** File holding the bot token (mode 0600), `~/` allowed. Exactly one of tokenFile and tokenEnv. */
+  tokenFile?: string;
+  /** Name of an environment variable (in the daemon's environment) holding the token. */
+  tokenEnv?: string;
+  /** Room group the session channels live in, name or id (default "Toriel"). */
+  group: string;
+  /** The channel for announcements and for starting sessions (default "inbox"). */
+  inboxChannel: string;
+  /** The one chat user whose messages are acted on (user id). */
+  allowedUser: string;
+  /** Working directory of a session started from chat. */
+  defaultCwd?: string;
+  /** Model of a session started from chat, provider/id. */
+  defaultModel?: string;
+}
+
+const CHATTO_KEYS = ["url", "tokenFile", "tokenEnv", "group", "inboxChannel", "allowedUser", "defaultCwd", "defaultModel"] as const;
+
+/** Validate the `chatto:` mapping; the problem text when it is unusable. */
+export function validChatto(value: unknown): { ok: true; chatto: ChattoSettings } | { ok: false; problem: string } {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return { ok: false, problem: "chatto must be a mapping (url, tokenFile or tokenEnv, allowedUser, ...)" };
+  }
+  const o = value as Record<string, unknown>;
+  for (const k of Object.keys(o)) {
+    if (!(CHATTO_KEYS as readonly string[]).includes(k)) {
+      return { ok: false, problem: `unknown chatto setting "${k}"` };
+    }
+    if (typeof o[k] !== "string" || (o[k] as string).length === 0) {
+      return { ok: false, problem: `chatto.${k} must be a non-empty string` };
+    }
+  }
+  const s = o as Record<(typeof CHATTO_KEYS)[number], string | undefined>;
+  if (!s.url || !/^https?:\/\/\S+$/.test(s.url)) {
+    return { ok: false, problem: "chatto.url must be the server's http(s) URL" };
+  }
+  if (!s.tokenFile === !s.tokenEnv) {
+    return { ok: false, problem: "chatto needs exactly one of tokenFile and tokenEnv (the token itself never goes in this file)" };
+  }
+  if (!s.allowedUser) {
+    return { ok: false, problem: "chatto.allowedUser (your chat user id) is required: only that user's messages are acted on" };
+  }
+  if (s.defaultModel && !/^[^/\s]+\/\S+$/.test(s.defaultModel)) {
+    return { ok: false, problem: "chatto.defaultModel must be provider/id" };
+  }
+  return { ok: true, chatto: { url: s.url, tokenFile: s.tokenFile, tokenEnv: s.tokenEnv, group: s.group ?? "Toriel", inboxChannel: s.inboxChannel ?? "inbox", allowedUser: s.allowedUser, defaultCwd: s.defaultCwd, defaultModel: s.defaultModel } };
+}
+
 export interface TorielSettings {
+  /** The chat bridge (ticket 271); absent = no bridge. Read when the daemon starts. */
+  chatto?: ChattoSettings;
   /** How messages sent mid-run are delivered (default "all"). */
   steeringMode?: SteeringMode;
   /** Default provider / model / thinking level for sessions toriel starts. */
@@ -128,7 +182,7 @@ export const MAX_DENY_MS = 24 * 3_600_000;
 
 const STRING_KEYS = ["provider", "model", "thinking", "piCli", "summaryModel"] as const;
 /** Every key the file may hold; the commented template (settings-file.ts) must cover all of them. */
-export const SETTING_KEYS: readonly string[] = ["steeringMode", "permissionGrantDurations", "permissionDenyAfter", "sandbox", "sandboxWritable", "bundledPackagesOff", "scopeGuardAcceptedAllows", "agentLanes", ...BOOLEAN_KEYS, ...STRING_KEYS, ...NUMBER_KEYS];
+export const SETTING_KEYS: readonly string[] = ["steeringMode", "chatto", "permissionGrantDurations", "permissionDenyAfter", "sandbox", "sandboxWritable", "bundledPackagesOff", "scopeGuardAcceptedAllows", "agentLanes", ...BOOLEAN_KEYS, ...STRING_KEYS, ...NUMBER_KEYS];
 /** The surfaces a scopeGuardAcceptedAllows entry may name ("*" is the config fallback). */
 const SCOPE_GUARD_SURFACES = ["external_directory_write", "external_directory", "*"] as const;
 
@@ -242,6 +296,13 @@ function parseSettingsFile(file: string): LoadedSettings {
         settings.bundledPackagesOff = value as string[];
       } else {
         problems.push(`bundledPackagesOff must be a list of bundled package names (${BUNDLED_NAMES.join(", ")}), or [] for none`);
+      }
+    } else if (key === "chatto") {
+      const c = validChatto(value);
+      if (c.ok) {
+        settings.chatto = c.chatto;
+      } else {
+        problems.push(c.problem);
       }
     } else if (key === "agentLanes") {
       const lanes = validAgentLanes(value);

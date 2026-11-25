@@ -37,6 +37,7 @@ import { log } from "./log.ts";
 import { DEFAULT_GRANT_LIMITS, GrantStore } from "./permissions.ts";
 import { Presence } from "./presence.ts";
 import { PublishedStore } from "./published.ts";
+import { ChatSupervisor } from "./daemon-chat.ts";
 import { DEFAULT_LIMITS, Scheduler } from "./scheduler.ts";
 import { SubagentManager } from "./daemon-subagents.ts";
 import { pruneSessionState } from "./state-prune.ts";
@@ -170,12 +171,14 @@ async function main(): Promise<void> {
     ctx.scheduler.stop();
     ctx.watches?.stop();
     inhibitor.stop();
+    chat.stop();
     ctx.children.stopAll(ctx.registry.all());
     fs.rmSync(SOCK, { force: true });
     releaseDaemonLock(PID_FILE);
     process.exit(0);
   }
 
+  const chat = new ChatSupervisor(ctx);
   const inhibitor = new SleepInhibitor({ log });
   const keepAwake = (): void => inhibitor.update(process.env.TORIEL_NO_INHIBIT !== "1" && loadSettings().settings.preventSleep !== false && needsAwake(ctx.registry.all(), ctx.scheduler.list(), Date.now()));
 
@@ -215,6 +218,7 @@ async function main(): Promise<void> {
   ctx.watches?.sync(); // re-arm the file watches of the schedules the file brought back
   ctx.grants.load();
   ctx.published.load();
+  chat.start(); // after the socket serves: the bridge is a controller of this daemon
   // timed grants lapse by themselves (the store never matches an expired one); this only says so
   const grantKeeper = setInterval(() => announceExpired(ctx, ctx.grants.sweep()), 30_000);
   grantKeeper.unref();

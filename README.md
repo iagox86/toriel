@@ -140,7 +140,8 @@ this file with every setting shown commented out at its default, a comment above
 so open it to see what you can change (remove the `#` to change one; one you leave alone follows
 toriel's defaults as they improve): models (`provider`, `model`, `thinking`, `summaryModel`), session behaviour
 (`steeringMode`, `autoName`, `preventSleep`, `showExternalSessions`, `trashRetentionDays`), summaries, scheduled
-prompts, subagent limits, permissions and the command sandbox. Edits apply to sessions started
+prompts, subagent limits, permissions, the command sandbox and an optional Chatto chat bridge (`chatto:`;
+`/publish` shows a session in a channel there, so you can follow it and answer from a phone). Edits apply to sessions started
 afterwards. Environment variables (`TORIEL_*`) override it. A `settings.json` from an earlier
 version is still read; `toriel doctor --fix` converts it. Full list and semantics:
 [docs/reference.md](docs/reference.md).

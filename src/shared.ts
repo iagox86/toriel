@@ -296,6 +296,8 @@ type ClientCommandBody =
   | { type: "resolve"; id?: string; query: string }
   /** Show a session in chat (`on` omitted: toggle) or stop showing it; keyed by UUID, so a sleeping session can be published. Answers `{ published }`. */
   | { type: "publish"; id?: string; sessionId: string; on?: boolean }
+  /** The chat bridge says whether it is connected to the chat server (drives SessionMeta.chatUp). */
+  | { type: "chat_status"; id?: string; up: boolean }
   /** pi's slash commands (extensions, skills, prompt templates). Without a
    * live session the daemon answers from the last list any child reported. */
   | { type: "commands"; id?: string; session?: number }

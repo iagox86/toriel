@@ -86,6 +86,13 @@ export async function dispatch(ctx: DaemonContext, cmd: ClientCommand, socket: n
       return handleAutoMode(ctx, cmd, res);
     case "publish":
       return handlePublish(ctx, cmd, res);
+    case "chat_status":
+      if (ctx.published.bridgeUp !== cmd.up) {
+        ctx.published.bridgeUp = cmd.up;
+        ctx.hub.broadcastSessions();
+      }
+      res(true);
+      return;
     case "plan_mode":
       return handlePlanMode(ctx, cmd, res);
     case "mode_notice":
