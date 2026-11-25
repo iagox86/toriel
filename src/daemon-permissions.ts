@@ -10,6 +10,7 @@ import { scopeOf } from "./daemon-schedule.ts";
 import { log } from "./log.ts";
 import { type Grant, type GrantStore, isCappedSurface } from "./permissions.ts";
 import { piAgentDir } from "./pi-dir.ts";
+import { loadSettings } from "./settings.ts";
 import type { GrantView, PermissionGrantSpec } from "./shared.ts";
 import { fmtClock, parseDurationText } from "./when.ts";
 
@@ -64,7 +65,22 @@ export function handlePermissionCheck(ctx: DaemonContext, cmd: Cmd<"permission_c
 
 /** Files a grant must never answer for: the grants themselves, pi's own configuration (minus the agent-maintained memory subtrees, `exemptPaths` below) and toriel's mcp.yaml (an entry there is a command the next session runs). Such an ask always reaches the user. */
 export function protectedPaths(): string[] {
-  return [PERMISSIONS_FILE, piAgentDir(), mcpYamlFile()];
+  const token = chatTokenFile();
+  return [PERMISSIONS_FILE, piAgentDir(), mcpYamlFile(), ...(token ? [token] : [])];
+}
+
+/**
+ * The file holding the chat bridge's token (the `chatto.tokenFile` setting, `~/` expanded), or undefined when there is none. It is
+ * the key to a bot that can answer permission prompts and start sessions, so an agent must not be given it by a click: it is
+ * protected like the grants file (no "allow ..." row is ever offered for it, auto mode never answers for it, a grant never covers it).
+ */
+export function chatTokenFile(): string | undefined {
+  try {
+    const file = loadSettings().settings.chatto?.tokenFile;
+    return file ? file.replace(/^~(?=\/|$)/, os.homedir()) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

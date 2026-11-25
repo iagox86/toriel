@@ -152,7 +152,7 @@ describe("floorReason", () => {
 
   it("asks about the grants file, pi's own configuration and credential files, in any wording", () => {
     assert.match(floorReason({ title: title("cat ~/.pi/agent/settings.json") }) ?? "", /grants file or pi's own configuration/);
-    for (const bad of ["cat ~/.ssh/id_ed25519", "cp ~/.aws/credentials /tmp/x", "less .env", "cat config/.env.production", "scp id_rsa host:", "cat /etc/shadow", "openssl x509 -in cert.pem", "cat ~/.git-credentials", "cat auth.json", "grep key mcp-auth.json"]) {
+    for (const bad of ["cat ~/.ssh/id_ed25519", "cp ~/.aws/credentials /tmp/x", "less .env", "cat config/.env.production", "scp id_rsa host:", "cat /etc/shadow", "openssl x509 -in cert.pem", "cat ~/.git-credentials", "cat ~/old/chatto-bot.token", "cat auth.json", "grep key mcp-auth.json"]) {
       assert.match(floorReason({ title: title(bad), value: bad }) ?? "", /credential or secret/, bad);
     }
     assert.match(floorReason({ title: "Permission Required\ntool : read\npath : /home/u/.ssh/config", surfaces: [{ surface: "path_read" }] }) ?? "", /credential or secret/, "a file read, not a command");
