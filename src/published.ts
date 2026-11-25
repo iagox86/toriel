@@ -7,10 +7,13 @@ import { readJsonOr, writeJsonAtomic } from "./util.ts";
 interface PublishedFile {
   /** Session UUID -> when it was published (ms since epoch). */
   published: Record<string, number>;
+  /** Sessions that were published when they were parked: published again when they are used again. */
+  resume?: string[];
 }
 
 export class PublishedStore {
   private marks = new Map<string, number>();
+  private resume = new Set<string>();
   /**
    * The chat bridge is connected. Nothing sets it until the bridge exists (ticket 271); the status bar draws a
    * published session differently while it is false.
@@ -28,6 +31,7 @@ export class PublishedStore {
   load(): void {
     const data = readJsonOr<Partial<PublishedFile>>(this.file, {});
     this.marks = new Map(Object.entries(data.published ?? {}).filter(([, at]) => typeof at === "number"));
+    this.resume = new Set((data.resume ?? []).filter((id) => typeof id === "string"));
   }
 
   has(sessionId: string | undefined): boolean {
@@ -38,9 +42,38 @@ export class PublishedStore {
     return [...this.marks.keys()];
   }
 
-  /** Publish or unpublish; returns whether anything changed. */
+  /** Whether the session is parked and was published when it was (so using it again publishes it again). */
+  hasResume(sessionId: string | undefined): boolean {
+    return sessionId !== undefined && this.resume.has(sessionId);
+  }
+
+  /** Park: unpublish, remembering that it was published; returns whether it was. */
+  park(sessionId: string): boolean {
+    const was = this.marks.delete(sessionId);
+    if (was) {
+      this.resume.add(sessionId);
+      this.save();
+    }
+    return was;
+  }
+
+  /** The session is used again: publish it if it was parked while published; returns whether it did. */
+  takeResume(sessionId: string): boolean {
+    if (!this.resume.delete(sessionId)) {
+      return false;
+    }
+    this.marks.set(sessionId, this.now());
+    this.save();
+    return true;
+  }
+
+  /** Publish or unpublish (either way an explicit choice: it forgets a resume); returns whether anything changed. */
   set(sessionId: string, on: boolean): boolean {
+    const resumed = this.resume.delete(sessionId);
     if (on === this.marks.has(sessionId)) {
+      if (resumed) {
+        this.save();
+      }
       return false;
     }
     if (on) {
@@ -54,6 +87,6 @@ export class PublishedStore {
 
   private save(): void {
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    writeJsonAtomic(this.file, { published: Object.fromEntries(this.marks) } satisfies PublishedFile);
+    writeJsonAtomic(this.file, { published: Object.fromEntries(this.marks), resume: [...this.resume] } satisfies PublishedFile);
   }
 }

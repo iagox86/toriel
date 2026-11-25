@@ -37,6 +37,37 @@ describe("PublishedStore", () => {
     }
   });
 
+  it("parks a published session so using it again publishes it, but not an unpublished one, and an explicit choice forgets it", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "published-"));
+    try {
+      const file = path.join(dir, "published.json");
+      const a = new PublishedStore(file);
+      a.load();
+      assert.equal(a.park("never-published"), false);
+      assert.equal(a.takeResume("never-published"), false);
+      a.set("s1", true);
+      assert.equal(a.park("s1"), true);
+      assert.equal(a.has("s1"), false);
+      assert.equal(a.hasResume("s1"), true);
+      const b = new PublishedStore(file);
+      b.load();
+      assert.equal(b.hasResume("s1"), true, "kept across a restart");
+      assert.equal(b.takeResume("s1"), true);
+      assert.equal(b.has("s1"), true);
+      assert.equal(b.takeResume("s1"), false, "once");
+      b.park("s1");
+      b.set("s1", false); // the user's own /publish off while parked
+      assert.equal(b.hasResume("s1"), false);
+      assert.equal(b.takeResume("s1"), false);
+      b.set("s2", true);
+      b.park("s2");
+      b.set("s2", true); // publishing again by hand
+      assert.equal(b.hasResume("s2"), false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("starts empty from a missing or damaged file", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "published-"));
     try {
@@ -89,6 +120,54 @@ let harness: Harness | undefined;
 afterEach(async () => {
   await harness?.stop();
   harness = undefined;
+});
+
+describe("daemon: parking a published session (ticket 269)", () => {
+  async function publishedSession(h: Harness) {
+    const c = await h.connect();
+    const { sessionId } = await c.request({ type: "spawn", cwd: h.dir });
+    await c.request({ type: "prompt", session: sessionId, message: "hi" });
+    let uuid: string | undefined;
+    for (let i = 0; i < 80 && !uuid; i++) {
+      uuid = c.sessions().find((x) => x.id === sessionId)?.sessionId;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.ok(uuid);
+    await c.waitFor((m) => m.type === "event" && m.event?.type === "agent_settled");
+    await c.request({ type: "publish", sessionId: uuid, on: true });
+    return { c, session: sessionId, uuid };
+  }
+
+  it("unpublishes on park and publishes again when the session is next used", async () => {
+    harness = await startDaemon();
+    const { c, session, uuid } = await publishedSession(harness);
+    await c.request({ type: "publish", sessionId: uuid, on: false, resume: true });
+    await c.waitFor((m) => m.type === "sessions" && m.sessions.some((x: SessionMeta) => x.id === session && !x.published));
+    // parked, it stays unpublished; using it publishes it again
+    await c.request({ type: "prompt", session, message: "back again" });
+    await c.waitFor((m) => m.type === "sessions" && m.sessions.some((x: SessionMeta) => x.id === session && x.published === true));
+  });
+
+  it("/park -u publishes it again at once, but only if it was published when parked", async () => {
+    harness = await startDaemon();
+    const { c, session, uuid } = await publishedSession(harness);
+    await c.request({ type: "publish", sessionId: uuid, on: false, resume: true });
+    assert.equal((await c.request({ type: "publish", sessionId: uuid, unpark: true })).published, true);
+    await c.waitFor((m) => m.type === "sessions" && m.sessions.some((x: SessionMeta) => x.id === session && x.published === true));
+    await c.request({ type: "publish", sessionId: uuid, on: false }); // the user's own /publish off
+    assert.equal((await c.request({ type: "publish", sessionId: uuid, unpark: true })).published, false);
+  });
+
+  it("a session switched off by hand before it was parked stays off when it is used", async () => {
+    harness = await startDaemon();
+    const { c, session, uuid } = await publishedSession(harness);
+    await c.request({ type: "publish", sessionId: uuid, on: false });
+    await c.request({ type: "publish", sessionId: uuid, on: false, resume: true });
+    c.messages.length = 0;
+    await c.request({ type: "prompt", session, message: "again" });
+    await c.waitFor((m) => m.type === "event" && m.event?.type === "agent_settled");
+    assert.equal(c.sessions().find((x) => x.id === session)?.published, undefined);
+  });
 });
 
 describe("daemon: publish (ticket 269)", () => {

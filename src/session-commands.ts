@@ -221,7 +221,7 @@ export class SessionCommands {
     saveGroups(groups);
     if (meta?.published) {
       // parking closes the chat channel and the session stays unpublished until /publish says otherwise (ticket 269)
-      await this.h.request({ type: "publish", sessionId, on: false }).catch(() => undefined);
+      await this.h.request({ type: "publish", sessionId, on: false, resume: true }).catch(() => undefined);
     }
     let note = "parked";
     if (meta?.active) {

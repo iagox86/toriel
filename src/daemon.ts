@@ -133,6 +133,12 @@ function createContext(shutdown: () => void): DaemonContext {
   };
   children.onAssistantMessage = (s, message) => ctx.subagents.onMessage(s, message);
   children.onActivity = (s) => ctx.subagents.onActivity(s);
+  children.onRunStart = (s) => {
+    if (s.sessionId && ctx.published.takeResume(s.sessionId)) {
+      log(`session ${s.id} is in use again: published to chat again (it was published when parked)`);
+      ctx.hub.broadcastSessions();
+    }
+  };
   children.onStopped = (s, crash) => ctx.subagents.onStopped(s, crash);
   children.onNameObserved = (s, observed) => naming.noteObserved(s, observed);
   return ctx;

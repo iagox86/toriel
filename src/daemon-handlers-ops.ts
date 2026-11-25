@@ -169,6 +169,25 @@ export function handlePlanMode(ctx: DaemonContext, cmd: Cmd<"plan_mode">, res: R
  * bridge (when there is one) reacts to the change. Chat itself has no way to publish.
  */
 export function handlePublish(ctx: DaemonContext, cmd: Cmd<"publish">, res: Responder): void {
+  if (cmd.unpark) {
+    // /park -u: publish again only if the session was published when it was parked
+    const back = ctx.published.takeResume(cmd.sessionId);
+    if (back) {
+      log(`session ${cmd.sessionId} unparked: published to chat again`);
+      ctx.hub.broadcastSessions();
+    }
+    res(true, undefined, { published: ctx.published.has(cmd.sessionId) });
+    return;
+  }
+  if (cmd.on === false && cmd.resume) {
+    // /park: unpublish, but remember it, so using the session again publishes it again
+    if (ctx.published.park(cmd.sessionId)) {
+      log(`session ${cmd.sessionId} parked: no longer published until it is used again`);
+      ctx.hub.broadcastSessions();
+    }
+    res(true, undefined, { published: false });
+    return;
+  }
   const on = cmd.on ?? !ctx.published.has(cmd.sessionId);
   if (ctx.published.set(cmd.sessionId, on)) {
     log(`session ${cmd.sessionId} ${on ? "published to chat" : "no longer published"}`);

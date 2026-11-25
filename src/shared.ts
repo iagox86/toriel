@@ -295,7 +295,7 @@ type ClientCommandBody =
   /** Find a session from a UUID, UUID prefix, `#number` or name; the response is {uuid, name, file, id?} (id = daemon number when the daemon holds it). */
   | { type: "resolve"; id?: string; query: string }
   /** Show a session in chat (`on` omitted: toggle) or stop showing it; keyed by UUID, so a sleeping session can be published. Answers `{ published }`. */
-  | { type: "publish"; id?: string; sessionId: string; on?: boolean }
+  | { type: "publish"; id?: string; sessionId: string; on?: boolean; resume?: boolean; unpark?: boolean }
   /** The chat bridge says whether it is connected to the chat server (drives SessionMeta.chatUp). */
   | { type: "chat_status"; id?: string; up: boolean }
   /** pi's slash commands (extensions, skills, prompt templates). Without a

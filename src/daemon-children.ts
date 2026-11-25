@@ -76,6 +76,8 @@ export class ChildManager {
   onAssistantMessage?: (s: DaemonSession, message: { role?: string; stopReason?: string; errorMessage?: string; usage?: { input?: number; output?: number; cacheWrite?: number } } | undefined) => void;
   /** Called for every event a session's process emits (the subagent watchdog's clock). */
   onActivity?: (s: DaemonSession) => void;
+  /** A run starts from idle: the session is being used (an unparked session publishes itself again, ticket 269). */
+  onRunStart?: (s: DaemonSession) => void;
   /** The limits that decide which sessions get the toriel_agent tools: the same object the subagent manager enforces. */
   private readonly subagentLimits: SubagentLimits;
   /** Called when a session's process is stopped or found dead (subagents end with their session; foreground ones with their parent). */
@@ -792,6 +794,7 @@ export class ChildManager {
       // a continued turn (the one a task reminder buys, a queued message, a retry) re-emits agent_start mid-run: it is the
       // same busy period, so the stale-list clock (and meta, which nothing here changes) keeps the run's original start (ticket 251)
       if (!s.streaming) {
+        this.onRunStart?.(s);
         s.streaming = true;
         s.runSince = Date.now();
         this.hub.broadcastSessions();
