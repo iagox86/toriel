@@ -60,6 +60,8 @@ export interface ChatAdapter {
   /** Reaction names are Chatto's shortcodes (`white_check_mark`, `x`, `one`..`nine`). */
   react(roomId: string, messageId: string, emoji: string): Promise<void>;
   unreact(roomId: string, messageId: string, emoji: string): Promise<void>;
+  /** The room's latest messages (at most `limit`), oldest first, every author's, threads included; messages only, no joins or renames. For catching up on what was written while nobody listened. */
+  recentMessages(roomId: string, limit: number): Promise<ChatMessage[]>;
   /** Show "typing" in the room for a few seconds; call again to keep it. */
   typing(roomId: string): Promise<void>;
   close(): void;

@@ -6,12 +6,13 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { DaemonMessage, SessionMeta } from "../shared.ts";
+import type { DaemonMessage, HistoryTurn, SessionMeta } from "../shared.ts";
 import { DIALOG_METHODS } from "../config.ts";
 import { optionsNumberedAlready } from "../dialogs.ts";
 import type { ChattoSettings } from "../settings.ts";
 import { type ChatAdapter, type ChatEvent, type ChatMessage, MAX_BODY } from "./adapter.ts";
 import type { DaemonPort } from "./daemon-client.ts";
+import { HISTORY_TURNS, renderHistory } from "./history.ts";
 
 interface ChannelRecord {
   roomId: string;
@@ -19,6 +20,10 @@ interface ChannelRecord {
   /** The channel's name as last set, to notice a session rename. */
   name: string;
   closed: boolean;
+  /** The last message in the channel the bridge dealt with (the pinned post, then each message written there): what was written after it was not seen. */
+  cursor?: string;
+  /** When the newest transcript message the channel shows was written (ms, pi's own clock): what is newer was not mirrored. */
+  mirroredAt?: number;
 }
 
 interface BridgeState {
@@ -98,6 +103,8 @@ export function splitBody(text: string, max = MAX_BODY): string[] {
 const NUMBER_EMOJI = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
 const TYPING_EVERY_MS = 3000;
 const DISCOVER_EVERY_MS = 30_000;
+/** How many of a channel's latest messages the catch-up looks at (what is older than its cursor is not looked at again). */
+const CATCHUP_WINDOW = 200;
 
 /** The text of a pi message: the text blocks of an assistant message, or a user message's string. */
 export function messageText(message: { content?: unknown } | undefined): string {
@@ -134,6 +141,8 @@ export class Bridge {
   private readonly awaiting = new Map<number, { roomId?: string; channelName?: string; inbox?: boolean }>();
   /** Sessions whose channel was bound before the daemon listed them as published. */
   private readonly binding = new Set<string>();
+  /** Ids of channel messages already dealt with, so a message the live event and the catch-up both deliver counts once. */
+  private readonly handled = new Set<string>();
   /** Channels the user made that wait for a first message before a session exists. */
   private readonly emptyChannels = new Map<string, string>(); // room id -> channel name
 
@@ -152,6 +161,12 @@ export class Bridge {
   /** Look for rooms nobody told the bridge about now instead of on the next tick (tests). */
   discoverNow(): Promise<void> {
     this.run("discover", () => this.discover());
+    return this.chain;
+  }
+
+  /** Look for messages nobody delivered now instead of on the next tick (tests). */
+  catchUpNow(): Promise<void> {
+    this.run("catch-up", () => this.catchUpAll());
     return this.chain;
   }
 
@@ -175,7 +190,10 @@ export class Bridge {
     await this.closeAll("toriel was restarted; this channel reopens when the session is published and listed again.");
     this.daemon.onMessage((msg) => this.run(`daemon ${msg.type}`, () => this.onDaemon(msg)));
     this.adapter.onEvent((e) => this.run(`chat ${e.type}`, () => this.onChat(e)));
-    this.discoverTimer = setInterval(() => this.run("discover", () => this.discover()), DISCOVER_EVERY_MS);
+    this.discoverTimer = setInterval(() => {
+      this.run("discover", () => this.discover());
+      this.run("catch-up", () => this.catchUpAll());
+    }, DISCOVER_EVERY_MS);
     this.discoverTimer.unref();
     await this.daemon.request({ type: "observe_dialogs" });
     await this.daemon.request({ type: "chat_status", up: true });
@@ -404,6 +422,7 @@ export class Bridge {
     const sessionId = meta.sessionId as string;
     let rec = this.state.channels[sessionId];
     const reopened = rec?.closed === true;
+    const existed = rec !== undefined;
     const wanted = channelNameFor(meta.sessionName ?? "", `session-${meta.id}`);
     if (rec) {
       if (rec.closed) {
@@ -422,13 +441,54 @@ export class Bridge {
     rec.rootId = rootId;
     this.save();
     await this.adapter.pin(rec.roomId, rootId).catch(() => undefined);
+    // the past: a channel made now shows the conversation so far; one that existed shows what happened while it was closed
+    if (!existed) {
+      await this.mirrorHistory(meta, rec);
+    } else if (rec.mirroredAt !== undefined) {
+      await this.mirrorHistory(meta, rec, rec.mirroredAt);
+    }
     // the acknowledgement of /publish: a message of its own (the pinned one is information), so it also notifies
-    await this.adapter.post(rec.roomId, reopened ? "✅ **Published again**: this channel is connected to the session." : "✅ **Published**: this channel is connected to the session.");
+    const ack = await this.adapter.post(rec.roomId, reopened ? "✅ **Published again**: this channel is connected to the session." : "✅ **Published**: this channel is connected to the session.");
+    rec.cursor ??= ack; // what is written after this is new; a reopened channel keeps its cursor, so what was written before it closed is caught up below
+    this.save();
     this.log(`channel ${rec.name} opened for session ${meta.id}`);
     if (this.inboxAnnounce.delete(sessionId) && this.state.inboxRoomId) {
       await this.adapter.post(this.state.inboxRoomId, `Started **${meta.sessionName ?? rec.name}** in its own channel: #${rec.name}`);
     }
     await this.refreshChannel(meta, rec);
+    if (existed) {
+      await this.catchUp(sessionId, rec);
+    }
+  }
+
+  /**
+   * Show a channel the part of the conversation it has not seen (ticket 279): everything so far (the last turns that fit) in a channel
+   * made now, or `since` onward in one that was closed for a while (the bridge was down, or the session unpublished). Reads the
+   * conversation from the daemon, which does not wake a sleeping session for it.
+   */
+  private async mirrorHistory(meta: SessionMeta, rec: ChannelRecord, since?: number): Promise<void> {
+    let digest: { turns?: HistoryTurn[]; total?: number } | undefined;
+    try {
+      digest = (await this.daemon.request({ type: "read_history", session: meta.id, last: HISTORY_TURNS })) as typeof digest;
+    } catch (err) {
+      this.log(`could not read the history of session ${meta.id}: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+    const all = digest?.turns ?? [];
+    const turns = since === undefined ? all : all.filter((t) => t.at !== undefined && t.at > since);
+    const newest = turns.reduce((n, t) => Math.max(n, t.at ?? 0), 0);
+    rec.mirroredAt = Math.max(rec.mirroredAt ?? 0, newest || (since === undefined ? Date.now() : 0)) || undefined;
+    this.save();
+    if (turns.length === 0) {
+      return;
+    }
+    const { posts, shown, dropped } = renderHistory(turns);
+    const total = digest?.total ?? turns.length;
+    const left = since === undefined ? total - shown : 0;
+    await this.adapter.post(rec.roomId, since === undefined ? `ℹ **So far** in this session${left > 0 ? ` (the last ${shown} of ${total} turns; ${dropped > 0 ? "older ones" : "earlier ones"} are in toriel)` : ""}:` : `ℹ **While this channel was closed** (${shown} turn${shown === 1 ? "" : "s"}):`);
+    for (const post of posts) {
+      await this.postLong(rec.roomId, post);
+    }
   }
 
   private stateLabel(meta: SessionMeta): string {
@@ -514,8 +574,12 @@ export class Bridge {
     } else if (type === "tool_execution_end") {
       this.toolsRun.set(session, (this.toolsRun.get(session) ?? 0) + 1);
     } else if (type === "message_end") {
-      const message = event.message as { role?: string; content?: unknown; errorMessage?: string } | undefined;
+      const message = event.message as { role?: string; content?: unknown; errorMessage?: string; timestamp?: unknown } | undefined;
       const text = messageText(message).trim();
+      if (message?.role === "assistant" || message?.role === "user") {
+        rec.mirroredAt = typeof message.timestamp === "number" ? message.timestamp : Date.now();
+        this.save();
+      }
       if (message?.role === "assistant" && (message as { stopReason?: string }).stopReason === "aborted" && !text) {
         await this.adapter.post(rec.roomId, "⏹ interrupted");
       } else if (message?.role === "assistant") {
@@ -763,8 +827,18 @@ export class Bridge {
     }
   }
 
+  private entryOfRoom(roomId: string): [string, ChannelRecord] | undefined {
+    return Object.entries(this.state.channels).find(([, c]) => c.roomId === roomId && !c.closed);
+  }
+
   private async onMessage(m: ChatMessage): Promise<void> {
     if (m.authorId === this.adapter.selfId) {
+      return;
+    }
+    const entry = this.entryOfRoom(m.roomId);
+    if (entry) {
+      // a session's channel: the message is delivered together with whatever was written before it that nobody saw
+      await this.catchUp(entry[0], entry[1], m);
       return;
     }
     if (!this.settings.allowedUsers.includes(m.authorId)) {
@@ -783,10 +857,71 @@ export class Bridge {
       const channelName = this.emptyChannels.get(m.roomId) ?? "";
       this.emptyChannels.delete(m.roomId);
       await this.startSession(text, { roomId: m.roomId, channelName, name: sessionNameFromChannel(channelName) });
+    }
+  }
+
+  /**
+   * Deliver what was written in a session's channel after its cursor (ticket 279), in order, `live` last when it is one the server has
+   * just announced. A message the chat server never announced (the connection dropped, the bridge was down or restarting) is found
+   * by reading the channel; the cursor moves past everything dealt with, so nothing is delivered twice. Without a cursor the pinned
+   * post is the fence, and when the cursor is not among the latest messages (it is deleted, or too much came after it) nothing is
+   * guessed: only `live`, if there is one, is delivered.
+   */
+  private async catchUp(sessionId: string, rec: ChannelRecord, live?: ChatMessage): Promise<void> {
+    let fresh: ChatMessage[] = [];
+    try {
+      const list = await this.adapter.recentMessages(rec.roomId, CATCHUP_WINDOW);
+      const fence = list.findIndex((x) => x.id === (rec.cursor ?? rec.rootId));
+      if (fence >= 0) {
+        fresh = list.slice(fence + 1);
+      } else if (!live) {
+        this.log(`channel ${rec.name}: the last message dealt with is not among the latest ${CATCHUP_WINDOW}, so nothing is caught up`);
+        return;
+      }
+    } catch (err) {
+      this.log(`could not read channel ${rec.name} to catch up: ${err instanceof Error ? err.message : String(err)}`);
+      if (!live) {
+        return;
+      }
+    }
+    fresh = fresh.filter((x) => x.authorId !== this.adapter.selfId);
+    if (live && !fresh.some((x) => x.id === live.id)) {
+      fresh.push(live);
+    }
+    fresh = fresh.filter((x) => !this.handled.has(x.id));
+    const missed = fresh.filter((x) => x.id !== live?.id && this.settings.allowedUsers.includes(x.authorId) && !x.threadRootId && x.body.trim());
+    if (missed.length > 0) {
+      await this.adapter.post(rec.roomId, `↪ ${missed.length} message${missed.length === 1 ? "" : "s"} written here while toriel was not listening: sending ${missed.length === 1 ? "it" : "them"} now.`);
+      this.log(`channel ${rec.name}: ${missed.length} message(s) caught up`);
+    }
+    for (const x of fresh) {
+      this.handled.add(x.id);
+      if (this.handled.size > 500) {
+        this.handled.delete(this.handled.values().next().value as string);
+      }
+      rec.cursor = x.id;
+      this.save();
+      await this.channelMessage(sessionId, x);
+    }
+  }
+
+  /** The published sessions' channels, all looked at for messages the server did not announce. */
+  private async catchUpAll(): Promise<void> {
+    for (const [sessionId, rec] of Object.entries(this.state.channels)) {
+      if (!rec.closed && rec.rootId && this.metas.some((x) => x.sessionId === sessionId)) {
+        await this.catchUp(sessionId, rec);
+      }
+    }
+  }
+
+  /** One message from the channel of session `sessionId`: a dialog answer, or a prompt. */
+  private async channelMessage(sessionId: string, m: ChatMessage): Promise<void> {
+    if (!this.settings.allowedUsers.includes(m.authorId)) {
+      this.log(`ignored a message from user ${m.authorId}`); // the actor id only, never the content
       return;
     }
-    const entry = Object.entries(this.state.channels).find(([, c]) => c.roomId === m.roomId && !c.closed);
-    if (!entry) {
+    const text = m.body.trim();
+    if (!text && !m.attachments?.length) {
       return;
     }
     if (m.threadRootId) {
@@ -797,7 +932,7 @@ export class Bridge {
     if (d && (await this.answerFrom(d, { text }))) {
       return;
     }
-    const meta = this.metas.find((x) => x.sessionId === entry[0]);
+    const meta = this.metas.find((x) => x.sessionId === sessionId);
     if (!meta) {
       await this.adapter.post(m.roomId, "toriel does not know this session right now (the daemon restarted?); open it in toriel once.", { replyTo: m.id });
       return;

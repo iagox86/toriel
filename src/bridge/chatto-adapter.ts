@@ -174,6 +174,26 @@ export async function connectChatto(opts: ChattoConnect): Promise<ChatAdapter> {
     async unreact(roomId, messageId, emoji) {
       await messages$().removeReaction({ roomId, messageEventId: messageId, emoji });
     },
+    async recentMessages(roomId, limit) {
+      // the page is the newest `limit` events, oldest first (probed live, ticket 279); the `after` cursor is an opaque one, so the bridge slices by message id instead
+      const res = await rooms$().getRoomEvents({ roomId, limit });
+      const events: Payload[] = Array.isArray(res.page?.events) ? res.page.events : [];
+      return events.flatMap((ev) => {
+        const m = ev.event?.case === "messagePosted" ? ev.event.value?.message : undefined;
+        if (!m || m.deletedAt) {
+          return [];
+        }
+        const message: ChatMessage = {
+          id: String(ev.id),
+          roomId,
+          authorId: String(ev.actorId),
+          body: String(m.body ?? ""),
+          inReplyTo: m.inReplyTo || undefined,
+          threadRootId: m.threadRootEventId || undefined,
+        };
+        return [message];
+      });
+    },
     async typing(roomId) {
       await server.refreshTyping({ roomId, threadRootId: "" });
     },

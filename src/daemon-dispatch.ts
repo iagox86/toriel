@@ -21,6 +21,7 @@ import {
   handleAutoMode,
   handleModeNotice,
   handleObserveDialogs,
+  handleReadHistory,
   handlePlanMode,
   handlePublish,
   handleDenyAfter,
@@ -151,6 +152,8 @@ export async function dispatch(ctx: DaemonContext, cmd: ClientCommand, socket: n
       return handleRestoreCode(ctx, cmd, res);
     case "observe_dialogs":
       return handleObserveDialogs(ctx, cmd, socket, res);
+    case "read_history":
+      return handleReadHistory(ctx, cmd, res);
     case "ui_response":
       return handleUiResponse(ctx, cmd, res);
     case "list":
