@@ -40,6 +40,9 @@ export class FakeChat implements ChatAdapter {
   async listRooms(): Promise<ChatRoom[]> {
     return [...this.rooms.values()].filter((r) => !r.archived).map(({ id, name, archived, description }) => ({ id, name, archived, description }));
   }
+  async listArchived(): Promise<ChatRoom[]> {
+    return [...this.rooms.values()].filter((r) => r.archived).map(({ id, name, archived, description }) => ({ id, name, archived, description }));
+  }
   async createRoom(_group: string, name: string, description: string): Promise<ChatRoom> {
     if ([...this.rooms.values()].some((r) => r.name.toLowerCase() === name.toLowerCase())) {
       throw new Error("[already_exists] a room with this name already exists on this server");

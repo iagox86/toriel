@@ -90,6 +90,7 @@ export async function connectChatto(opts: ChattoConnect): Promise<ChatAdapter> {
   });
   const rooms$ = () => server.service(types.RoomService);
   const messages$ = () => server.service(types.MessageService);
+  const types_directory = () => server.service(types.RoomDirectoryService);
   const adapter: ChatAdapter = {
     get selfId() {
       return selfId;
@@ -125,6 +126,22 @@ export async function connectChatto(opts: ChattoConnect): Promise<ChatAdapter> {
     },
     async listRooms() {
       return rooms();
+    },
+    async listArchived(group) {
+      // RoomDirectoryService.listRooms with the archived filter (probed live, ticket 279); scope 2 = channels, filter 2 = archived
+      const out: ChatRoom[] = [];
+      for (let offset = 0; offset < 2000; offset += 100) {
+        const res = await types_directory().listRooms({ scope: 2, archiveFilter: 2, page: { limit: 100, offset } });
+        for (const r of Array.isArray(res.rooms) ? (res.rooms as Payload[]) : []) {
+          if (r.room?.groupId === group) {
+            out.push({ id: String(r.room.id), name: String(r.room.name), archived: true, description: r.room.description || undefined });
+          }
+        }
+        if (!res.page?.hasMore) {
+          break;
+        }
+      }
+      return out;
     },
     async createRoom(group, name, description) {
       const r = await rooms$().createRoom({ name, description, groupId: group, universal: false });

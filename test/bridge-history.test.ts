@@ -252,3 +252,28 @@ describe("a channel name an archived channel still holds", () => {
     assert.equal(t.logs.filter((l) => /failed/.test(l)).length, 0);
   });
 });
+
+describe("a session whose closed channel is still there", () => {
+  it("reopens it by its tag instead of making another, and keeps its name", async () => {
+    const t = await setup();
+    const old = await t.chat.createRoom("g1", "an-older-name", "closed [toriel:uuid-1]");
+    await t.chat.archiveRoom(old.id);
+    t.daemon.sessions([meta({ sessionName: "An Older Name" })]);
+    await t.bridge.idle();
+    assert.equal([...t.chat.rooms.values()].length, 2, "the inbox and the old channel; none was made");
+    const room = t.chat.rooms.get(old.id);
+    assert.equal(room?.archived, false);
+    assert.ok(t.chat.postsIn(old.id).some((p) => /Published again/.test(p.body)));
+    assert.match(room?.description ?? "", /\[toriel:uuid-1\]$/);
+    assert.ok(t.logs.some((l) => /found for session 1 by its tag/.test(l)));
+  });
+  it("leaves a closed channel of another session alone", async () => {
+    const t = await setup();
+    const other = await t.chat.createRoom("g1", "someone-elses", "closed [toriel:uuid-other]");
+    await t.chat.archiveRoom(other.id);
+    t.daemon.sessions([meta()]);
+    await t.bridge.idle();
+    assert.equal(t.chat.rooms.get(other.id)?.archived, true);
+    assert.ok(t.chat.roomByName("fix-the-build"));
+  });
+});

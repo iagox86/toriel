@@ -440,6 +440,22 @@ export class Bridge {
   private async openChannel(meta: SessionMeta): Promise<void> {
     const sessionId = meta.sessionId as string;
     let rec = this.state.channels[sessionId];
+    if (!rec) {
+      // a channel this session had before (the bridge's state was lost, or it was made before this one started) is closed, not gone: it is found by its tag and reopened, rather than a second one made beside it
+      const old = await this.adapter
+        .listArchived(this.groupId)
+        .then((rooms) => rooms.find((r) => sessionFromDescription(r.description) === sessionId))
+        .catch((err: unknown) => {
+          this.log(`could not list the closed channels: ${err instanceof Error ? err.message : String(err)}`);
+          return undefined;
+        });
+      if (old) {
+        rec = { roomId: old.id, name: old.name, closed: true };
+        this.state.channels[sessionId] = rec;
+        this.save();
+        this.log(`closed channel ${old.name} found for session ${meta.id} by its tag: reopened`);
+      }
+    }
     const reopened = rec?.closed === true;
     const existed = rec !== undefined;
     const wanted = channelNameFor(meta.sessionName ?? "", `session-${meta.id}`);

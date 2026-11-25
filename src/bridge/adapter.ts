@@ -42,6 +42,8 @@ export interface ChatAdapter {
   findGroup(nameOrId: string): Promise<string | undefined>;
   /** Rooms in the group, archived ones included. */
   listRooms(groupId: string): Promise<ChatRoom[]>;
+  /** Archived rooms of the group, with their descriptions (the room list leaves them out); a closed channel is found again by the tag in it. */
+  listArchived(groupId: string): Promise<ChatRoom[]>;
   /** Make a channel in the group and join it; rejects when the name is taken or the bot may not create. */
   createRoom(groupId: string, name: string, description: string): Promise<ChatRoom>;
   joinRoom(roomId: string): Promise<void>;
