@@ -227,3 +227,28 @@ describe("what was written in a channel while nobody listened", () => {
     assert.deepEqual(again.daemon.of("prompt").map((p) => p.message), ["written while the bridge was down"]);
   });
 });
+
+describe("a channel name an archived channel still holds", () => {
+  it("is not an error: the channel takes the next free name", async () => {
+    const t = await setup();
+    const old = await t.chat.createRoom("g1", "fix-the-build", "an old closed channel");
+    await t.chat.archiveRoom(old.id); // archived rooms are not in the room list, but they keep their names
+    t.daemon.sessions([meta()]);
+    await t.bridge.idle();
+    const room = t.chat.roomByName("fix-the-build-2");
+    assert.ok(room, "made under the next name");
+    assert.ok(t.chat.postsIn(room.id).some((p) => /Published/.test(p.body)));
+    assert.ok(t.logs.some((l) => /is taken by a closed channel/.test(l)));
+  });
+  it("renames to a free name when the session's new name is held by a closed channel", async () => {
+    const t = await setup();
+    t.daemon.sessions([meta()]);
+    await t.bridge.idle();
+    const held = await t.chat.createRoom("g1", "shiny-new-name", "");
+    await t.chat.archiveRoom(held.id);
+    t.daemon.sessions([meta({ sessionName: "Shiny New Name" })]);
+    await t.bridge.idle();
+    assert.ok(t.chat.roomByName("shiny-new-name-2"));
+    assert.equal(t.logs.filter((l) => /failed/.test(l)).length, 0);
+  });
+});

@@ -386,6 +386,25 @@ export class Bridge {
   private readonly inboxAnnounce = new Set<string>();
   private readonly lastLabel = new Map<string, string>();
 
+  /**
+   * Run `attempt` with a channel name nobody uses, trying `wanted`, then `wanted-2`, `wanted-3`...: the server refuses a name any room
+   * has, and a room that was closed (archived) is not in the room list, so the list alone cannot say which names are free.
+   */
+  private async withFreeName<T>(wanted: string, own: string | undefined, attempt: (name: string) => Promise<T>): Promise<{ name: string; result: T }> {
+    let name = await this.uniqueChannelName(wanted, own);
+    for (let n = 2; ; n++) {
+      try {
+        return { name, result: await attempt(name) };
+      } catch (err) {
+        if (!/already.exists|name.*taken/i.test(err instanceof Error ? err.message : String(err)) || n > 50) {
+          throw err;
+        }
+        this.log(`channel name ${name} is taken by a closed channel: trying another`);
+        name = `${wanted.slice(0, 30 - String(n).length - 1)}-${n}`;
+      }
+    }
+  }
+
   private uniqueChannelName(wanted: string, own?: string): Promise<string> {
     return this.adapter.listRooms(this.groupId).then((rooms) => {
       const taken = new Set(rooms.filter((r) => r.id !== own).map((r) => r.name.toLowerCase()));
@@ -431,9 +450,9 @@ export class Bridge {
       rec.closed = false;
       await this.addUsers(rec.roomId); // a channel from before addUsers existed, or one the user left, has the users again
     } else {
-      const name = await this.uniqueChannelName(wanted);
-      const room = await this.adapter.createRoom(this.groupId, name, `starting ${sessionTag(sessionId)}`);
-      rec = { roomId: room.id, name, closed: false };
+      const made = await this.withFreeName(wanted, undefined, (n) => this.adapter.createRoom(this.groupId, n, `starting ${sessionTag(sessionId)}`));
+      const room = made.result;
+      rec = { roomId: room.id, name: made.name, closed: false };
       this.state.channels[sessionId] = rec;
       await this.addUsers(room.id);
     }
@@ -507,10 +526,10 @@ export class Bridge {
     if (meta.sessionName) {
       const wanted = channelNameFor(meta.sessionName, rec.name);
       if (wanted !== rec.name && !rec.name.startsWith(`${wanted}-`)) {
-        const name = await this.uniqueChannelName(wanted, rec.roomId);
-        if (name !== rec.name) {
-          await this.adapter.renameRoom(rec.roomId, name);
-          rec.name = name;
+        const roomId = rec.roomId;
+        const renamed = await this.withFreeName(wanted, roomId, (n) => (n === rec.name ? Promise.resolve() : this.adapter.renameRoom(roomId, n)));
+        if (renamed.name !== rec.name) {
+          rec.name = renamed.name;
           this.save();
         }
       }

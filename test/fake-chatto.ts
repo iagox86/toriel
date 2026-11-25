@@ -42,7 +42,7 @@ export class FakeChat implements ChatAdapter {
   }
   async createRoom(_group: string, name: string, description: string): Promise<ChatRoom> {
     if ([...this.rooms.values()].some((r) => r.name.toLowerCase() === name.toLowerCase())) {
-      throw new Error("room name taken");
+      throw new Error("[already_exists] a room with this name already exists on this server");
     }
     const id = `room${++this.seq}`;
     this.rooms.set(id, { id, name, archived: false, description, members: true });
@@ -64,6 +64,9 @@ export class FakeChat implements ChatAdapter {
     this.added.push([roomId, userId]);
   }
   async renameRoom(id: string, name: string): Promise<void> {
+    if ([...this.rooms.values()].some((r) => r.id !== id && r.name.toLowerCase() === name.toLowerCase())) {
+      throw new Error("[already_exists] a room with this name already exists on this server");
+    }
     (this.rooms.get(id) as ChatRoom).name = name;
   }
   async setDescription(id: string, description: string): Promise<void> {
