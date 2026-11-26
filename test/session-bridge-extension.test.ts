@@ -26,7 +26,7 @@ function fakePi() {
         throw new Error("no model");
       }
       sent.push({ message, options });
-      branch.push({ type: "custom_message", customType: "toriel-inject", details: message.details });
+      branch.push({ type: "custom_message", customType: message.customType, details: message.details });
     },
   };
   ext.default(pi as never);
@@ -38,6 +38,7 @@ function fakePi() {
     failSends: () => {
       sendFails = true;
     },
+    injectRaw: (req: Record<string, unknown>) => commands.get("toriel-inject")?.(JSON.stringify(req), ctx),
     inject: (id: string, text: string) => commands.get("toriel-inject")?.(JSON.stringify({ id, text }), ctx),
     fire: (name: string, event: Record<string, unknown> = {}) => handlers.get(name)?.(event, ctx),
     hasCommand: () => commands.has("toriel-inject"),
@@ -138,5 +139,22 @@ describe("inject requests", () => {
     assert.equal(ext.parseInject("nope"), undefined);
     assert.equal(ext.parseInject('{"id":"","text":"x"}'), undefined);
     assert.equal(ext.parseInject('{"id":"b1"}'), undefined);
+  });
+
+  it("takes a custom message type and structured fields, from the known types only", () => {
+    assert.deepEqual(ext.parseInject('{"id":"b1","text":"x","type":"toriel-local-command","data":{"command":"ls"}}'), { id: "b1", text: "x", type: "toriel-local-command", data: { command: "ls" } });
+    assert.equal(ext.parseInject('{"id":"b1","text":"x","type":"made-up"}'), undefined);
+    assert.equal(ext.parseInject('{"id":"b1","text":"x","type":7}'), undefined);
+    assert.deepEqual(ext.parseInject('{"id":"b1","text":"x","data":[1]}'), { id: "b1", text: "x" }, "data must be an object");
+  });
+
+  it("delivers a !command result as a toriel-local-command message with its details beside the id, and confirms it", async () => {
+    const pi = fakePi();
+    await pi.injectRaw({ id: "b9", text: "wrapper", type: "toriel-local-command", data: { command: "ls", output: "a\n", exitCode: 0, cancelled: false } });
+    await tick();
+    assert.equal(pi.sent[0]?.message.customType, "toriel-local-command");
+    assert.deepEqual(pi.sent[0]?.message.details, { command: "ls", output: "a\n", exitCode: 0, cancelled: false, id: "b9" });
+    assert.equal(pi.sent[0]?.message.content, "wrapper", "the model reads the text");
+    assert.deepEqual(ext.entryFor({ id: "b9", text: "t", type: "toriel-local-command", data: { command: "ls" } }), { type: "custom_message", customType: "toriel-local-command", content: "t", display: true, details: { command: "ls", id: "b9" } });
   });
 });

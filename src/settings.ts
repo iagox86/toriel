@@ -24,7 +24,7 @@ export interface ChattoSettings {
   tokenFile?: string;
   /** Name of an environment variable (in the daemon's environment) holding the token. */
   tokenEnv?: string;
-  /** Room group the session channels live in, name or id (default "Toriel"). */
+  /** Room group the session channels live in, name or id. Required: there is no default, because a guess that stops matching (the group was renamed) only shows at the next restart. An id survives a rename. */
   group: string;
   /** The channel for announcements and for starting sessions (default "inbox"). */
   inboxChannel: string;
@@ -74,7 +74,10 @@ export function validChatto(value: unknown): { ok: true; chatto: ChattoSettings 
   if (s.defaultModel && !/^[^/\s]+\/\S+$/.test(s.defaultModel)) {
     return { ok: false, problem: "chatto.defaultModel must be provider/id" };
   }
-  return { ok: true, chatto: { url: s.url, tokenFile: s.tokenFile, tokenEnv: s.tokenEnv, group: s.group ?? "Toriel", inboxChannel: s.inboxChannel ?? "inbox", allowedUsers, defaultCwd: s.defaultCwd, defaultModel: s.defaultModel, addUsers } };
+  if (!s.group) {
+    return { ok: false, problem: "chatto.group is required: the name or id of the room group the bot makes session channels in (an id survives renaming the group)" };
+  }
+  return { ok: true, chatto: { url: s.url, tokenFile: s.tokenFile, tokenEnv: s.tokenEnv, group: s.group, inboxChannel: s.inboxChannel ?? "inbox", allowedUsers, defaultCwd: s.defaultCwd, defaultModel: s.defaultModel, addUsers } };
 }
 
 export interface TorielSettings {

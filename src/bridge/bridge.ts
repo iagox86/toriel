@@ -19,6 +19,7 @@ import { parseChatCommand } from "./chat-commands.ts";
 import { runChatCommand } from "./command-runner.ts";
 import { HISTORY_TURNS, quoteUser, renderHistory } from "./history.ts";
 import { parseLocalCommand } from "../local-command.ts";
+import { localCommandOf, localCommandPost } from "./local-command-post.ts";
 
 interface ChannelRecord {
   roomId: string;
@@ -776,6 +777,20 @@ export class Bridge {
     }
   }
 
+  /** A `!command` result (the custom message toriel injects): shown as the command and its output, unless chat ran it and said so itself. */
+  private async showLocalCommand(roomId: string, m: { customType?: string; details?: unknown } | undefined): Promise<void> {
+    const local = localCommandOf(m);
+    if (!local) {
+      return;
+    }
+    const mine = this.shellCommands.indexOf(local.command);
+    if (mine >= 0) {
+      this.shellCommands.splice(mine, 1); // a `!!` this bridge ran: it posted the output itself
+      return;
+    }
+    await this.postLong(roomId, localCommandPost(local));
+  }
+
   private async postLong(roomId: string, text: string): Promise<void> {
     for (const part of splitBody(text)) {
       await this.adapter.post(roomId, part);
@@ -827,7 +842,12 @@ export class Bridge {
             await this.postLong(rec.roomId, quoteUser(text, "typed in toriel"));
           }
         }
+      } else if (message?.role === "custom") {
+        await this.showLocalCommand(rec.roomId, message as { customType?: string; details?: unknown });
       }
+    } else if (type === "entry_appended") {
+      // a result delivered at a turn boundary arrives as an appended entry, not as message events
+      await this.showLocalCommand(rec.roomId, event.entry as { type?: string; customType?: string; details?: unknown } | undefined);
     } else if (type === "compaction_start") {
       await this.adapter.post(rec.roomId, "ℹ compacting the context…");
     } else if (type === "compaction_end") {

@@ -140,7 +140,7 @@ function persist(message) {
 const bridgePending = [];
 const bridgeStatus = (r) => out({ type: "extension_ui_request", id: randomUUID(), method: "setStatus", statusKey: "toriel-bridge", statusText: JSON.stringify({ v: 1, ...r }) });
 function persistCustom(p) {
-  const custom = { role: "custom", customType: "toriel-inject", content: p.text, display: true, details: { id: p.id } };
+  const custom = { role: "custom", customType: p.type ?? "toriel-inject", content: p.text, display: true, details: { ...p.data, id: p.id } };
   messages.push(custom);
   mkdirSync(dirname(sessionFile), { recursive: true });
   if (!existsSync(sessionFile)) {

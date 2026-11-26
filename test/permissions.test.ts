@@ -377,7 +377,7 @@ describe("touchesProtected: every spelling of a protected file", () => {
       process.env.XDG_CONFIG_HOME = dir;
       fs.mkdirSync(path.join(dir, "toriel"), { recursive: true });
       assert.equal(protectedPaths().some((p) => p.endsWith(".token")), false, "no chatto setting, no token file");
-      fs.writeFileSync(path.join(dir, "toriel", "settings.yaml"), "chatto:\n  url: https://chat.example.com\n  tokenFile: ~/secrets/bot.key\n  allowedUser: u1\n");
+      fs.writeFileSync(path.join(dir, "toriel", "settings.yaml"), "chatto:\n  url: https://chat.example.com\n  tokenFile: ~/secrets/bot.key\n  group: Toriel\n  allowedUser: u1\n");
       const token = path.join(os.homedir(), "secrets", "bot.key");
       assert.ok(protectedPaths().includes(token));
       assert.equal(touchesProtected(`cat ${token}`), true);

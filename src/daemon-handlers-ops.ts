@@ -9,6 +9,7 @@ import { bangEnv } from "./child-env.ts";
 import { PLAN_DIR, SOCK, TRASH_DIR } from "./config.ts";
 import { planOn, setPlanOn } from "../pi/extensions/lib/plan-mode.ts";
 import { type Cmd, type DaemonContext, requireNotInPi, type Responder } from "./daemon-context.ts";
+import { LOCAL_COMMAND_TYPE } from "./daemon-bridge.ts";
 import { deliverToSession } from "./daemon-handlers-bridge.ts";
 import { digestHistory, readHistoryOf, sendHistory } from "./daemon-history.ts";
 import { answerText, recordDecision } from "./decision-log.ts";
@@ -38,8 +39,9 @@ export async function handleAbort(
 }
 
 /**
- * `!command`: run it here, then tell the agent at once (an ordinary message in
- * <local-command> tags, which starts a turn or queues behind the one running).
+ * `!command`: run it here, then tell the agent at once: a `toriel-local-command` custom message (the model reads the
+ * <local-command> text; `details` carries the command and result for every renderer), which starts a turn or is delivered at the
+ * next boundary of the one running. Never a user message.
  * pi's own `bash` call is avoided on purpose: it would only show the output to
  * the model with the user's next message.
  */
@@ -60,9 +62,13 @@ export async function handleBash(ctx: DaemonContext, cmd: Cmd<"bash">, res: Resp
     s.localCommand = undefined;
   }
   const text = formatLocalCommand(cmd.command, result);
-  const child = ctx.registry.get(cmd.session)?.child;
-  if (child) {
-    await child.prompt(text, undefined, "steer");
+  if (ctx.registry.get(cmd.session)?.child) {
+    // a custom message, not a user prompt: nothing downstream mistakes it for something the user typed
+    await deliverToSession(ctx, s, text, {
+      type: LOCAL_COMMAND_TYPE,
+      data: { command: cmd.command, output: result.output, exitCode: result.exitCode, cancelled: result.cancelled, truncated: result.truncated },
+      label: `$ ${cmd.command}`,
+    });
   }
   res(true, undefined, result);
 }

@@ -25,18 +25,29 @@ interface Pi {
 export const INJECT_COMMAND = "toriel-inject";
 export const CUSTOM_TYPE = "toriel-inject";
 export const STATUS_KEY = "toriel-bridge";
+/** The `!command` result message: `details` carries the command, output and exit status, so nothing has to parse `content`. */
+export const LOCAL_COMMAND_TYPE = "toriel-local-command";
+/** The custom message types a request may ask for (the daemon is trusted, but a typo should fail loudly, not invent a type). */
+export const REQUEST_TYPES: ReadonlySet<string> = new Set([CUSTOM_TYPE, LOCAL_COMMAND_TYPE]);
 
 interface Pending {
   id: string;
   text: string;
+  /** The custom message type (default `toriel-inject`) and the structured fields that go in `details` beside the id. */
+  type?: string;
+  data?: Record<string, unknown>;
 }
 
 /** Parse the argument of `/toriel-inject`; undefined when it is not a well-formed request. */
 export function parseInject(args: string): Pending | undefined {
   try {
-    const v = JSON.parse(args) as { id?: unknown; text?: unknown };
+    const v = JSON.parse(args) as { id?: unknown; text?: unknown; type?: unknown; data?: unknown };
     if (typeof v.id === "string" && v.id && typeof v.text === "string") {
-      return { id: v.id, text: v.text };
+      if (v.type !== undefined && (typeof v.type !== "string" || !REQUEST_TYPES.has(v.type))) {
+        return undefined;
+      }
+      const data = typeof v.data === "object" && v.data !== null && !Array.isArray(v.data) ? (v.data as Record<string, unknown>) : undefined;
+      return { id: v.id, text: v.text, ...(v.type ? { type: v.type } : {}), ...(data ? { data } : {}) };
     }
   } catch {
     // fall through
@@ -46,7 +57,7 @@ export function parseInject(args: string): Pending | undefined {
 
 /** The custom_message draft pi appends at a boundary. */
 export function entryFor(p: Pending) {
-  return { type: "custom_message" as const, customType: CUSTOM_TYPE, content: p.text, display: true, details: { id: p.id } };
+  return { type: "custom_message" as const, customType: p.type ?? CUSTOM_TYPE, content: p.text, display: true, details: { ...p.data, id: p.id } };
 }
 
 /**
@@ -122,7 +133,7 @@ export default function (pi: Pi) {
   const idsInTranscript = (ctx: Ctx): Set<string> => {
     const ids = new Set<string>();
     for (const e of ctx.sessionManager.getBranch()) {
-      if (e.type === "custom_message" && e.customType === CUSTOM_TYPE && typeof e.details?.id === "string") {
+      if (e.type === "custom_message" && e.customType !== undefined && REQUEST_TYPES.has(e.customType) && typeof e.details?.id === "string") {
         ids.add(e.details.id);
       }
     }
@@ -156,7 +167,7 @@ export default function (pi: Pi) {
           break;
         }
         try {
-          await pi.sendMessage({ customType: CUSTOM_TYPE, content: p.text, display: true, details: { id: p.id } }, { triggerTurn: true });
+          await pi.sendMessage({ customType: p.type ?? CUSTOM_TYPE, content: p.text, display: true, details: { ...p.data, id: p.id } }, { triggerTurn: true });
         } catch (err) {
           queue.drop(p.id);
           report({ kind: "failed", id: p.id, error: err instanceof Error ? err.message : String(err) });

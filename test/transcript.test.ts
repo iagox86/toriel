@@ -144,6 +144,16 @@ describe("applyEvent", () => {
       assert.deepEqual(runs(view.items), [1, 2]);
     });
 
+    it("draws a toriel-local-command message as a command block from its details, not as a typed message", () => {
+      const tui = { requestRender() {} } as never;
+      const items = itemsFromMessages([{ role: "custom", customType: "toriel-local-command", content: "wrapper text", display: true, details: { command: "ls -la", output: "a\n", exitCode: 0, cancelled: false } }], tui, "/w");
+      assert.deepEqual(items.map((i) => i.kind), ["bash"]);
+      const view = newView();
+      const added: Item[] = [];
+      applyEvent(view, { type: "entry_appended", entry: { type: "custom_message", customType: "toriel-local-command", content: "wrapper text", details: { command: "ls", output: "", exitCode: 1 } } }, { addItem: (i: Item) => added.push(i), tui } as never);
+      assert.deepEqual(added.map((i) => i.kind), ["bash"]);
+    });
+
     it("fold the same way when a session is replayed", () => {
       const result = (id: string) => ({ role: "toolResult", toolName: "bash", toolCallId: id, content: [{ type: "text", text: "ok" }], isError: false });
       const tui = { requestRender() {} } as never;
@@ -460,6 +470,7 @@ describe("isInjectType", () => {
     assert.equal(isInjectType("toriel-inject"), true);
     assert.equal(isInjectType("ronpi-inject"), true);
     assert.equal(isInjectType("toriel-job"), true, "a background job's exit notice is shown too");
+    assert.equal(isInjectType("toriel-local-command"), true, "a !command result is shown too");
     assert.equal(isInjectType("something-else"), false);
     assert.equal(isInjectType(undefined), false);
   });

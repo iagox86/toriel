@@ -7,7 +7,7 @@ import { AssistantMessage, BashRow, CompactionRow, ToolRow, UserMessage } from "
 import { type ActivityState, reduceActivity } from "./activity.ts";
 import { messagesAdded } from "./drift.ts";
 import { repairFences } from "./fence-repair.ts";
-import { INJECT_TYPE } from "./daemon-bridge.ts";
+import { INJECT_TYPE, LOCAL_COMMAND_TYPE } from "./daemon-bridge.ts";
 import { binaryReadDisplay } from "./binary-view.ts";
 import { prettyError } from "./error-format.ts";
 import { toolDefinitionFor } from "./tool-defs.ts";
@@ -316,7 +316,7 @@ const JOB_TYPE = "toriel-job";
 
 /** True for the custom message type of a session-bridge injection (current or pre-rename) or a background job's exit notice: all show like a received message. */
 export function isInjectType(customType: string | undefined): boolean {
-  return customType === INJECT_TYPE || customType === LEGACY_INJECT_TYPE || customType === JOB_TYPE;
+  return customType === INJECT_TYPE || customType === LEGACY_INJECT_TYPE || customType === JOB_TYPE || customType === LOCAL_COMMAND_TYPE;
 }
 
 /** A session-bridge injection: a custom message the daemon delivered, shown like a received user message. */
@@ -337,7 +337,7 @@ export function applyEvent(view: SessionView, ev: Record<string, unknown>, env: 
       // an inject delivered at a turn boundary arrives as an appended entry, not as message events
       const e = ev.entry as { type?: string; customType?: string; content?: unknown } | undefined;
       if (e?.type === "custom_message" && isInjectType(e.customType)) {
-        env.addItem(userItem(messageText({ content: e.content }), env.tui, imageBlocks({ content: e.content })));
+        env.addItem(injectItem(e as { customType?: string; content?: unknown; details?: unknown }, env.tui));
         effects.messageEnded = true;
       }
       break;
@@ -345,7 +345,7 @@ export function applyEvent(view: SessionView, ev: Record<string, unknown>, env: 
     case "message_start": {
       const m = ev.message as { role?: string; content?: unknown } | undefined;
       if (isInject(m)) {
-        env.addItem(userItem(messageText(m), env.tui, imageBlocks(m)));
+        env.addItem(injectItem(m as { customType?: string; content?: unknown; details?: unknown }, env.tui));
       } else if (m?.role === "user") {
         const text = messageText(m).trim();
         const echoed = view.echoes.findIndex((e) => e.text === text);
@@ -475,6 +475,20 @@ function userItem(text: string, tui: TuiAltScreen, images: ImageBlock[] = []): U
   return { kind: "user", component };
 }
 
+/** A custom message of the inject kinds as shown: a `!command` result from its `details`, the others like a received message. */
+function injectItem(m: { customType?: string; content?: unknown; details?: unknown }, tui: TuiAltScreen): UserItem | BashItem {
+  if (m.customType === LOCAL_COMMAND_TYPE) {
+    const d = m.details as { command?: unknown; output?: unknown; exitCode?: unknown; cancelled?: unknown } | undefined;
+    if (typeof d?.command === "string") {
+      return bashItem(
+        { command: d.command, output: typeof d.output === "string" ? d.output : "", exitCode: typeof d.exitCode === "number" ? d.exitCode : undefined, cancelled: d.cancelled === true },
+        tui,
+      );
+    }
+  }
+  return userItem(messageText(m), tui, imageBlocks(m)); // also a result whose details were lost: the wrapper text still parses
+}
+
 /** A finished `!command` replayed from the session. */
 function bashItem(m: BashExecutionMessage, tui: TuiAltScreen): BashItem {
   const component = new BashRow(m.command, tui, m.excludeFromContext === true, 1);
@@ -517,7 +531,7 @@ export function itemsFromMessages(messages: unknown[], tui: TuiAltScreen, cwd: s
     } else if (m.role === "user") {
       items.push(userItem(messageText(m), tui, imageBlocks(m)));
     } else if (m.role === "custom" && isInjectType(m.customType)) {
-      items.push(userItem(messageText(m), tui, imageBlocks(m)));
+      items.push(injectItem(m, tui));
     } else if (m.role === "assistant") {
       items.push(assistantItem(m as Record<string, unknown>));
     } else if (m.role === "toolResult") {

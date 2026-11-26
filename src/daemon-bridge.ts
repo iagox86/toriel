@@ -9,6 +9,8 @@
 export interface BridgePending {
   id: string;
   text: string;
+  /** What the queue strip shows instead of `text` (a `!command` result is long and not worth echoing). */
+  label?: string;
 }
 
 export class BridgeTracker {
@@ -58,7 +60,7 @@ export class BridgeTracker {
 
   /** The texts still unconfirmed, in delivery order. */
   texts(sessionId: number): string[] {
-    return (this.outstanding.get(sessionId) ?? []).map((p) => p.text);
+    return (this.outstanding.get(sessionId) ?? []).map((p) => p.label ?? p.text);
   }
 
   /** Forget a session's outstanding injects (the child went away); returns what was never confirmed. */
@@ -90,12 +92,22 @@ export const INJECT_COMMAND = "toriel-inject";
 /** The custom message type the bridge appends. */
 export const INJECT_TYPE = "toriel-inject";
 
+/** The custom message type of a `!command` result (`details`: command, output, exitCode, cancelled, truncated); see local-command.ts. */
+export const LOCAL_COMMAND_TYPE = "toriel-local-command";
+
+/** What an inject is beyond text: its custom message type and the fields the extension puts in `details`. */
+export interface InjectKind {
+  type: typeof LOCAL_COMMAND_TYPE;
+  data: Record<string, unknown>;
+  label?: string;
+}
+
 /** The id of the inject a pi event shows being appended to the transcript, if it is one. */
 export function injectedId(event: Record<string, unknown>): string | undefined {
   const entry = event.type === "entry_appended" ? (event.entry as Record<string, unknown> | undefined) : undefined;
   const message = event.type === "message_end" ? (event.message as Record<string, unknown> | undefined) : undefined;
   const found = entry ?? message;
-  if (!found || found.customType !== INJECT_TYPE) {
+  if (!found || (found.customType !== INJECT_TYPE && found.customType !== LOCAL_COMMAND_TYPE)) {
     return undefined;
   }
   const id = (found.details as { id?: unknown } | undefined)?.id;

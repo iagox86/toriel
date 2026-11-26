@@ -231,7 +231,7 @@ describe("doctor checks", () => {
       setup({ mcpExtra: { broken: { exposure: "direct" } } }).opts,
       setup({ piMcpJson: { mcpServers: { freecad: { url: "http://127.0.0.1:39280/mcp" } } } }).opts,
       setup({ config: { authorizerChain: ["toriel-grants"], permission: { "*": "allow", external_directory_write: { "/tmp/*": "allow" }, path: { "*": "ask", [GRANTS_RULE]: "ask" } } }, settings: JSON.stringify({ scopeGuardAcceptedAllows: [{ surface: "external_directory_write", pattern: "/tmp/*" }, { surface: "*", pattern: "*" }] }) }).opts,
-      { ...setup({ settings: '{"chatto":{"url":"https://chat.example.com","tokenFile":"/nonexistent/chatto.token","allowedUser":"u1"}}' }).opts, chatClientInstalled: () => false },
+      { ...setup({ settings: '{"chatto":{"url":"https://chat.example.com","tokenFile":"/nonexistent/chatto.token","group":"Toriel","allowedUser":"u1"}}' }).opts, chatClientInstalled: () => false },
     ];
     const seen = new Set<string>();
     for (const opts of scenarios) {
@@ -509,8 +509,15 @@ describe("doctor checks", () => {
     assert.deepEqual(collectFindings({ ...setup({ settings: '{"sandbox":"off"}' }).opts, probeBwrap: broken }), [], "switched off: nothing to check");
   });
 
+  it("says a chatto setting without a group is unusable (ticket 292)", () => {
+    const settings = '{"chatto":{"url":"https://chat.example.com","tokenEnv":"X","allowedUser":"u1"}}';
+    const found = collectFindings({ ...setup({ settings }).opts, probeBwrap: () => undefined }).filter((x) => x.id === "settings");
+    assert.match(found[0]?.message ?? "", /chatto\.group is required/);
+    assert.ok(found[0]?.manual);
+  });
+
   it("checks the chat bridge's token only when the chatto setting is on (ticket 271)", () => {
-    const chatto = (token: string) => `{"chatto":{"url":"https://chat.example.com","tokenFile":${JSON.stringify(token)},"allowedUser":"u1"}}`;
+    const chatto = (token: string) => `{"chatto":{"url":"https://chat.example.com","tokenFile":${JSON.stringify(token)},"group":"Toriel","allowedUser":"u1"}}`;
     const grade = (settings: string) => collectFindings({ ...setup({ settings }).opts, probeBwrap: () => undefined }).filter((x) => x.id.startsWith("chat-bridge"));
     assert.deepEqual(grade("{}"), [], "no chatto setting: nothing to say");
     const missing = grade(chatto("/nonexistent/chatto.token"));

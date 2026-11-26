@@ -24,7 +24,7 @@ export interface CommandEnv {
   prompt(text: string): Promise<void>;
   /** The sessions (daemon numbers) with a `!!` shell command running, kept by the bridge. */
   shells: Set<number>;
-  /** The `!!` command lines the bridge ran: the injected result is told apart from one typed in toriel by this. */
+  /** The `!!` command lines the bridge ran: the result message toriel injects is told apart from a console `!` by this. */
   shellCommands: string[];
 }
 
