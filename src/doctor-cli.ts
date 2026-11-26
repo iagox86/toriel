@@ -1,6 +1,7 @@
 // `toriel doctor [--fix] [--yes]`: the setup report on the command line. It has to work when node
 // or the dependencies are missing, so it imports only node modules and preflight.ts statically and
 // loads doctor.ts (which needs the dependencies) once the preflight checks have passed.
+import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import type { DoctorOptions } from "./doctor.ts";
 import { startupProblems } from "./preflight.ts";
@@ -71,7 +72,11 @@ export async function doctorMain(args: readonly string[], io: DoctorIo, opts: Do
   const { probeLitellm } = await import("./litellm-models.ts");
   // and the chat server, when the chat bridge is set up (ticket 293): a child process, at most 20 s
   const { probeChatServer } = await import("./bridge/probe-sync.ts");
-  const options = { probeLitellm, probeChat: probeChatServer, ...opts, startup: [], tty: io.tty === true };
+  // and how much recent sessions used each MCP server (ticket 304): it reads pi's session files, so the in-app /doctor skips it
+  const { scanMcpUsage } = await import("./mcp-usage.ts");
+  const { piAgentDir } = await import("./pi-dir.ts");
+  const mcpUsage = () => scanMcpUsage(join(piAgentDir(opts.env ?? process.env), "sessions"));
+  const options = { probeLitellm, probeChat: probeChatServer, mcpUsage, ...opts, startup: [], tty: io.tty === true };
   const checks = doctor.runDoctor(options);
   const style = io.color ? doctor.ANSI_STYLE : undefined;
   io.write(`${doctor.renderDoctor(checks, { style })}\n`);
