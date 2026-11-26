@@ -20,9 +20,18 @@ export function quoteUser(text: string, who: string): string {
     const status = local.cancelled ? "stopped" : local.exitCode === undefined ? "" : `exit ${local.exitCode}`;
     const out = local.output.trim().replaceAll("```", "ˋˋˋ");
     const body = out.length > QUOTE_CHARS ? `${out.slice(0, QUOTE_CHARS)}…` : out;
-    return `> **ran in toriel:** \`${oneLineCmd(local.command)}\`${status ? ` (${status})` : ""}${body ? `\n\`\`\`\n${body}\n\`\`\`` : ""}`;
+    return blockquote(`**ran in toriel:** \`${oneLineCmd(local.command)}\`${status ? ` (${status})` : ""}${body ? `\n\`\`\`\n${body}\n\`\`\`` : ""}`);
   }
-  return `> **${who}:** ${text.length > QUOTE_CHARS ? `${text.slice(0, QUOTE_CHARS)}…` : text}`;
+  return blockquote(`**${who}:** ${text.length > QUOTE_CHARS ? `${text.slice(0, QUOTE_CHARS)}…` : text}`);
+}
+
+/** Every line quoted: a `> ` on the first line alone leaves the rest of a multi-line message outside the quote. */
+export function blockquote(text: string): string {
+  return text
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((l) => (l === "" ? ">" : `> ${l}`))
+    .join("\n");
 }
 
 const oneLineCmd = (c: string): string => c.replace(/\s+/g, " ").trim().replaceAll("`", "ˋ");

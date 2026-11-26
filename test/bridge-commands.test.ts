@@ -107,7 +107,7 @@ describe("commands never reach the agent", () => {
     await t.bridge.idle();
     const posts = t.chat.postsIn(t.room.id);
     assert.equal(posts.length, before + 1);
-    assert.match(posts[posts.length - 1].body, /ran in toriel:\*\* `ls \/tmp` \(exit 0\)\n```\na\nb\n```/);
+    assert.match(posts[posts.length - 1].body, /ran in toriel:\*\* `ls \/tmp` \(exit 0\)\n> ```\n> a\n> b\n> ```/);
     assert.ok(!posts.some((p) => p.body.includes("local-command")));
   });
 
