@@ -82,7 +82,7 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: "mcp-json", level: "recommended", title: "pi's own mcp.json holds no servers (toriel keeps them in mcp.yaml and pi would start the old ones itself)" },
   { id: "chat-bridge-token", level: "feature", title: "the chat bridge's token (the chatto setting's tokenFile or tokenEnv) can be read, and a token file is owner-only" },
   { id: "chat-bridge-package", level: "feature", title: "the chat bridge's package (@chatto/client) is installed, when the chatto setting is on" },
-  { id: "chat-bridge-server", level: "feature", title: "the chat server answers and takes the bridge's token, the room group is visible to the bot and the inbox name is free (whether the bot may create rooms is checked only when the server reports its group permissions; a room the bot cannot see can still hold the name)", needsChatProbe: true },
+  { id: "chat-bridge-server", level: "feature", title: "the chat server answers and takes the bridge's token, the room group is visible to the bot, and the inbox channel is there or is made (its create is the bridge's own first call, so a room the bot cannot see holding the name is refused and said; rooms are otherwise not joined or posted)", needsChatProbe: true },
   { id: "sandbox-bwrap", level: "feature", title: 'bubblewrap works (needed only when the "sandbox" setting is "bwrap": scoped sessions run each bash command sandboxed)' },
   { id: "sleep-lock", level: "feature", title: "the machine is kept awake for scheduled runs (systemd-inhibit)" },
   { id: "notify-send", level: "feature", title: "desktop notifications for prompts in background sessions (notify-send)" },

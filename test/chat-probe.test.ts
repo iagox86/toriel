@@ -6,11 +6,27 @@ import { FakeChat } from "./fake-chatto.ts";
 const s = { url: "https://chat.example.com", group: "Toriel", inboxChannel: "inbox" };
 
 describe("doctor's chat-server probe", () => {
-  it("finds nothing wrong on a server that has what the bridge needs, and changes nothing", async () => {
+  it("finds nothing wrong on a fresh server, and makes the inbox the bridge itself would make", async () => {
     const chat = new FakeChat();
     assert.deepEqual(await probeChat(chat, s), []);
-    assert.equal(chat.rooms.size, 0, "nothing created");
+    assert.deepEqual([...chat.rooms.values()].map((r) => r.name), ["inbox"], "the one call the bridge would make at start");
     assert.equal(chat.posts.length, 0, "nothing posted");
+    assert.deepEqual(await probeChat(chat, s), [], "a second run finds it and is quiet again");
+    assert.equal([...chat.rooms.values()].filter((r) => r.name === "inbox").length, 1, "no second inbox");
+  });
+
+  it("catches a name the create refuses: a room the bot cannot see holds it", async () => {
+    const chat = new FakeChat();
+    chat.hiddenNames.add("inbox");
+    const [p] = await probeChat(chat, s);
+    assert.match(p ?? "", /could not create the inbox channel "inbox" in group "Toriel".*already exists.*a room the bot cannot see holds the name.*set chatto\.inboxChannel to a name no other room has \(e\.g\. "inbox-2"\), or free the name on the server/);
+  });
+
+  it("catches a create the bot may not make", async () => {
+    const chat = new FakeChat();
+    chat.createFails = "[permission_denied] permission denied";
+    const [p] = await probeChat(chat, s);
+    assert.match(p ?? "", /could not create the inbox channel "inbox".*permission denied.*the bot needs permission to create rooms in the group/);
   });
 
   it("says a refused token is refused", async () => {
@@ -46,7 +62,7 @@ describe("doctor's chat-server probe", () => {
     const [p] = await probeChat(chat, s);
     assert.match(p ?? "", /may not create rooms in the chat group "Toriel" \(the server reports room\.create not granted\)/);
     chat.groupPermissions.set("g1", { "room.create": true });
-    assert.deepEqual(await probeChat(chat, s), []);
+    assert.ok((await probeChat(chat, s)).every((x) => !/may not create rooms/.test(x)), "quiet when granted (the create itself is what the probe then makes)");
   });
 
   it("names the step when looking at the group is refused", async () => {
@@ -63,5 +79,15 @@ describe("doctor's chat-server probe", () => {
     assert.deepEqual(await probeChat(chat, s), [], "the group is found and the rest of the checks still run");
     const [p] = await probeChat(chat, { ...s, group: "Toriel 2" });
     assert.match(p ?? "", /room group "Toriel 2" does not exist.*or the list could not be read/);
+  });
+
+  it("leaves the server alone when the group or the token is wrong", async () => {
+    const refused = new FakeChat();
+    refused.failOn.connect = new Error("[unauthenticated] invalid api key");
+    await probeChat(refused, s);
+    assert.equal(refused.rooms.size, 0, "no rooms made");
+    const missing = new FakeChat();
+    await probeChat(missing, { ...s, group: "Toriel 2" });
+    assert.equal(missing.rooms.size, 0, "no rooms made");
   });
 });

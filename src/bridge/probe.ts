@@ -1,8 +1,10 @@
-// Doctor's look at the chat server (ticket 293): what the bridge needs that can be checked without changing anything. The server
-// answers and takes the token, the room group is visible, the inbox name is not held by a room elsewhere, and (when the server reports
-// the bot's group permissions) the bot may create rooms there. Nothing is created, joined or posted.
+// Doctor's look at the chat server (tickets 293, 295): what the bridge needs, as far as doctor can know it without guessing. The server
+// answers and takes the token, the room group is visible, (when the server reports the bot's group permissions) the bot may create rooms
+// there, and when the inbox name is not in the group's visible rooms the inbox is created - the one call the bridge would make at its
+// next start, so doctor catches the case a name the bot cannot see holds (the server then refuses the create). Nothing is joined or
+// posted, and no other room is touched.
 import type { ChatAdapter } from "./adapter.ts";
-import { CONNECT_HINTS, redactUrl, setupFailureText } from "./chat-error.ts";
+import { CONNECT_HINTS, describeChatError, redactUrl, setupFailureText } from "./chat-error.ts";
 
 export interface ChatProbeSettings {
   url: string;
@@ -36,10 +38,26 @@ export async function probeChat(adapter: ChatAdapter, s: ChatProbeSettings): Pro
     }
     const inGroup = [...(await adapter.listRooms(groupId)), ...(await adapter.listArchived(groupId))].some((r) => r.name.toLowerCase() === s.inboxChannel.toLowerCase());
     if (!inGroup) {
-      const elsewhere = (await adapter.findRoomsNamed(s.inboxChannel).catch(() => [])).find((r) => r.groupId !== groupId);
+      const named = (await adapter.findRoomsNamed(s.inboxChannel).catch(() => []));
+      const elsewhere = named.find((r) => r.groupId !== groupId);
       if (elsewhere) {
         const where = groups.find((g) => g.id === elsewhere.groupId)?.name;
         problems.push(`the chat bridge's inbox name "${s.inboxChannel}" is taken by a room in ${where ? `group "${where}"` : "another group"}${elsewhere.archived ? " (archived)" : ""}, and room names are unique on the server: set chatto.inboxChannel to another name`);
+      } else {
+        // the one call the bridge itself would make at start (tickets 295, 293): the server's reply is the truth a listing cannot
+        // give, because a room the bot cannot see can hold the name (it did, live: an inbox of another group unreachable to the bot)
+        try {
+          await adapter.createRoom(groupId, s.inboxChannel, "Toriel: start a session by writing here; announcements");
+        } catch (err) {
+          const info = describeChatError(err);
+          const what = setupFailureText(`create the inbox channel "${s.inboxChannel}" in group "${s.group}"`, err);
+          const hint = info.code === "already_exists"
+            ? `a room the bot cannot see holds the name (room names are unique server-wide; this is what a listing cannot tell): set chatto.inboxChannel to a name no other room has (e.g. "${s.inboxChannel}-2"), or free the name on the server`
+            : info.code === "permission_denied"
+            ? "the bot needs permission to create rooms in the group: check its roles on the chat server"
+            : "the bridge will meet the same error at its next start";
+          problems.push(`the chat bridge ${what}: ${hint}`);
+        }
       }
     }
   } catch (err) {
