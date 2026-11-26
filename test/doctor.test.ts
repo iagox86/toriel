@@ -561,6 +561,9 @@ describe("doctor checks", () => {
     const inApp = runDoctor({ ...base, env: { ...process.env, CHAT_T: "t" } }).find((c) => c.id === "chat-bridge-server");
     assert.equal(inApp?.state, "skipped", "the in-app /doctor does not block on the network");
     assert.match(inApp?.note ?? "", /toriel doctor/);
+    const brokenToken = runDoctor({ ...base, env: { ...process.env, CHAT_T: "" }, probeChat }).find((c) => c.id === "chat-bridge-server");
+    assert.equal(brokenToken?.state, "skipped", "a skipped token check above means the server was never asked: not ok");
+    assert.match(brokenToken?.note ?? "", /the token and the package/);
   });
 
   it("flags a model tier whose provider pi does not know, and stays quiet without lanes or with known providers", () => {

@@ -2,7 +2,7 @@
 // (src/bridge/probe.ts), prints `{"problems": [...]}` on stdout and exits. A child, so doctor stays synchronous and the chat client's
 // sockets and timers die with it. The settings come in TORIEL_CHAT_PROBE (no token: it is read here, as the bridge reads it).
 import type { ChattoSettings } from "../settings.ts";
-import { setupFailureText } from "./chat-error.ts";
+import { redactUrl, setupFailureText } from "./chat-error.ts";
 import { connectChatto } from "./chatto-adapter.ts";
 import { probeChat } from "./probe.ts";
 import { readToken } from "./token.ts";
@@ -17,7 +17,7 @@ async function main(): Promise<string[]> {
   }
   const adapter = await connectChatto({ url: chatto.url, token: token.token });
   const timeout = new Promise<string[]>((resolve) => {
-    setTimeout(() => resolve([`the chat server at ${chatto.url} did not answer within ${CONNECT_MS / 1000} s: check chatto.url and that the server is up`]), CONNECT_MS).unref();
+    setTimeout(() => resolve([`the chat server at ${redactUrl(chatto.url)} did not finish within ${CONNECT_MS / 1000} s (its checks are look-ups only): check chatto.url and that the server is up`]), CONNECT_MS).unref();
   });
   return Promise.race([probeChat(adapter, chatto), timeout]);
 }

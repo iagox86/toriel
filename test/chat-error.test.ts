@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { chatErrorText, describeChatError, isSetupCode, setupFailureText } from "../src/bridge/chat-error.ts";
+import { chatErrorText, describeChatError, isSetupCode, redactUrl, setupFailureText } from "../src/bridge/chat-error.ts";
 
 /** What @connectrpc's ConnectError looks like from outside: numeric code, rawMessage, details, `[code] text` message. */
 function connectError(code: number, raw: string, details: unknown[] = []): Error {
@@ -35,6 +35,17 @@ describe("chat errors", () => {
     assert.equal(setupFailureText("connect", new Error("socket hang up")), "could not connect: socket hang up");
     assert.equal(setupFailureText("connect", new Error("socket hang up"), { "*": "check chatto.url" }), "could not connect: socket hang up. check chatto.url", "a step's fallback for an error with no code");
     assert.match(setupFailureText("connect", connectError(16, "bad"), { "*": "fallback" }), /refused the bot's token/, "the fallback does not override a code's advice");
+  });
+
+  it("keeps the sentence to one line", () => {
+    assert.equal(setupFailureText("connect", new Error("line one\nline two")), "could not connect: line one line two");
+    assert.doesNotMatch(setupFailureText("connect", connectError(7, "multi\nline\ntext")), /\n/);
+  });
+
+  it("does not show the url's user and password", () => {
+    assert.equal(redactUrl("https://bot:secret@chat.example.com"), "https://chat.example.com");
+    assert.equal(redactUrl("https://chat.example.com"), "https://chat.example.com");
+    assert.equal(redactUrl("http://chat.example.com/path"), "http://chat.example.com/path");
   });
 
   it("calls a refused token, a missing permission or a taken name a setup problem, and a server that is down not one", () => {

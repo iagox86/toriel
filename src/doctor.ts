@@ -305,7 +305,7 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
     }
     // only with a token and the package: without them the bridge cannot connect, and the checks above already say why
     if (token.ok && installed && opts.probeChat) {
-      for (const message of opts.probeChat(loaded.settings.chatto)) {
+      for (const message of opts.probeChat(loaded.settings.chatto, opts.env ?? process.env)) {
         out.push({ id: "chat-bridge-server", level: "feature", message, manual: "groups, rooms and the bot's roles live on the chat server, and the inbox name is a choice of yours" });
       }
     }
@@ -534,6 +534,10 @@ export function runDoctor(opts: DoctorOptions = {}): Check[] {
     // the bundle folder is a CLI input (ticket 240); without it the size check has not run, so it does not count as ok (like the probe checks)
     if (entry.id === "feedback-size" && opts.feedbackDir === undefined) {
       return { ...entry, state: "skipped", findings: [], note: "run `toriel doctor` in a terminal to check" };
+    }
+    // the probe is gated on the token and the package in collectFindings, so either problem means it never ran: not ok, then
+    if (entry.needsChatProbe && findings.some((f) => f.id === "chat-bridge-token" || f.id === "chat-bridge-package")) {
+      return { ...entry, state: "skipped", findings: [], note: "checks the chat server, which needs the token and the package (see the problems above)" };
     }
     if (entry.needsChatProbe && opts.probeChat === undefined && chatOn()) {
       return { ...entry, state: "skipped", findings: [], note: "asks the chat server: run `toriel doctor` in a terminal to check" };

@@ -44,7 +44,7 @@ describe("bridge setup failures", () => {
     const chat = new FakeChat();
     chat.hiddenNames.add("inbox");
     const { bridge } = bridgeFor(chat);
-    await assert.rejects(bridge.start(), (err) => err instanceof SetupError && /could not create the inbox channel "inbox" in group "Toriel" \(g1\): already exists: .*in a group the bot cannot see.*chatto\.inboxChannel/.test(err.message));
+    await assert.rejects(bridge.start(), (err) => err instanceof SetupError && /^could not create the inbox channel "inbox" in group "Toriel" \(g1\): a room with that name already exists, and the bot cannot see it \(another toriel's inbox, perhaps, or archived where the bot cannot list it\)\. Room names are unique.*chatto\.inboxChannel/.test(err.message));
   });
 
   it("uses another inbox name when chatto.inboxChannel says so", async () => {
@@ -56,13 +56,14 @@ describe("bridge setup failures", () => {
     await bridge.shutdown();
   });
 
-  it("reopens its own closed inbox instead of failing on the name it still holds", async () => {
+  it("reopens its own closed inbox instead of failing on the name it still holds, and lists its users again", async () => {
     const chat = new FakeChat();
     chat.rooms.set("old", { id: "old", name: "inbox", archived: true, description: "", members: false });
     const { bridge, logs } = bridgeFor(chat);
     await bridge.start();
     assert.equal(chat.rooms.get("old")?.archived, false);
     assert.equal([...chat.rooms.values()].filter((r) => r.name === "inbox").length, 1, "no second inbox");
+    assert.deepEqual(chat.added, [["old", RON]], "the reopened channel has the users again");
     assert.ok(logs.some((l) => /reopened the inbox channel inbox/.test(l)));
     await bridge.shutdown();
   });
@@ -96,5 +97,29 @@ describe("bridge setup failures", () => {
     chat.groups.set("Toriel 2", "g2");
     const { bridge } = bridgeFor(chat, { group: "Nowhere" });
     await assert.rejects(bridge.start(), (err) => err instanceof SetupError && /"Nowhere" does not exist, or the bot cannot see it \(the bot can see: "Toriel", "Toriel 2"\).*set chatto\.group/.test(err.message));
+  });
+
+  it("retries a group the server knows but the client's room list does not have yet, instead of calling it setup", async () => {
+    const chat = new FakeChat();
+    chat.groups.set("Toriel", "g1");
+    chat.findGroup = async () => undefined; // the projection fills in shortly after connecting; here it never got to
+    const { bridge } = bridgeFor(chat);
+    await assert.rejects(bridge.start(), (err) => {
+      assert.ok(!(err instanceof SetupError), "the daemon keeps restarting: not a setup problem");
+      assert.ok(err instanceof Error && /"Toriel" is not in the room list of the client.*the bot can see the group without belonging to it/.test(err.message));
+      return true;
+    });
+  });
+
+  it("uses the group's own room the directory knows but the room list did not have yet", async () => {
+    const chat = new FakeChat();
+    chat.rooms.set("lag", { id: "lag", name: "inbox", archived: false, description: "", members: false });
+    chat.listRooms = async () => []; // the room list is behind; the directory is not
+    const { bridge, logs } = bridgeFor(chat);
+    await bridge.start();
+    assert.deepEqual([...chat.rooms.values()].filter((r) => r.name === "inbox").length, 1, "no second inbox");
+    assert.ok(chat.rooms.get("lag")?.members, "joined");
+    assert.ok(logs.some((l) => /did not have it yet/.test(l)));
+    await bridge.shutdown();
   });
 });

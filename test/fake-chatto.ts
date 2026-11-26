@@ -55,6 +55,9 @@ export class FakeChat implements ChatAdapter {
   /** Group-scoped permissions the server reports for the bot, by group id. */
   groupPermissions = new Map<string, Record<string, boolean>>();
   async listGroups(): Promise<Array<{ id: string; name: string; permissions?: Record<string, boolean> }>> {
+    if (this.failOn.listGroups) {
+      throw this.failOn.listGroups;
+    }
     return [...this.groups].map(([name, id]) => ({ id, name, ...(this.groupPermissions.has(id) ? { permissions: this.groupPermissions.get(id) } : {}) }));
   }
   /** Rooms in other groups the bot can see (the directory lists them); a name in `hiddenNames` is taken by a room it cannot see. */
@@ -65,7 +68,7 @@ export class FakeChat implements ChatAdapter {
     return [...mine, ...this.otherRooms].filter((r) => r.name.toLowerCase() === name.toLowerCase());
   }
   /** Make one setup call fail with this error (a Connect-style `[code] text` message). */
-  failOn: Partial<Record<"connect" | "listRooms" | "joinRoom" | "addMember", Error>> = {};
+  failOn: Partial<Record<"connect" | "listRooms" | "listGroups" | "joinRoom" | "addMember", Error>> = {};
   async listRooms(): Promise<ChatRoom[]> {
     if (this.failOn.listRooms) {
       throw this.failOn.listRooms;

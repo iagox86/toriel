@@ -1,6 +1,7 @@
 // What a failed call to the chat server says, made readable (ticket 293). @chatto/client rejects with a Connect error whose message is
 // only `[code] text` ("[permission_denied] permission denied"); the step that failed, the room or group it was about and what to do
 // next are the caller's to add. Pure: no chat client is loaded here, so the daemon and doctor can use it too.
+import { clipMiddle, oneLine } from "../util.ts";
 
 /** Connect's numeric codes (@connectrpc/connect `Code`), by the names its messages print. */
 const CODE_NAMES: Record<number, string> = {
@@ -53,7 +54,7 @@ export function describeChatError(err: unknown): ChatErrorInfo {
   if (e.cause instanceof Error && e.cause.message && e.cause.message !== e.message) {
     parts.push(`cause: ${e.cause.message}`);
   }
-  return { ...(code ? { code } : {}), text: text || "(no text)", ...(parts.length > 0 ? { detail: parts.join("; ") } : {}) };
+  return { ...(code ? { code } : {}), text: text || "(no text)", ...(parts.length > 0 ? { detail: clipMiddle(parts.join("; "), 500) } : {}) };
 }
 
 /** The code and text as one phrase, `permission_denied: permission denied`, without repeating a text that only restates the code. */
@@ -91,10 +92,16 @@ export function isSetupCode(code: string | undefined): boolean {
 /**
  * The sentence for a failed setup step: `could not <step>: <code: text (detail)>: <what to do>`. `hints` give a step's own advice by
  * code (the inbox's `already_exists` means another room has the name); the generic advice is used otherwise, and `hints["*"]` when
- * neither has any (an error with no code, such as a refused connection).
+ * neither has any (an error with no code, such as a refused connection). One line: a server's own text may hold line breaks, and the
+ * daemon log and the status line are one line each.
  */
 export function setupFailureText(step: string, err: unknown, hints: Partial<Record<string, string>> = {}): string {
   const info = describeChatError(err);
   const hint = (info.code !== undefined ? hints[info.code] : undefined) ?? genericHint(info.code) ?? hints["*"];
-  return `could not ${step}: ${chatErrorText(info)}${hint ? `. ${hint}` : ""}`;
+  return oneLine(`could not ${step}: ${chatErrorText(info)}${hint ? `. ${hint}` : ""}`);
+}
+
+/** The url without the user and password it may carry (the settings may have https://user:pass@host; the log does not keep credentials). */
+export function redactUrl(url: string): string {
+  return url.replace(/^(https?:\/\/)([^@/]+)@/, "$1");
 }

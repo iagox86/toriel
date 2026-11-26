@@ -55,4 +55,13 @@ describe("doctor's chat-server probe", () => {
     const [p] = await probeChat(chat, s);
     assert.match(p ?? "", /^the chat bridge cannot look at the room group "Toriel": permission denied\. the bot's account lacks a permission/);
   });
+
+  it("does not fail the whole check on a directory the bot cannot read", async () => {
+    const chat = new FakeChat();
+    chat.failOn.listGroups = new Error("[permission_denied] permission denied");
+    chat.rooms.set("g", { id: "g", name: "g", archived: false, description: "", members: false });
+    assert.deepEqual(await probeChat(chat, s), [], "the group is found and the rest of the checks still run");
+    const [p] = await probeChat(chat, { ...s, group: "Toriel 2" });
+    assert.match(p ?? "", /room group "Toriel 2" does not exist.*or the list could not be read/);
+  });
 });

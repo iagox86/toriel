@@ -51,7 +51,7 @@ export interface ChatAdapter {
   listGroups(): Promise<ChatGroup[]>;
   /** Every channel the bot can see with this name (case-insensitive), in any group, archived ones included. Room names are unique server-wide, so a name can be taken by a room this does not list (one the bot cannot see). */
   findRoomsNamed(name: string): Promise<Array<ChatRoom & { groupId?: string }>>;
-  /** Rooms in the group, archived ones included. */
+  /** The active rooms of the group (archived ones are left out; `listArchived` has them). */
   listRooms(groupId: string): Promise<ChatRoom[]>;
   /** Archived rooms of the group, with their descriptions (the room list leaves them out); a closed channel is found again by the tag in it. */
   listArchived(groupId: string): Promise<ChatRoom[]>;
