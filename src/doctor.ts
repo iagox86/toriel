@@ -43,6 +43,7 @@ const MCP_AGENT_SERVERS: ReadonlyArray<{ name: string; hint: string }> = [
   { name: "git", hint: "toriel-git-mcp, started without --repository" },
   { name: "gdb", hint: "gdb-mcp, e.g. uv run gdb-mcp" },
   { name: "ghidra", hint: "a Ghidra MCP server" },
+  { name: "vikunja", hint: "a Vikunja MCP server (an entry whose URL or command reaches your Vikunja instance)" },
 ];
 
 export interface CatalogEntry {
@@ -76,6 +77,7 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: "bundled-packages", level: "feature", title: "the pi packages toriel carries are installed with it (ask_user_question, web search, the permission gate, memory; ticket 230)" },
   { id: "mcp-gdb-server", level: "feature", title: "the gdb MCP server is configured in mcp.yaml (the debug and crash-analysis agents need it)" },
   { id: "mcp-ghidra-server", level: "feature", title: "the ghidra MCP server is configured in mcp.yaml (the re-explain, re-find, re-trace and binary-diff agents need it)" },
+  { id: "mcp-vikunja-server", level: "feature", title: "the vikunja MCP server is configured in mcp.yaml (the ticket-brief agent needs it)" },
   { id: "agent-lanes", level: "feature", title: "every model tier in agentLanes (cheap, medium, expensive) names a provider pi knows (models.json or a login)" },
   { id: "litellm-models", level: "feature", title: "pi's models.json matches what the litellm proxy says about each route (context window, output limit, cost)", needsProbe: "litellm" },
   { id: "bifrost-models", level: "feature", title: "pi's models.json matches what the bifrost gateway says about each route (context window, output limit)", needsProbe: "bifrost" },
