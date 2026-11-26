@@ -48,6 +48,8 @@ export interface Over {
   /** Same for the gdb and ghidra servers (the debug and re-* agents). */
   gdbMcp?: string;
   ghidraMcp?: string;
+  /** Same for the vikunja server (the ticket-brief agent). */
+  vikunjaMcp?: string;
   /** Extra servers for mcp.yaml (name -> entry), or raw text to append (a broken entry). */
   mcpExtra?: Record<string, unknown>;
   /** What pi's own mcp.json holds (the file toriel no longer reads: the doctor offers to move it). */
@@ -73,7 +75,7 @@ export function setup(home: string, over: Over = {}) {
     mk(agentDir);
     const server = (exposure: string | undefined) => ({ command: "node", args: ["x"], ...(exposure === "default" ? {} : { exposure: exposure ?? "direct" }) });
     const mcpServers: Record<string, unknown> = { git: server(over.gitMcp) };
-    for (const [name, exposure] of [["gdb", over.gdbMcp], ["ghidra", over.ghidraMcp]] as const) {
+    for (const [name, exposure] of [["gdb", over.gdbMcp], ["ghidra", over.ghidraMcp], ["vikunja", over.vikunjaMcp]] as const) {
       if (exposure !== "none") {
         mcpServers[name] = server(exposure);
       }

@@ -210,6 +210,7 @@ describe("doctor checks", () => {
       { ...setup({}).opts, tty: true, env: { TMUX: "/tmp/tmux-1000/default,1,0" }, probeTmux: () => ({ extendedKeys: "on", clientTerm: "xterm-kitty", clientFeatures: "RGB" }), kittyConfig: "", startup: [] },
       setup({ gitMcp: "none" }).opts,
       setup({ gdbMcp: "none", ghidraMcp: "codemode" }).opts,
+      setup({ vikunjaMcp: "none" }).opts,
       setup({ config: { authorizerChain: ["toriel-grants"], permission: { "*": "allow", path: { "*": "allow", [GRANTS_RULE]: "ask" } } } }).opts,
       { ...setup({ settings: '{"sandbox":"bwrap"}' }).opts, probeBwrap: () => "bwrap is not installed (the bubblewrap package)" },
       setup({}).opts,
@@ -503,6 +504,19 @@ describe("doctor checks", () => {
     assert.deepEqual(grade("mcp-git-server", { gdbMcp: "none", ghidraMcp: "none" }), [], "one server's problem is not another's");
   });
 
+  it("asks for the vikunja MCP server the same way, for the ticket-brief agent", () => {
+    const grade = (over: object) => collectFindings(setup(over).opts).filter((x) => x.id === "mcp-vikunja-server");
+    assert.deepEqual(grade({}), []);
+    assert.deepEqual(grade({ vikunjaMcp: "deferred" }), [], "any exposure will do");
+    const [vikunja] = grade({ vikunjaMcp: "none" });
+    assert.equal(vikunja?.level, "feature");
+    assert.match(vikunja?.message ?? "", /^the "vikunja" MCP server is missing from .*mcp\.yaml: the ticket-brief agent needs it/);
+    assert.equal(vikunja?.fix, undefined, "a missing entry needs the user's own command and args: no automatic fix");
+    assert.ok(vikunja?.manual, "a missing entry needs the user's own command and args: a manual line is required");
+    assert.deepEqual(grade({ gdbMcp: "none", ghidraMcp: "none" }), [], "one server's problem is not another's");
+    assert.deepEqual(collectFindings(setup({ vikunjaMcp: "none" }).opts).filter((x) => x.id.startsWith("mcp-") && x.id !== "mcp-vikunja-server"), [], "missing vikunja does not raise the other servers");
+  });
+
   it("checks that bwrap works unless the sandbox setting is off (the default is on since 2026-11-15)", () => {
     const broken = () => "bwrap is not installed (the bubblewrap package)";
     for (const settings of ['{"sandbox":"bwrap"}', undefined]) {
@@ -632,7 +646,7 @@ describe("doctor report", () => {
     assert.match(text, /Required: all 5 ok/);
     assert.match(text, /Recommended: all 5 ok/);
     assert.doesNotMatch(text, / ok {7}/);
-    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(20 ok\)/);
+    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(21 ok\)/);
   });
 });
 
@@ -661,7 +675,7 @@ describe("doctor report colours", () => {
   it("colours the compact report too, with the passing checks' count dim", () => {
     const coloured = renderDoctor(checks(), { compact: true, style: ANSI_STYLE });
     assert.match(coloured, /Required\x1b\[22m: \x1b\[32mall 5 ok\x1b\[39m/);
-    assert.match(coloured, /\x1b\[2m {2}\(20 ok\)\x1b\[22m/);
+    assert.match(coloured, /\x1b\[2m {2}\(21 ok\)\x1b\[22m/);
   });
 });
 
