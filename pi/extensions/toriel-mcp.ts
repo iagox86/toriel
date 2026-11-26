@@ -22,11 +22,31 @@ interface Ctx {
   ui?: { notify?(message: string, type?: "info" | "warning" | "error"): void };
 }
 interface Pi {
-  on(event: "session_start" | "agent_end", handler: (event: unknown, ctx: Ctx) => unknown): unknown;
+  on(event: "session_start" | "agent_end" | "before_agent_start", handler: (event: unknown, ctx: Ctx) => unknown): unknown;
   getAllTools?(): ToolNamespaceInfo[];
+  getActiveTools?(): string[];
   registerMcpServer?(name: string, config: Record<string, unknown>): void;
   getMcpServers?(): Array<{ name: string }>;
   registerCommand?(name: string, options: { description: string; handler: (args: string, ctx: Ctx) => Promise<void> | void }): void;
+}
+
+/**
+ * How to load MCP tools cheaply (ticket 305). Every tool_search load changes the declared tools, which sit at the top of the prompt,
+ * so the next call re-sends the whole conversation uncached; sessions were seen loading four to six times, eight tools at a time.
+ */
+export const TOOL_SEARCH_GUIDELINE =
+  "tool_search: every load changes your declared tools, which makes the next request re-send the whole conversation without the prompt cache. So load all the MCP tools a task needs in one tool_search call, as early as you can, rather than one at a time as you go; name the tools in the query when you know them (a skill may list them) and set limit to how many you want.";
+
+/** Add the guideline to a run's prompt options when tool_search is among the session's tools. Never throws. */
+export function addToolSearchGuideline(event: unknown, active: readonly string[]): void {
+  try {
+    const options = (event as { systemPromptOptions?: { promptGuidelines?: string[] } } | undefined)?.systemPromptOptions;
+    if (active.includes("tool_search") && Array.isArray(options?.promptGuidelines) && !options.promptGuidelines.includes(TOOL_SEARCH_GUIDELINE)) {
+      options.promptGuidelines.push(TOOL_SEARCH_GUIDELINE);
+    }
+  } catch {
+    // a missing guideline costs only cache misses
+  }
 }
 
 /** Name of the command that looks again. */
@@ -151,6 +171,10 @@ export default function (pi: Pi): void {
     } catch {
       // startup must never fail because of this
     }
+  });
+  pi.on("before_agent_start", (event) => {
+    addToolSearchGuideline(event, pi.getActiveTools?.() ?? []);
+    return undefined;
   });
   if (summariesFile) {
     pi.on("agent_end", () => recordSummaries(summariesFile, file, pi.getAllTools?.() ?? []));

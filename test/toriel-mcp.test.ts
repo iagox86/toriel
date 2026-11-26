@@ -6,7 +6,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import { learnSummaries, MCP_FILE_ENV, MCP_SUMMARIES_ENV, piConfig, summaryLine } from "../pi/extensions/lib/mcp-config.ts";
-import setup, { describeOutcomes, loadServers, loadSummaries, reconcile, recordSummaries, saveSummaries, UP_COMMAND } from "../pi/extensions/toriel-mcp.ts";
+import setup, { addToolSearchGuideline, describeOutcomes, loadServers, loadSummaries, reconcile, recordSummaries, saveSummaries, TOOL_SEARCH_GUIDELINE, UP_COMMAND } from "../pi/extensions/toriel-mcp.ts";
 
 async function listener(): Promise<{ port: number; close(): Promise<void> }> {
   const server = net.createServer((s) => s.destroy());
@@ -226,15 +226,40 @@ describe("remembered server summaries (ticket 303)", () => {
     const file = tmp();
     saveSummaries(file, { git: "Git tools." });
     const x = load(mcp, file, [tool("mcp__gdb__gdb_start", "gdb", "GDB tools.")]);
-    assert.deepEqual(x.events, ["session_start", "agent_end"]);
+    assert.deepEqual(x.events, ["session_start", "before_agent_start", "agent_end"]);
     await x.handlers[0]?.({}, { ui: { notify: () => undefined } } as never);
     assert.equal(x.configs.get("git")?.description, "Git tools.");
     assert.equal(x.configs.get("gdb")?.description, undefined, "nothing remembered yet");
-    await x.handlers[1]?.({}, {} as never);
+    await x.handlers[2]?.({}, {} as never);
     assert.deepEqual(loadSummaries(file), { git: "Git tools.", gdb: "GDB tools." });
   });
 
   it("does not listen for run ends when the daemon named no summaries file", () => {
-    assert.deepEqual(load(yamlFile("servers: {}\n")).events, ["session_start"]);
+    assert.deepEqual(load(yamlFile("servers: {}\n")).events, ["session_start", "before_agent_start"]);
+  });
+});
+
+describe("loading MCP tools in one go (ticket 305)", () => {
+  const event = () => ({ systemPromptOptions: { promptGuidelines: ["other"] } });
+
+  it("adds the guideline once, only when tool_search is among the session's tools", () => {
+    const e = event();
+    addToolSearchGuideline(e, ["read", "tool_search"]);
+    addToolSearchGuideline(e, ["read", "tool_search"]);
+    assert.deepEqual(e.systemPromptOptions.promptGuidelines, ["other", TOOL_SEARCH_GUIDELINE]);
+    const none = event();
+    addToolSearchGuideline(none, ["read"]);
+    assert.deepEqual(none.systemPromptOptions.promptGuidelines, ["other"]);
+  });
+
+  it("never throws on an event of another shape", () => {
+    assert.doesNotThrow(() => addToolSearchGuideline(undefined, ["tool_search"]));
+    assert.doesNotThrow(() => addToolSearchGuideline({ systemPromptOptions: {} }, ["tool_search"]));
+  });
+
+  it("says why loading costs, and asks for one early, named load", () => {
+    assert.match(TOOL_SEARCH_GUIDELINE, /without the prompt cache/);
+    assert.match(TOOL_SEARCH_GUIDELINE, /one tool_search call, as early as you can/);
+    assert.match(TOOL_SEARCH_GUIDELINE, /set limit/);
   });
 });
