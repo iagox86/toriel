@@ -75,7 +75,9 @@ export async function doctorMain(args: readonly string[], io: DoctorIo, opts: Do
   // and how much recent sessions used each MCP server (ticket 304): it reads pi's session files, so the in-app /doctor skips it
   const { scanMcpUsage } = await import("./mcp-usage.ts");
   const { piAgentDir } = await import("./pi-dir.ts");
-  const mcpUsage = () => scanMcpUsage(join(piAgentDir(opts.env ?? process.env), "sessions"));
+  // agent-profile sessions are left out of the usage (their sessions declare their servers whatever mcp.yaml says; ticket 304)
+  const { loadSessionAgents } = await import("./session-agents.ts");
+  const mcpUsage = () => scanMcpUsage(join(piAgentDir(opts.env ?? process.env), "sessions"), { agents: new Set(Object.keys(loadSessionAgents())) });
   const options = { probeLitellm, probeChat: probeChatServer, mcpUsage, ...opts, startup: [], tty: io.tty === true };
   const checks = doctor.runDoctor(options);
   const style = io.color ? doctor.ANSI_STYLE : undefined;

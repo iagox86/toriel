@@ -391,6 +391,22 @@ describe("doctor checks", () => {
     assert.deepEqual(collectFindings({ ...s.opts, startup: [] }).filter((f) => f.id === "mcp-exposure"), [], "not asked without the usage");
   });
 
+  it("mcp-exposure: several servers advised in one run keep one backup holding the original", () => {
+    const s = setup({ gitMcp: "deferred", gdbMcp: "deferred", ghidraMcp: "deferred", vikunjaMcp: "deferred", mcpExtra: { busy: { command: "x" }, idle: { command: "y", exposure: "direct" } } });
+    const usage = { sessions: 20, byServer: { busy: 10 } };
+    const found = collectFindings({ ...s.opts, startup: [], mcpUsage: () => usage }).filter((f) => f.id === "mcp-exposure");
+    assert.equal(found.length, 2, "busy gets direct, idle gets deferred");
+    const original = fs.readFileSync(s.mcpFile as string, "utf8");
+    // applyFixes gives every custom fix of one run the same `now`, so both fixes name the same backup: the copy must not overwrite it
+    const now = new Date(2026, 10, 13, 9, 5, 8);
+    const backups = found.map((f) => f.fix?.custom?.apply(now));
+    assert.deepEqual([...new Set(backups)], [backups[0]], "both fixes name the same backup file");
+    assert.equal(fs.readFileSync(backups[0] as string, "utf8"), original, "the backup holds the original file");
+    const after = fs.readFileSync(s.mcpFile as string, "utf8");
+    assert.match(after, /"busy": \{[^}]*exposure: direct/);
+    assert.match(after, /"idle": \{[^}]*"deferred"/);
+  });
+
   it("mcp-json: servers still in pi's mcp.json are moved into mcp.yaml, and the old file is set aside (ticket 216)", () => {
     const s = setup({ piMcpJson: { mcpServers: { freecad: { url: "http://127.0.0.1:39280/mcp" }, gdb: { command: "other" }, odd: { command: "x", lifecycle: "lazy" } } } });
     const found = collectFindings({ ...s.opts, startup: [] }).filter((f) => f.id === "mcp-json");

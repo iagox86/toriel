@@ -82,6 +82,34 @@ describe("learning the expiry", () => {
     end(msg(T0 + 8 * MIN, miss).message);
     assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8"))["p/m"], { maxHit: 0, minMiss: 5 * MIN });
   });
+
+  it("does not learn a miss after a restart whose history ends with a prompt change (session_start, ticket 310)", () => {
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "toriel-cachewarn-")), "cache-ttl.json");
+    const previous = process.env.TORIEL_CACHE_TTL_FILE;
+    process.env.TORIEL_CACHE_TTL_FILE = file;
+    const handlers = new Map<string, (event: never, ctx: never) => unknown>();
+    try {
+      setup({ on: (event: string, handler: (event: never, ctx: never) => unknown) => void handlers.set(event, handler) } as never);
+      const msg = (timestamp: number, usage: object) => ({ type: "message", message: { role: "assistant", provider: "p", model: "m", timestamp, usage } });
+      const system = { type: "message", message: { role: "system" } };
+      const start = (entries: object[]) => handlers.get("session_start")?.({} as never, { sessionManager: { getBranch: () => entries } } as never);
+      const end = (message: object) => handlers.get("message_end")?.({ message } as never, {} as never);
+      // the session loaded tools after its last call and was left before answering: the branch ends with the system message
+      start([msg(T0, hit), system]);
+      end(msg(T0 + 3 * MIN, miss).message);
+      assert.equal(fs.existsSync(file), false, "nothing learned from the miss that follows the change");
+      // a restart of a session whose branch ends with a call clears the flag again, and a system message before that call leaves it off
+      start([system, msg(T0, hit)]);
+      end(msg(T0 + 8 * MIN, miss).message);
+      assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8"))["p/m"], { maxHit: 0, minMiss: 8 * MIN });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.TORIEL_CACHE_TTL_FILE;
+      } else {
+        process.env.TORIEL_CACHE_TTL_FILE = previous;
+      }
+    }
+  });
 });
 
 describe("warning before sending", () => {

@@ -358,7 +358,10 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
             preview: () => `${mcpFile}: the "${server}" entry would get exposure: ${exposure} (the original is kept as a backup).`,
             apply: (now) => {
               const backup = backupPath(mcpFile, now);
-              copyFileSync(mcpFile, backup);
+              // several servers can be advised in one run: their applies share the file and the backup's path, so keep the first copy (the original)
+              if (!existsSync(backup)) {
+                copyFileSync(mcpFile, backup);
+              }
               setMcpServerKey(mcpFile, server, "exposure", exposure);
               return backup;
             },

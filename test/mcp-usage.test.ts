@@ -28,7 +28,7 @@ describe("which servers a session called", () => {
 });
 
 describe("scanning the session files", () => {
-  it("counts each recent session once per server, and skips old sessions and sessions with no model call", () => {
+  it("counts each recent session once per server, and skips old sessions, sessions with no model call, and agent-profile sessions", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-mcpusage-"));
     fs.mkdirSync(path.join(dir, "--project--"));
     const write = (name: string, lines: string[], ageDays = 0): void => {
@@ -37,14 +37,16 @@ describe("scanning the session files", () => {
       const t = new Date(Date.now() - ageDays * 86_400_000);
       fs.utimesSync(file, t, t);
     };
-    write("a.jsonl", [assistant("mcp__git__git_read"), assistant("mcp__git__git_read")]);
-    write("b.jsonl", [assistant("mcp__git__git_read", "mcp__gdb__gdb_start")]);
+    write("5a2f1e9b-3c4d-4f5a-9b8c-7d6e5f4a3b2c.jsonl", [assistant("mcp__git__git_read"), assistant("mcp__git__git_read")]);
+    write("2026-11-26T19-05-28_8b7a6d5c-4e3f-4a2b-9c1d-0e9f8a7b6c5d.jsonl", [assistant("mcp__git__git_read", "mcp__gdb__gdb_start")]);
     write("c.jsonl", [assistant("read")]);
     write("d.jsonl", [loaded("mcp__git__git_read")]);
     write("old.jsonl", [assistant("mcp__git__git_read")], USAGE_WINDOW_DAYS + 1);
     write("notes.txt", [assistant("mcp__git__git_read")]);
     assert.deepEqual(scanMcpUsage(dir), { sessions: 3, byServer: { git: 2, gdb: 1 } });
     assert.deepEqual(scanMcpUsage(path.join(dir, "missing")), { sessions: 0, byServer: {} });
+    // a session launched through an agent profile does not count (ticket 304): the agents state is keyed by the UUID inside the file name
+    assert.deepEqual(scanMcpUsage(dir, { agents: new Set(["8b7a6d5c-4e3f-4a2b-9c1d-0e9f8a7b6c5d"]) }), { sessions: 2, byServer: { git: 1 } });
   });
 });
 
@@ -64,8 +66,8 @@ describe("what to recommend", () => {
     );
   });
 
-  it("says nothing with too few sessions to judge, and leaves disabled, hidden and per-tool entries alone", () => {
+  it("says nothing with too few sessions to judge, and leaves disabled, hidden, codemode and per-tool entries alone", () => {
     assert.deepEqual(exposureAdvice({ git: {} }, usage({ git: MIN_SESSIONS - 1 }, MIN_SESSIONS - 1)), []);
-    assert.deepEqual(exposureAdvice({ a: { enabled: false }, b: { exposure: "hidden" }, c: { toolExposure: { x: "direct" } } }, usage({ a: 20, b: 20, c: 20 })), []);
+    assert.deepEqual(exposureAdvice({ a: { enabled: false }, b: { exposure: "hidden" }, c: { toolExposure: { x: "direct" } }, d: { exposure: "codemode" } }, usage({ a: 20, b: 20, c: 20, d: 20 })), []);
   });
 });
