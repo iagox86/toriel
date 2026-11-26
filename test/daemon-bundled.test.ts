@@ -78,3 +78,19 @@ describe("daemon: bundled pi packages (ticket 230)", () => {
     assert.deepEqual(flagged(argv, "-e").filter((p) => p.startsWith(w.bundledRoot)), [path.join(w.bundledRoot, "@gotgenes", "pi-permission-system")]);
   });
 });
+
+describe("daemon: MCP tools through tool_search (ticket 298)", () => {
+  it("gives a plain session tool_search and leaves codemode out, unless the codemode setting is on", async () => {
+    harness = await startDaemon();
+    const argv = await argvOf(harness);
+    assert.ok((flagged(argv, "--tools")[0] ?? "").split(",").includes("+tool_search"), "tool_search loads deferred MCP tools");
+    assert.deepEqual(flagged(argv, "--exclude-tools"), ["codemode"]);
+    await harness.stop();
+    const config = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-codemode-"));
+    temp.push(config);
+    fs.mkdirSync(path.join(config, "toriel"), { recursive: true });
+    fs.writeFileSync(path.join(config, "toriel", "settings.yaml"), "codemode: true\n");
+    harness = await startDaemon({ XDG_CONFIG_HOME: config });
+    assert.deepEqual(flagged(await argvOf(harness), "--exclude-tools"), [], "the setting brings codemode back");
+  });
+});

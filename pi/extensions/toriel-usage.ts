@@ -259,7 +259,7 @@ export default function (pi: Pi) {
     label: "Usage",
     description:
       "Shows how much of the account's quota or budget is used for the current model's provider (percent per window, or spend against the budget, and when it resets), plus this session's token and cost totals. Use it before starting something large or expensive.",
-    promptSnippet: "toriel_usage: how much of the provider quota/budget is used",
+    promptSnippet: "how much of the provider quota/budget is used",
     parameters: { type: "object", properties: {}, additionalProperties: false },
     async execute(_id, _params, _signal, _onUpdate, ctx) {
       const report = await refresh(ctx, false, 15_000);

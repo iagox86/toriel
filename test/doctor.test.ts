@@ -446,15 +446,20 @@ describe("doctor checks", () => {
     assert.match(f[1]?.message ?? "", /^toriel settings: scheduleDailyLimit must be a number of at least 1/);
   });
 
-  it("asks for the git MCP server to be exposed directly, since pi gives an agent no tool from a codemode server", () => {
-    const grade = (gitMcp: string) => collectFindings(setup({ gitMcp }).opts).filter((x) => x.id === "mcp-git-direct");
-    assert.deepEqual(grade("direct"), []);
-    for (const bad of ["default", "codemode", "deferred"]) {
-      const [f] = grade(bad);
-      assert.equal(f?.level, "feature", bad);
-      assert.match(f?.message ?? "", /advisory-diff, code-review and git-archaeology agents need the "git" MCP server.*"exposure": "direct"/, bad);
+  it("asks for the git MCP server only when it is missing: the agents' sessions declare it directly whatever its exposure (ticket 298)", () => {
+    const grade = (gitMcp: string) => collectFindings(setup({ gitMcp }).opts).filter((x) => x.id === "mcp-git-server");
+    for (const fine of ["direct", "default", "deferred"]) {
+      assert.deepEqual(grade(fine), [], fine);
     }
-    assert.match(grade("none")[0]?.message ?? "", /the "git" MCP server is missing from .*mcp\.yaml/);
+    const [f] = grade("none");
+    assert.equal(f?.level, "feature");
+    assert.match(f?.message ?? "", /the "git" MCP server is missing from .*mcp\.yaml: the advisory-diff, code-review and git-archaeology agents need it/);
+    assert.equal(f?.fix, undefined, "a missing entry needs the user's own command and args");
+  });
+
+  it("does not flag a codemode server: pi's tool_search searches codemode tools like deferred ones, and toriel's sessions all have it (ticket 298)", () => {
+    assert.deepEqual(collectFindings(setup({ gitMcp: "codemode" }).opts).filter((x) => x.id === "mcp-codemode"), []);
+    assert.deepEqual(collectFindings(setup({ gitMcp: "codemode", settings: "codemode: true\n" }).opts).filter((x) => x.id === "mcp-codemode"), []);
   });
 
   it("asks for pi-web-access when it is neither bundled nor the user's own, since the research-web agent has no web tools without it", () => {
@@ -486,16 +491,16 @@ describe("doctor checks", () => {
 
   it("asks for the gdb and ghidra MCP servers the same way, one check per server", () => {
     const grade = (id: string, over: object) => collectFindings(setup(over).opts).filter((x) => x.id === id);
-    assert.deepEqual(grade("mcp-gdb-direct", {}), []);
-    assert.deepEqual(grade("mcp-ghidra-direct", {}), []);
-    const [gdb] = grade("mcp-gdb-direct", { gdbMcp: "codemode" });
+    assert.deepEqual(grade("mcp-gdb-server", {}), []);
+    assert.deepEqual(grade("mcp-ghidra-server", {}), []);
+    assert.deepEqual(grade("mcp-gdb-server", { gdbMcp: "deferred" }), [], "any exposure will do");
+    const [gdb] = grade("mcp-gdb-server", { gdbMcp: "none" });
     assert.equal(gdb?.level, "feature");
-    assert.match(gdb?.message ?? "", /crash-analysis and debug agents need the "gdb" MCP server.*"exposure": "direct"/);
-    assert.match(gdb?.fix?.summary ?? "", /set "exposure": "direct" on the "gdb" entry/, "the entry exists, only its exposure is wrong: fixable");
-    const [missing] = grade("mcp-ghidra-direct", { ghidraMcp: "none" });
+    assert.match(gdb?.message ?? "", /^the "gdb" MCP server is missing from .*mcp\.yaml: the crash-analysis and debug agents need it/);
+    const [missing] = grade("mcp-ghidra-server", { ghidraMcp: "none" });
     assert.match(missing?.message ?? "", /^the "ghidra" MCP server is missing from .*mcp\.yaml: the binary-diff, re-explain, re-find and re-trace agents need it/);
     assert.equal(missing?.fix, undefined, "a missing entry needs the user's own command and args: no automatic fix");
-    assert.deepEqual(grade("mcp-git-direct", { gdbMcp: "codemode", ghidraMcp: "none" }), [], "one server's problem is not another's");
+    assert.deepEqual(grade("mcp-git-server", { gdbMcp: "none", ghidraMcp: "none" }), [], "one server's problem is not another's");
   });
 
   it("checks that bwrap works unless the sandbox setting is off (the default is on since 2026-11-15)", () => {
@@ -721,22 +726,6 @@ describe("doctor fixes", () => {
     assert.throws(() => previewFixes(s.config, [{ file: s.config, summary: "x", edit: (c) => c }]), /not a JSON object/);
     assert.equal(fs.readFileSync(s.config, "utf8"), "[]");
     assert.deepEqual(fs.readdirSync(path.dirname(s.config)), ["config.json"], "no backup for a failed fix");
-  });
-
-  it("sets exposure: direct on a mis-exposed mcp.yaml entry, leaving its siblings alone and keeping a backup", () => {
-    const s = setup({ gdbMcp: "codemode" });
-    const original = fs.readFileSync(s.mcpFile, "utf8");
-    const [group] = plannedFixes(runDoctor(s.opts));
-    assert.equal(group?.file, s.mcpFile);
-    assert.equal(group?.fixes.length, 1);
-    assert.match(previewFixes(s.mcpFile, group?.fixes ?? []), /the "gdb" entry would get exposure: direct/);
-    assert.equal(fs.readFileSync(s.mcpFile, "utf8"), original, "previewing writes nothing");
-    const backup = applyFixes(s.mcpFile, group?.fixes ?? []);
-    assert.equal(fs.readFileSync(backup as string, "utf8"), original, "the original is kept");
-    const { servers } = readMcpYaml(s.mcpFile);
-    assert.deepEqual(servers.gdb, { command: "node", args: ["x"], exposure: "direct" });
-    assert.deepEqual(servers.git, { command: "node", args: ["x"], exposure: "direct" }, "the healthy sibling is untouched");
-    assert.deepEqual(collectFindings(s.opts), [], "and the setup is healthy again");
   });
 
   it("offers no fix for the package, the files or the settings: those need a person", () => {

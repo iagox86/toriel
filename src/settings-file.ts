@@ -88,6 +88,7 @@ export const SETTINGS_TEMPLATE: readonly Group[] = [
   {
     heading: "Bundled pi packages",
     entries: [
+      { key: "codemode", value: false, comment: ["Also give sessions pi's codemode tool, which calls MCP tools from a JavaScript script. Off: agents find an MCP server's", "tools with tool_search and call them directly, so a broken server shows up as a tool error. Read when a session starts."] },
       { key: "bundledPackagesOff", example: "[pi-hermes-memory]", comment: ["Third-party pi packages toriel carries and loads into every session (ask_user_question, web search, memory) that you do not want. A package you installed yourself in pi's settings.json always wins over toriel's copy. Unset = all on."] },
     ],
   },

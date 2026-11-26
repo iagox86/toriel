@@ -268,20 +268,14 @@ export function mcpWarnings(profile: AgentProfile, servers: Readonly<Record<stri
   const byName = new Map(Object.entries(servers).map(([name, info]) => [name.replace(/-/g, "_"), info]));
   return mcpServersOf(profile.tools ?? []).flatMap((server) => {
     const info = byName.get(server.replace(/-/g, "_"));
-    if (!info) {
-      return [`${profile.name}: MCP server "${server}" is not configured in mcp.yaml`];
-    }
-    if (info.exposure !== "direct") {
-      // pi's default (codemode) never declares the tools to the model, so an agent limited to them has none
-      return [`${profile.name}: MCP server "${server}" has exposure ${info.exposure ?? "codemode (the default)"} in mcp.yaml, so the agent is never given its tools: set "exposure": "direct"`];
-    }
-    return [];
+    // any exposure will do: a session of the profile registers the servers it names as direct (TORIEL_MCP_DIRECT, ticket 298)
+    return info ? [] : [`${profile.name}: MCP server "${server}" is not configured in mcp.yaml`];
   });
 }
 
 /** What a profile needs to know about an MCP server entry. */
 export interface McpServerInfo {
-  /** pi's `exposure` for the server; undefined = its default, codemode. */
+  /** The entry's `exposure`; undefined = toriel's default, deferred (ticket 298). */
   exposure?: string;
 }
 

@@ -18,9 +18,9 @@ import { fmtClock } from "./when.ts";
 import { mcpWarnings, mergeMcpServers, loadAgents } from "./agents.ts";
 import { piAgentDir } from "./pi-dir.ts";
 import { startupProblems } from "./preflight.ts";
-import { type AuditOptions, auditFindings, type Finding, type Fix, type Level, PI_RESOURCES_DIR, resolution } from "./resources.ts";
+import { type AuditOptions, auditFindings, type Finding, type Fix, type Level, PI_RESOURCES_DIR } from "./resources.ts";
 import { legacySettingsFile, loadSettings, resolveChildConfig, settingsFile, yamlSettingsFile } from "./settings.ts";
-import { addMcpServer, importMcpJson, readMcpYaml, redactEntry, renderMcpYaml, setMcpServerKey } from "./mcp-config.ts";
+import { addMcpServer, importMcpJson, readMcpYaml, redactEntry, renderMcpYaml } from "./mcp-config.ts";
 import { convertLegacySettings, renderSettings } from "./settings-file.ts";
 import { mcpYamlFile } from "./config-dir.ts";
 import type { ChatProbe } from "./bridge/probe-sync.ts";
@@ -70,11 +70,11 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: "settings-yaml", level: "feature", title: "the toriel settings are in settings.yaml (an old settings.json is converted, comments added)" },
   { id: "permission-package", level: "recommended", title: "pi-permission-system is installed and has a usable config" },
   { id: "grants-chain", level: "feature", title: 'permission grants are switched on ("toriel-grants" in authorizerChain)', needsPermissionPackage: true },
-  { id: "mcp-git-direct", level: "feature", title: 'the git MCP server is configured with "exposure": "direct" (the code-review, git-archaeology and advisory-diff agents need it)' },
+  { id: "mcp-git-server", level: "feature", title: "the git MCP server is configured in mcp.yaml (the code-review, git-archaeology and advisory-diff agents need it)" },
   { id: "web-package", level: "feature", title: "pi-web-access is installed (the research-web and advisory-diff agents need its web tools)" },
   { id: "bundled-packages", level: "feature", title: "the pi packages toriel carries are installed with it (ask_user_question, web search, the permission gate, memory; ticket 230)" },
-  { id: "mcp-gdb-direct", level: "feature", title: 'the gdb MCP server is configured with "exposure": "direct" (the debug and crash-analysis agents need it)' },
-  { id: "mcp-ghidra-direct", level: "feature", title: 'the ghidra MCP server is configured with "exposure": "direct" (the re-explain, re-find, re-trace and binary-diff agents need it)' },
+  { id: "mcp-gdb-server", level: "feature", title: "the gdb MCP server is configured in mcp.yaml (the debug and crash-analysis agents need it)" },
+  { id: "mcp-ghidra-server", level: "feature", title: "the ghidra MCP server is configured in mcp.yaml (the re-explain, re-find, re-trace and binary-diff agents need it)" },
   { id: "agent-lanes", level: "feature", title: "every model tier in agentLanes (cheap, medium, expensive) names a provider pi knows (models.json or a login)" },
   { id: "litellm-models", level: "feature", title: "pi's models.json matches what the litellm proxy says about each route (context window, output limit, cost)", needsProbe: "litellm" },
   { id: "bifrost-models", level: "feature", title: "pi's models.json matches what the bifrost gateway says about each route (context window, output limit)", needsProbe: "bifrost" },
@@ -314,47 +314,25 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
   if (!existsSync(piCli)) {
     out.push({ id: "pi-cli", level: "required", message: `pi's cli.js is not at ${piCli}: run npm install in the toriel checkout, or set piCli in the toriel settings`, manual: "needs npm install in the checkout (a package install) or a piCli path only you know" });
   }
-  // shipped agents that name mcp__<server>__* tools: pi gives an agent an MCP tool only when its server is exposed directly
+  // shipped agents that name mcp__<server>__* tools need the server configured; their sessions get its tools declared at once
+  // whatever its exposure (TORIEL_MCP_DIRECT, ticket 298), so only a missing entry is a problem
   const shipped = loadAgents(process.cwd(), env).agents.filter((a) => a.source === "built-in");
   const mcpFile = opts.mcpFile ?? mcpYamlFile(env);
   const servers = mergeMcpServers([mcpFile]);
   for (const server of MCP_AGENT_SERVERS) {
     const users = shipped.filter((a) => (a.tools ?? []).some((t) => t.startsWith(`mcp__${server.name}__`)));
-    const problems = users.flatMap((a) => mcpWarnings(a, servers));
-    if (users.length > 0 && problems.length > 0) {
-      // fixable only when the entry is here with the wrong exposure; a missing entry needs the
-      // server's own command/args, which are machine-specific (where it is installed, which runner),
-      // so doctor does not invent them and says so
-      const info = servers[server.name];
+    if (users.length > 0 && users.some((a) => mcpWarnings(a, servers).length > 0)) {
+      // a missing entry needs the server's own command/args, which are machine-specific (where it is installed, which runner), so doctor does not invent them and says so
       out.push({
-        id: `mcp-${server.name}-direct`,
+        id: `mcp-${server.name}-server`,
         level: "feature",
-        message:
-          info === undefined
-            ? `the "${server.name}" MCP server is missing from ${mcpFile}: the ${nameList(users.map((a) => a.name))} ${users.length > 1 ? "agents need" : "agent needs"} it (${server.hint}) with exposure: direct; without it ${users.length > 1 ? "they have" : "it has"} no ${server.name} tool`
-            : `the ${nameList(users.map((a) => a.name))} ${users.length > 1 ? "agents need" : "agent needs"} the "${server.name}" MCP server (${server.hint}) with exposure: direct in ${mcpFile}; without it ${users.length > 1 ? "they have" : "it has"} no ${server.name} tool (${problems[0]})`,
-        ...resolution(
-          info !== undefined && info.exposure !== "direct"
-            ? {
-                file: mcpFile,
-                summary: `set "exposure": "direct" on the "${server.name}" entry`,
-                edit: (c) => c,
-                custom: {
-                  preview: () => `${mcpFile}: the "${server.name}" entry would get exposure: direct (the original is kept as a backup).`,
-                  apply: (now) => {
-                    const backup = backupPath(mcpFile, now);
-                    copyFileSync(mcpFile, backup);
-                    setMcpServerKey(mcpFile, server.name, "exposure", "direct");
-                    return backup;
-                  },
-                },
-              }
-            : undefined,
-          `there is no "${server.name}" entry to fix, and its command depends on where the server is installed on this machine, so add it with /mcp add or by hand (${server.hint}) with exposure: direct`,
-        ),
+        message: `the "${server.name}" MCP server is missing from ${mcpFile}: the ${nameList(users.map((a) => a.name))} ${users.length > 1 ? "agents need" : "agent needs"} it (${server.hint}); without it ${users.length > 1 ? "they have" : "it has"} no ${server.name} tool`,
+        manual: `its command depends on where the server is installed on this machine, so add it with /mcp add or by hand (${server.hint})`,
       });
     }
   }
+  // an entry set to exposure: codemode needs no check: pi's tool_search searches codemode tools exactly like deferred ones
+  // (the server's tools carry tool exposure deferred either way), so they reach every session the same
   // the shipped research-web agent names pi-web-access's tools; without the package it has nothing to search with
   const webAgents = shipped.filter((a) => (a.tools ?? []).some((t) => t === "web_search" || t === "fetch_content"));
   const bundle = { agentDir: opts.agentDir ?? piAgentDir(env), off: loaded.settings.bundledPackagesOff, root: opts.bundledRoot };

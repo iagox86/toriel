@@ -65,6 +65,12 @@ describe("the MCP file variable (tickets 209, 216)", () => {
     assert.equal(childEnv({}, "/sock", {}).TORIEL_MCP_FILE, undefined);
     assert.equal(childEnv({}, "/sock", { TORIEL_MCP_FILE: "/leak.yaml" }).TORIEL_MCP_FILE, undefined, "a daemon started inside a session must not hand its own on");
   });
+
+  it("names the servers a profile's tools reach, so that session declares them directly (ticket 298)", () => {
+    assert.equal(childEnv({}, "/sock", {}, undefined, { mcpDirect: ["git", "ghidra"] }).TORIEL_MCP_DIRECT, "git,ghidra");
+    assert.equal(childEnv({}, "/sock", {}, undefined, { mcpDirect: [] }).TORIEL_MCP_DIRECT, undefined);
+    assert.equal(childEnv({}, "/sock", { TORIEL_MCP_DIRECT: "leak" }).TORIEL_MCP_DIRECT, undefined, "never inherited from the daemon");
+  });
 });
 
 describe("the sandbox and shared-directory variables (board 190)", () => {

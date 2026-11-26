@@ -60,6 +60,12 @@ export interface Resource {
   tools?: readonly string[];
 }
 
+/**
+ * pi's built-in tool that loads `deferred` MCP tools (ticket 298): it is registered inactive, so the daemon names it in every
+ * plain session's `--tools`. Servers default to `deferred` in toriel (`piConfig`), so their tools cost nothing until searched for.
+ */
+export const TOOL_SEARCH = "tool_search";
+
 /** Tools only sessions that may start subagents get (the daemon leaves them out of `--tools` for the rest). */
 export const SPAWN_TOOLS: readonly string[] = ["toriel_agent", "toriel_agents"];
 

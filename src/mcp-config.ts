@@ -23,7 +23,7 @@ export const MCP_YAML_HEADER = `# MCP servers for toriel. Every server a session
 #     command: uvx
 #     args: [some-tool-mcp]
 #     env: { SOME_API_KEY: "..." }
-#     exposure: direct                        # direct = the agent gets the tools at once; codemode (default) = through a script
+#     exposure: direct                        # deferred (default) = found with tool_search when needed; direct = declared on every call
 #     timeout: 60                             # seconds
 #     readOnly: true                          # its tools change nothing: plan mode lets them run (default: they are refused there)
 #     enabled: true
@@ -93,7 +93,7 @@ export function removeMcpServer(file: string, name: string): void {
   save(file, doc);
 }
 
-/** Set one key of one server's entry (the doctor's `exposure: direct` fix). Throws when the server is not there. */
+/** Set one key of one server's entry (the doctor's `exposure: deferred` fix). Throws when the server is not there. */
 export function setMcpServerKey(file: string, name: string, key: string, value: unknown): void {
   const doc = loadDocument(file);
   if (!doc.hasIn(["servers", name])) {

@@ -56,10 +56,16 @@ describe("reconcile", () => {
     assert.deepEqual(await reconcile(down.pi, servers, async () => false), { plain: "registered", bridge: "down", off: "registered" });
     assert.deepEqual(down.registered.map(([n]) => n), ["plain", "off"]);
     assert.deepEqual(down.registered[0]?.[1], { command: "node", args: ["x.js"], exposure: "direct" });
-    assert.deepEqual(down.registered[1]?.[1], { command: "y", enabled: false }, "a disabled server is registered, so /mcp can switch it on for the session");
+    assert.deepEqual(down.registered[1]?.[1], { command: "y", enabled: false, exposure: "deferred" }, "a disabled server is registered, so /mcp can switch it on for the session");
     const up = fakePi();
     await reconcile(up.pi, servers, async () => true);
     assert.deepEqual(up.registered.find(([n]) => n === "bridge")?.[1], { url: "http://127.0.0.1:39280/mcp", exposure: "direct" }, "whenUp is not handed to pi");
+  });
+
+  it("registers a server with no exposure as deferred, and the ones the session's profile names as direct (ticket 298)", async () => {
+    const f = fakePi();
+    await reconcile(f.pi, { plain: { command: "x" }, "my-srv": { command: "y", exposure: "codemode" }, set: { command: "z", exposure: "direct" } }, async () => true, undefined, new Set(["my_srv"]));
+    assert.deepEqual(Object.fromEntries(f.registered.map(([n, c]) => [n, (c as { exposure?: string }).exposure])), { plain: "deferred", "my-srv": "direct", set: "direct" });
   });
 
   it("does not probe a disabled whenUp server, leaves registered ones alone, probes only the one named, and counts a refusal as failed", async () => {

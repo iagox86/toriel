@@ -110,10 +110,11 @@ describe("mcpWarnings", () => {
     assert.deepEqual(mcpWarnings(dashed, { "my-srv": { exposure: "direct" } }), []);
   });
 
-  it("warns when the server is not exposed directly, because pi then never declares its tools to the agent", () => {
+  it("accepts a configured server whatever its exposure, since the profile's session declares it directly (ticket 298)", () => {
     const a = parse(FILE);
-    assert.match(mcpWarnings(a, { ghidra: {} })[0] ?? "", /exposure codemode \(the default\) in mcp\.yaml, so the agent is never given its tools: set "exposure": "direct"/);
-    assert.match(mcpWarnings(a, { ghidra: { exposure: "deferred" } })[0] ?? "", /exposure deferred/);
+    for (const exposure of [undefined, "deferred", "codemode", "direct"]) {
+      assert.deepEqual(mcpWarnings(a, { ghidra: { exposure } }), [], String(exposure));
+    }
   });
 });
 

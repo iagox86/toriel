@@ -100,7 +100,7 @@ export default function (pi: Pi) {
     name: "toriel_message",
     label: "Message",
     description: MESSAGE_DESCRIPTION,
-    promptSnippet: "toriel_message: send a message to another toriel session (only when the user asks)",
+    promptSnippet: "send a message to another toriel session (only when the user asks)",
     parameters: {
       type: "object",
       properties: {
@@ -130,7 +130,7 @@ export default function (pi: Pi) {
     name: "toriel_schedule_create",
     label: "Schedule",
     description: SCHEDULE_CREATE_DESCRIPTION,
-    promptSnippet: "toriel_schedule_create: send a prompt to this session later or on a repeat (in 30m, every 2h, a cron)",
+    promptSnippet: "send a prompt to this session later or on a repeat (in 30m, every 2h, a cron)",
     parameters: {
       type: "object",
       properties: {
@@ -163,7 +163,7 @@ export default function (pi: Pi) {
     name: "toriel_watch_create",
     label: "Watch a file",
     description: WATCH_CREATE_DESCRIPTION,
-    promptSnippet: "toriel_watch_create: send this session a prompt when a file or directory changes (limited: 30s quiet time, ends after one change or within 24h)",
+    promptSnippet: "send this session a prompt when a file or directory changes (limited: 30s quiet time, ends after one change or within 24h)",
     parameters: {
       type: "object",
       properties: {
@@ -197,7 +197,7 @@ export default function (pi: Pi) {
     name: "toriel_schedule_list",
     label: "Schedules",
     description: "List this session's schedules: id, name, when, next run, runs so far and prompt.",
-    promptSnippet: "toriel_schedule_list: list this session's scheduled prompts",
+    promptSnippet: "list this session's scheduled prompts",
     parameters: { type: "object", properties: {}, additionalProperties: false },
     async execute(_id, _params, _signal, _onUpdate, ctx) {
       const uuid = own(ctx);
@@ -215,7 +215,7 @@ export default function (pi: Pi) {
     name: "toriel_schedule_cancel",
     label: "Cancel schedule",
     description: SCHEDULE_CANCEL_DESCRIPTION,
-    promptSnippet: "toriel_schedule_cancel: cancel one of this session's schedules by id or name",
+    promptSnippet: "cancel one of this session's schedules by id or name",
     parameters: {
       type: "object",
       properties: {
@@ -241,7 +241,7 @@ export default function (pi: Pi) {
       name: "toriel_agent",
       label: "Subagent",
       description: agentDescription(process.env.TORIEL_AGENT_TYPES),
-      promptSnippet: "toriel_agent: delegate a self-contained task to a subagent and get its final message back",
+      promptSnippet: "delegate a self-contained task to a subagent and get its final message back",
       parameters: {
         type: "object",
         properties: {
@@ -272,7 +272,7 @@ export default function (pi: Pi) {
       name: "toriel_agents",
       label: "Subagents",
       description: AGENTS_DESCRIPTION,
-      promptSnippet: "toriel_agents: list, wait for, stop or fetch the result of this session's subagents",
+      promptSnippet: "list, wait for, stop or fetch the result of this session's subagents",
       parameters: {
         type: "object",
         properties: {
