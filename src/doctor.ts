@@ -20,7 +20,8 @@ import { piAgentDir } from "./pi-dir.ts";
 import { startupProblems } from "./preflight.ts";
 import { type AuditOptions, auditFindings, type Finding, type Fix, type Level, PI_RESOURCES_DIR } from "./resources.ts";
 import { legacySettingsFile, loadSettings, resolveChildConfig, settingsFile, yamlSettingsFile } from "./settings.ts";
-import { addMcpServer, importMcpJson, readMcpYaml, redactEntry, renderMcpYaml } from "./mcp-config.ts";
+import { addMcpServer, importMcpJson, readMcpYaml, redactEntry, renderMcpYaml, setMcpServerKey } from "./mcp-config.ts";
+import { DIRECT_SHARE, exposureAdvice, type McpUsage, USAGE_WINDOW_DAYS } from "./mcp-usage.ts";
 import { convertLegacySettings, renderSettings } from "./settings-file.ts";
 import { mcpYamlFile } from "./config-dir.ts";
 import type { ChatProbe } from "./bridge/probe-sync.ts";
@@ -81,6 +82,7 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: "litellm-models", level: "feature", title: "pi's models.json matches what the litellm proxy says about each route (context window, output limit, cost)", needsProbe: "litellm" },
   { id: "bifrost-models", level: "feature", title: "pi's models.json matches what the bifrost gateway says about each route (context window, output limit)", needsProbe: "bifrost" },
   { id: "mcp-yaml", level: "recommended", title: "toriel's mcp.yaml (the MCP servers) is valid" },
+  { id: "mcp-exposure", level: "recommended", title: "each MCP server's exposure fits how often sessions use it (declared at once when most do, found with tool_search otherwise; ticket 304)" },
   { id: "mcp-json", level: "recommended", title: "pi's own mcp.json holds no servers (toriel keeps them in mcp.yaml and pi would start the old ones itself)" },
   { id: "chat-bridge-token", level: "feature", title: "the chat bridge's token (the chatto setting's tokenFile or tokenEnv) can be read, and a token file is owner-only" },
   { id: "chat-bridge-package", level: "feature", title: "the chat bridge's package (@chatto/client) is installed, when the chatto setting is on" },
@@ -141,6 +143,8 @@ export interface DoctorOptions extends AuditOptions {
   kittyConfig?: string;
   /** The /feedback bundle folders (ticket 240). Not set: the size check is skipped (`toriel doctor` passes the real one). */
   feedbackDir?: string;
+  /** How much recent sessions used each MCP server (ticket 304; reads pi's session files, so only `toriel doctor` passes it). Not set: the exposure check is skipped. */
+  mcpUsage?: () => McpUsage;
 }
 
 /** Past this much disk, the bundle folders are worth a word (each holds a full copy of a session). */
@@ -333,6 +337,39 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
       });
     }
   }
+  // a deferred server's every tool_search load re-sends the conversation uncached, a declared one costs cached tokens per call: so the
+  // servers most sessions use are cheaper declared, and the rest cheaper deferred (ticket 304)
+  if (opts.mcpUsage !== undefined) {
+    for (const advice of exposureAdvice(readMcpYaml(mcpFile).servers, opts.mcpUsage())) {
+      const { server, exposure, used, sessions } = advice;
+      const why =
+        exposure === "direct"
+          ? `${used} of the last ${sessions} sessions (${USAGE_WINDOW_DAYS} days) called its tools; loading them with tool_search re-sends the whole conversation uncached each time, while declared tools cost only cached tokens per call`
+          : `only ${used} of the last ${sessions} sessions (${USAGE_WINDOW_DAYS} days) called its tools, yet every call of every session declares them; tool_search finds them when a session needs them`;
+      out.push({
+        id: "mcp-exposure",
+        level: "recommended",
+        message: `the "${server}" MCP server in ${mcpFile} would be cheaper with exposure: ${exposure}: ${why} (declared at once from ${Math.round(DIRECT_SHARE * 100)}% of sessions; agent profiles get their own servers declared either way)`,
+        fix: {
+          file: mcpFile,
+          summary: `set exposure: ${exposure} on the "${server}" entry`,
+          edit: (c) => c,
+          custom: {
+            preview: () => `${mcpFile}: the "${server}" entry would get exposure: ${exposure} (the original is kept as a backup).`,
+            apply: (now) => {
+              const backup = backupPath(mcpFile, now);
+              // several servers can be advised in one run: their applies share the file and the backup's path, so keep the first copy (the original)
+              if (!existsSync(backup)) {
+                copyFileSync(mcpFile, backup);
+              }
+              setMcpServerKey(mcpFile, server, "exposure", exposure);
+              return backup;
+            },
+          },
+        },
+      });
+    }
+  }
   // an entry set to exposure: codemode needs no check: pi's tool_search searches codemode tools exactly like deferred ones
   // (the server's tools carry tool exposure deferred either way), so they reach every session the same
   // the shipped research-web agent names pi-web-access's tools; without the package it has nothing to search with
@@ -514,6 +551,10 @@ export function runDoctor(opts: DoctorOptions = {}): Check[] {
     // the bundle folder is a CLI input (ticket 240); without it the size check has not run, so it does not count as ok (like the probe checks)
     if (entry.id === "feedback-size" && opts.feedbackDir === undefined) {
       return { ...entry, state: "skipped", findings: [], note: "run `toriel doctor` in a terminal to check" };
+    }
+    // reading the session files takes a moment, so only the CLI does it (ticket 304)
+    if (entry.id === "mcp-exposure" && opts.mcpUsage === undefined) {
+      return { ...entry, state: "skipped", findings: [], note: "reads the recent sessions: run `toriel doctor` in a terminal to check" };
     }
     // the probe is gated on the token and the package in collectFindings, so either problem means it never ran: not ok, then
     if (entry.needsChatProbe && findings.some((f) => f.id === "chat-bridge-token" || f.id === "chat-bridge-package")) {

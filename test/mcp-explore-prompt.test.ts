@@ -27,11 +27,19 @@ describe("mcpExplorePrompt", () => {
     assert.match(p, /surfaces the skill/i);
   });
 
-  it("requires the skill to cover purpose, every tool, gotchas and an example, and to stay factual", () => {
+  it("requires the skill to cover purpose, gotchas and an example, and to stay factual", () => {
     const p = mcpExplorePrompt("freecad");
     assert.match(p, /what the server is for/i);
     assert.match(p, /gotcha/i);
     assert.match(p, /example/i);
     assert.match(p, /not what you guess/i);
+  });
+
+  it("keeps the skill short, leaves the schemas to the loaded tools, and opens with the one tool_search call that loads the common tools (ticket 306)", () => {
+    const p = mcpExplorePrompt("freecad");
+    assert.match(p, /about 4 KB at most/);
+    assert.match(p, /Do not copy every tool's parameters/);
+    assert.match(p, /exact tool_search call that loads the tools most tasks need in one go/);
+    assert.match(p, /without the prompt cache/);
   });
 });

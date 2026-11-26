@@ -94,7 +94,7 @@ describe("doctor checks", () => {
   it("finds nothing wrong with a complete setup", () => {
     const { opts, agentDir } = setup();
     fs.mkdirSync(path.join(agentDir, "feedback"), { recursive: true });
-    const all = { ...opts, feedbackDir: path.join(agentDir, "feedback") };
+    const all = { ...opts, feedbackDir: path.join(agentDir, "feedback"), mcpUsage: () => ({ sessions: 0, byServer: {} }) };
     assert.deepEqual(collectFindings(all), []);
     const checks = runDoctor(all);
     assert.equal(exitCode(checks), 0);
@@ -230,6 +230,7 @@ describe("doctor checks", () => {
         return { ...s.opts, feedbackDir: path.join(s.agentDir, "feedback"), startup: [] };
       })(),
       setup({ mcpExtra: { broken: { exposure: "direct" } } }).opts,
+      { ...setup({ mcpExtra: { busy: { command: "x" } } }).opts, mcpUsage: () => ({ sessions: 20, byServer: { busy: 10 } }) },
       setup({ piMcpJson: { mcpServers: { freecad: { url: "http://127.0.0.1:39280/mcp" } } } }).opts,
       setup({ config: { authorizerChain: ["toriel-grants"], permission: { "*": "allow", external_directory_write: { "/tmp/*": "allow" }, path: { "*": "ask", [GRANTS_RULE]: "ask" } } }, settings: JSON.stringify({ scopeGuardAcceptedAllows: [{ surface: "external_directory_write", pattern: "/tmp/*" }, { surface: "*", pattern: "*" }] }) }).opts,
       { ...setup({ settings: '{"chatto":{"url":"https://chat.example.com","tokenFile":"/nonexistent/chatto.token","group":"Toriel","allowedUser":"u1"}}' }).opts, chatClientInstalled: () => false },
@@ -376,6 +377,36 @@ describe("doctor checks", () => {
     assert.deepEqual(collectFindings({ ...setup({}).opts, startup: [] }).filter((f) => f.id === "mcp-yaml"), []);
   });
 
+  it("mcp-exposure: recommends declaring a server most sessions use, with the numbers, and the fix sets it with a backup (ticket 304)", () => {
+    const s = setup({ mcpExtra: { busy: { command: "x" } } });
+    const usage = { sessions: 20, byServer: { busy: 10 } };
+    const found = collectFindings({ ...s.opts, startup: [], mcpUsage: () => usage }).filter((f) => f.id === "mcp-exposure" && f.message.includes(`"busy"`));
+    assert.equal(found.length, 1);
+    assert.match(found[0]?.message ?? "", /"busy" MCP server .* exposure: direct: 10 of the last 20 sessions/);
+    const mcpFile = s.opts.mcpFile as string;
+    const backup = found[0]?.fix?.custom?.apply(new Date("2026-11-26T12:00:00Z"));
+    assert.ok(backup && fs.existsSync(backup), "the original is kept");
+    assert.match(fs.readFileSync(mcpFile, "utf8"), /"busy": \{[^}]*exposure: direct/);
+    assert.deepEqual(collectFindings({ ...s.opts, startup: [], mcpUsage: () => usage }).filter((f) => f.id === "mcp-exposure" && f.message.includes(`"busy"`)), [], "fixed: nothing left to say");
+    assert.deepEqual(collectFindings({ ...s.opts, startup: [] }).filter((f) => f.id === "mcp-exposure"), [], "not asked without the usage");
+  });
+
+  it("mcp-exposure: several servers advised in one run keep one backup holding the original", () => {
+    const s = setup({ gitMcp: "deferred", gdbMcp: "deferred", ghidraMcp: "deferred", vikunjaMcp: "deferred", mcpExtra: { busy: { command: "x" }, idle: { command: "y", exposure: "direct" } } });
+    const usage = { sessions: 20, byServer: { busy: 10 } };
+    const found = collectFindings({ ...s.opts, startup: [], mcpUsage: () => usage }).filter((f) => f.id === "mcp-exposure");
+    assert.equal(found.length, 2, "busy gets direct, idle gets deferred");
+    const original = fs.readFileSync(s.mcpFile as string, "utf8");
+    // applyFixes gives every custom fix of one run the same `now`, so both fixes name the same backup: the copy must not overwrite it
+    const now = new Date(2026, 10, 13, 9, 5, 8);
+    const backups = found.map((f) => f.fix?.custom?.apply(now));
+    assert.deepEqual([...new Set(backups)], [backups[0]], "both fixes name the same backup file");
+    assert.equal(fs.readFileSync(backups[0] as string, "utf8"), original, "the backup holds the original file");
+    const after = fs.readFileSync(s.mcpFile as string, "utf8");
+    assert.match(after, /"busy": \{[^}]*exposure: direct/);
+    assert.match(after, /"idle": \{[^}]*"deferred"/);
+  });
+
   it("mcp-json: servers still in pi's mcp.json are moved into mcp.yaml, and the old file is set aside (ticket 216)", () => {
     const s = setup({ piMcpJson: { mcpServers: { freecad: { url: "http://127.0.0.1:39280/mcp" }, gdb: { command: "other" }, odd: { command: "x", lifecycle: "lazy" } } } });
     const found = collectFindings({ ...s.opts, startup: [] }).filter((f) => f.id === "mcp-json");
@@ -437,7 +468,7 @@ describe("doctor checks", () => {
 
   it("skips the checks that need the permission package when it is not there, and says so", () => {
     const checks = runDoctor(setup({ noPackage: true }).opts);
-    assert.deepEqual(checks.filter((c) => c.state === "skipped").map((c) => c.id), ["grants-chain", "feedback-size", "grants-path-rule", "scope-guard-short-circuit"]);
+    assert.deepEqual(checks.filter((c) => c.state === "skipped").map((c) => c.id), ["grants-chain", "mcp-exposure", "feedback-size", "grants-path-rule", "scope-guard-short-circuit"]);
     assert.match(renderDoctor(checks), /skipped {2}permission grants are switched on[\s\S]*needs pi-permission-system/);
   });
 
@@ -642,9 +673,9 @@ describe("doctor report", () => {
   });
 
   it("leaves the passing checks out of the compact report and counts them", () => {
-    const text = renderDoctor(runDoctor(setup({ config: {} }).opts), { compact: true });
+    const text = renderDoctor(runDoctor({ ...setup({ config: {} }).opts, mcpUsage: () => ({ sessions: 0, byServer: {} }) }), { compact: true });
     assert.match(text, /Required: all 5 ok/);
-    assert.match(text, /Recommended: all 5 ok/);
+    assert.match(text, /Recommended: all 6 ok/);
     assert.doesNotMatch(text, / ok {7}/);
     assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(21 ok\)/);
   });

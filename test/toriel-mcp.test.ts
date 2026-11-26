@@ -5,8 +5,8 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { MCP_FILE_ENV } from "../pi/extensions/lib/mcp-config.ts";
-import setup, { describeOutcomes, loadServers, reconcile, UP_COMMAND } from "../pi/extensions/toriel-mcp.ts";
+import { learnSummaries, MCP_FILE_ENV, MCP_SUMMARIES_ENV, piConfig, summaryLine } from "../pi/extensions/lib/mcp-config.ts";
+import setup, { addToolSearchGuideline, describeOutcomes, loadServers, loadSummaries, reconcile, recordSummaries, saveSummaries, TOOL_SEARCH_GUIDELINE, UP_COMMAND } from "../pi/extensions/toriel-mcp.ts";
 
 async function listener(): Promise<{ port: number; close(): Promise<void> }> {
   const server = net.createServer((s) => s.destroy());
@@ -96,33 +96,44 @@ describe("reconcile", () => {
   });
 });
 
-describe("the extension", () => {
-  function load(file: string | undefined) {
-    const previous = process.env[MCP_FILE_ENV];
-    if (file === undefined) {
-      delete process.env[MCP_FILE_ENV];
-    } else {
-      process.env[MCP_FILE_ENV] = file;
-    }
+  function load(file: string | undefined, summaries?: string, tools: Array<{ name: string; namespace?: { aliases?: string[]; instructions?: string } }> = []) {
+    const saved = { file: process.env[MCP_FILE_ENV], summaries: process.env[MCP_SUMMARIES_ENV] };
+    const put = (key: string, value: string | undefined): void => {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    };
+    put(MCP_FILE_ENV, file);
+    put(MCP_SUMMARIES_ENV, summaries);
     const handlers: Array<(e: unknown, ctx: never) => unknown> = [];
+    const events: string[] = [];
     const commands = new Map<string, (args: string, ctx: { ui: { notify(m: string, t?: string): void } }) => Promise<void> | void>();
     const registered: string[] = [];
+    const configs = new Map<string, Record<string, unknown>>();
     try {
       setup({
-        on: (_event, handler) => handlers.push(handler),
+        on: (event, handler) => {
+          events.push(event);
+          handlers.push(handler);
+        },
         registerCommand: (name, options) => commands.set(name, options.handler),
-        registerMcpServer: (name) => registered.push(name),
+        registerMcpServer: (name, config) => {
+          registered.push(name);
+          configs.set(name, config);
+        },
         getMcpServers: () => registered.map((name) => ({ name })),
+        getAllTools: () => tools,
       });
     } finally {
-      if (previous === undefined) {
-        delete process.env[MCP_FILE_ENV];
-      } else {
-        process.env[MCP_FILE_ENV] = previous;
-      }
+      put(MCP_FILE_ENV, saved.file);
+      put(MCP_SUMMARIES_ENV, saved.summaries);
     }
-    return { handlers, commands, registered };
+    return { handlers, events, commands, registered, configs };
   }
+
+describe("the extension", () => {
 
   it("does nothing at all when there is no file path (a session without MCP support)", () => {
     const x = load(undefined);
@@ -158,5 +169,97 @@ describe("the extension", () => {
     assert.match(said[2]?.[0] ?? "", /up: already registered/);
     assert.equal(said[2]?.[1], "info");
     await l.close();
+  });
+});
+
+describe("remembered server summaries (ticket 303)", () => {
+  const tmp = (): string => path.join(fs.mkdtempSync(path.join(os.tmpdir(), "toriel-mcpsum-")), "state", "mcp-summaries.json");
+  const tool = (name: string, server: string, instructions?: string) => ({ name, namespace: { aliases: [server], ...(instructions === undefined ? {} : { instructions }) } });
+
+  it("shows the first line of the instructions, as pi does, capped", () => {
+    assert.equal(summaryLine("  Git tools.  \nMore detail."), "Git tools.");
+    assert.equal(summaryLine(undefined), "");
+    assert.equal(summaryLine("x".repeat(400)).length, 250);
+  });
+
+  it("registers a deferred server with its remembered summary, but never over the entry's own description and never for a direct one", () => {
+    assert.equal(piConfig({ command: "x" }, { summary: "Git tools." }).description, "Git tools.");
+    assert.equal(piConfig({ command: "x", description: "Mine." }, { summary: "Git tools." }).description, "Mine.");
+    assert.equal(piConfig({ command: "x" }, { summary: "Git tools.", direct: true }).description, undefined, "a direct server is not listed in the section");
+    assert.equal(piConfig({ command: "x" }).description, undefined);
+  });
+
+  it("learns the summaries of connected servers that set no description, and reports no change when there is none", () => {
+    const servers = { git: { command: "g" }, mine: { command: "m", description: "Mine." } };
+    const tools = [tool("read", "git", "not an MCP tool"), tool("mcp__git__git_read", "git", "Git tools.\nUse repo:"), tool("mcp__mine__x", "mine", "Server text."), tool("mcp__gone__x", "gone", "Not in mcp.yaml."), tool("mcp__git__git_write", "git")];
+    assert.deepEqual(learnSummaries({}, tools, servers), { git: "Git tools." });
+    assert.equal(learnSummaries({ git: "Git tools." }, tools, servers), undefined, "unchanged: the file is not rewritten");
+    assert.deepEqual(learnSummaries({ git: "Old.", other: "Kept." }, tools, servers), { git: "Git tools.", other: "Kept." });
+  });
+
+  it("reads a missing or malformed file as no summaries, and writes it atomically", () => {
+    const file = tmp();
+    assert.deepEqual(loadSummaries(file), {});
+    assert.deepEqual(loadSummaries(undefined), {});
+    saveSummaries(file, { git: "Git tools." });
+    assert.deepEqual(loadSummaries(file), { git: "Git tools." });
+    assert.deepEqual(fs.readdirSync(path.dirname(file)), ["mcp-summaries.json"], "no temp file is left behind");
+    fs.writeFileSync(file, "[1,2]");
+    assert.deepEqual(loadSummaries(file), {});
+    fs.writeFileSync(file, '{"git": "ok", "bad": 3}');
+    assert.deepEqual(loadSummaries(file), { git: "ok" });
+    fs.writeFileSync(file, "{not json");
+    assert.deepEqual(loadSummaries(file), {});
+  });
+
+  it("records after a run without throwing, even when the file cannot be written", () => {
+    const mcp = yamlFile("servers:\n  git: { command: g }\n");
+    const file = tmp();
+    recordSummaries(file, mcp, [tool("mcp__git__git_read", "git", "Git tools.")]);
+    assert.deepEqual(loadSummaries(file), { git: "Git tools." });
+    const blocked = path.join(yamlFile(""), "under-a-file", "s.json");
+    assert.doesNotThrow(() => recordSummaries(blocked, mcp, [tool("mcp__git__git_read", "git", "Git tools.")]));
+  });
+
+  it("the extension registers with the remembered summary at start and records new ones at the end of each run", async () => {
+    const mcp = yamlFile("servers:\n  git: { command: g }\n  gdb: { command: d }\n");
+    const file = tmp();
+    saveSummaries(file, { git: "Git tools." });
+    const x = load(mcp, file, [tool("mcp__gdb__gdb_start", "gdb", "GDB tools.")]);
+    assert.deepEqual(x.events, ["session_start", "before_agent_start", "agent_end"]);
+    await x.handlers[0]?.({}, { ui: { notify: () => undefined } } as never);
+    assert.equal(x.configs.get("git")?.description, "Git tools.");
+    assert.equal(x.configs.get("gdb")?.description, undefined, "nothing remembered yet");
+    await x.handlers[2]?.({}, {} as never);
+    assert.deepEqual(loadSummaries(file), { git: "Git tools.", gdb: "GDB tools." });
+  });
+
+  it("does not listen for run ends when the daemon named no summaries file", () => {
+    assert.deepEqual(load(yamlFile("servers: {}\n")).events, ["session_start", "before_agent_start"]);
+  });
+});
+
+describe("loading MCP tools in one go (ticket 305)", () => {
+  const event = () => ({ systemPromptOptions: { promptGuidelines: ["other"] } });
+
+  it("adds the guideline once, only when tool_search is among the session's tools", () => {
+    const e = event();
+    addToolSearchGuideline(e, ["read", "tool_search"]);
+    addToolSearchGuideline(e, ["read", "tool_search"]);
+    assert.deepEqual(e.systemPromptOptions.promptGuidelines, ["other", TOOL_SEARCH_GUIDELINE]);
+    const none = event();
+    addToolSearchGuideline(none, ["read"]);
+    assert.deepEqual(none.systemPromptOptions.promptGuidelines, ["other"]);
+  });
+
+  it("never throws on an event of another shape", () => {
+    assert.doesNotThrow(() => addToolSearchGuideline(undefined, ["tool_search"]));
+    assert.doesNotThrow(() => addToolSearchGuideline({ systemPromptOptions: {} }, ["tool_search"]));
+  });
+
+  it("says why loading costs, and asks for one early, named load", () => {
+    assert.match(TOOL_SEARCH_GUIDELINE, /without the prompt cache/);
+    assert.match(TOOL_SEARCH_GUIDELINE, /one tool_search call, as early as you can/);
+    assert.match(TOOL_SEARCH_GUIDELINE, /set limit/);
   });
 });

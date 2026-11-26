@@ -55,8 +55,8 @@ the whole checklist, graded: what toriel cannot work without, what is
 recommended (the permission package and its config), optional features
 (permission grants, the sleep lock, clipboard tools, a truecolor terminal) and hardening, each with its fix;
 `toriel doctor --fix` applies the safe ones (edits to the permission package's
-`config.json` and one-key edits to toriel's `mcp.yaml`, after showing a diff,
-keeping a backup). The notice line only shows what matters most and counts the
+`config.json` and one-key edits to toriel's `mcp.yaml`, after showing what will
+change, keeping a backup). The notice line only shows what matters most and counts the
 rest.
 
 Agent profiles (`/agents`, `/new --agent explore`) are described in [agents/README.md](agents/README.md). `/new -m provider/id` starts a session on a given model (the same ids and words as `/model`; it replaces a profile's model; with no session running it needs the full provider/id).
