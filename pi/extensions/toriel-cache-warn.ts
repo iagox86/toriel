@@ -91,19 +91,29 @@ export function learn(table: Table, key: string, gapMs: number, usage: Usage): b
   return JSON.stringify(entry) !== before;
 }
 
-/** Replay a branch's assistant messages through `learn`. Returns whether the table changed. */
+/**
+ * Replay a branch's assistant messages through `learn`. Returns whether the table changed. A call after a system message (loaded
+ * tools, a changed prompt section) is not learned from: the start of its prompt changed, so its miss says nothing about expiry
+ * (ticket 310).
+ */
 export function learnFromHistory(table: Table, entries: Entry[]): boolean {
   let changed = false;
   let prev: AssistantMessage | undefined;
+  let promptChanged = false;
   for (const e of entries) {
     const m = e.type === "message" ? e.message : undefined;
+    if (m?.role === "system") {
+      promptChanged = true;
+      continue;
+    }
     if (m?.role !== "assistant" || !m.usage || !m.timestamp) {
       continue;
     }
-    if (prev?.timestamp && prev.model === m.model && prev.provider === m.provider) {
+    if (!promptChanged && prev?.timestamp && prev.model === m.model && prev.provider === m.provider) {
       changed = learn(table, `${m.provider}/${m.model}`, m.timestamp - prev.timestamp, m.usage) || changed;
     }
     prev = m;
+    promptChanged = false;
   }
   return changed;
 }
@@ -188,17 +198,24 @@ export default function (pi: Pi) {
     prev = lastAssistant;
   });
 
+  // a system message (loaded tools, a changed prompt section) changes the start of the next prompt, so that call's miss is not expiry (ticket 310)
+  let promptChanged = false;
   pi.on("message_end", (event, _ctx) => {
     const m = event.message;
+    if (m.role === "system") {
+      promptChanged = true;
+      return;
+    }
     if (m.role !== "assistant" || !m.usage || !m.timestamp) {
       return;
     }
-    if (prev?.timestamp && prev.model === m.model && prev.provider === m.provider) {
+    if (!promptChanged && prev?.timestamp && prev.model === m.model && prev.provider === m.provider) {
       if (learn(table, `${m.provider}/${m.model}`, m.timestamp - prev.timestamp, m.usage)) {
         save(file, table);
       }
     }
     prev = m;
+    promptChanged = false;
   });
 
   pi.on("input", async (event, ctx) => {

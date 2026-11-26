@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, it } from "node:test";
-import { classify, learn, learnFromHistory, type Table, threshold, warningFor } from "../pi/extensions/toriel-cache-warn.ts";
+import setup, { classify, learn, learnFromHistory, type Table, threshold, warningFor } from "../pi/extensions/toriel-cache-warn.ts";
 
 const MIN = 60_000;
 const T0 = 1_800_000_000_000;
@@ -49,6 +52,35 @@ describe("learning the expiry", () => {
     const changed = learnFromHistory(t, [msg(T0, hit), msg(T0 + 3 * MIN, hit), msg(T0 + 20 * MIN, miss)]);
     assert.equal(changed, true);
     assert.deepEqual(t["p/m"], { maxHit: 3 * MIN, minMiss: 17 * MIN });
+  });
+
+  it("does not take a miss after a prompt change (loaded tools, a changed section) as expiry, on replay or live (ticket 310)", () => {
+    const msg = (timestamp: number, usage: object) => ({ type: "message", message: { role: "assistant", provider: "p", model: "m", timestamp, usage } });
+    const system = { type: "message", message: { role: "system" } };
+    const t: Table = {};
+    learnFromHistory(t, [msg(T0, hit), system, msg(T0 + 3 * MIN, miss), msg(T0 + 8 * MIN, miss)]);
+    assert.deepEqual(t["p/m"], { maxHit: 0, minMiss: 5 * MIN }, "only the miss with an unchanged prompt counts");
+
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "toriel-cachewarn-")), "cache-ttl.json");
+    const previous = process.env.TORIEL_CACHE_TTL_FILE;
+    process.env.TORIEL_CACHE_TTL_FILE = file;
+    const handlers = new Map<string, (event: never, ctx: never) => unknown>();
+    try {
+      setup({ on: (event: string, handler: (event: never, ctx: never) => unknown) => void handlers.set(event, handler) } as never);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.TORIEL_CACHE_TTL_FILE;
+      } else {
+        process.env.TORIEL_CACHE_TTL_FILE = previous;
+      }
+    }
+    const end = (message: object) => handlers.get("message_end")?.({ message } as never, {} as never);
+    end(msg(T0, hit).message);
+    end(system.message);
+    end(msg(T0 + 3 * MIN, miss).message);
+    assert.equal(fs.existsSync(file), false, "nothing learned from the miss after the change");
+    end(msg(T0 + 8 * MIN, miss).message);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8"))["p/m"], { maxHit: 0, minMiss: 5 * MIN });
   });
 });
 
