@@ -23,6 +23,7 @@ import { legacySettingsFile, loadSettings, resolveChildConfig, settingsFile, yam
 import { addMcpServer, importMcpJson, readMcpYaml, redactEntry, renderMcpYaml, setMcpServerKey } from "./mcp-config.ts";
 import { convertLegacySettings, renderSettings } from "./settings-file.ts";
 import { mcpYamlFile } from "./config-dir.ts";
+import type { ChatProbe } from "./bridge/probe-sync.ts";
 import { chatClientInstalled, readToken } from "./bridge/token.ts";
 import { onPathDirs as onPath, writeFileAtomic } from "./util.ts";
 
@@ -53,6 +54,8 @@ export interface CatalogEntry {
   needsPermissionPackage?: boolean;
   /** Only checked when the caller supplies a probe that asks the network (`toriel doctor` does; the in-app /doctor does not, because it would block the screen). */
   needsProbe?: GatewayKind;
+  /** Only checked when the caller supplies the chat-server probe (`toriel doctor` does; the in-app /doctor does not, it would block the screen). */
+  needsChatProbe?: boolean;
 }
 
 /** Every check doctor makes, in the order it prints them within a level. */
@@ -79,6 +82,7 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: "mcp-json", level: "recommended", title: "pi's own mcp.json holds no servers (toriel keeps them in mcp.yaml and pi would start the old ones itself)" },
   { id: "chat-bridge-token", level: "feature", title: "the chat bridge's token (the chatto setting's tokenFile or tokenEnv) can be read, and a token file is owner-only" },
   { id: "chat-bridge-package", level: "feature", title: "the chat bridge's package (@chatto/client) is installed, when the chatto setting is on" },
+  { id: "chat-bridge-server", level: "feature", title: "the chat server answers and takes the bridge's token, the room group is visible to the bot and the inbox name is free (whether the bot may create rooms is checked only when the server reports its group permissions; a room the bot cannot see can still hold the name)", needsChatProbe: true },
   { id: "sandbox-bwrap", level: "feature", title: 'bubblewrap works (needed only when the "sandbox" setting is "bwrap": scoped sessions run each bash command sandboxed)' },
   { id: "sleep-lock", level: "feature", title: "the machine is kept awake for scheduled runs (systemd-inhibit)" },
   { id: "notify-send", level: "feature", title: "desktop notifications for prompts in background sessions (notify-send)" },
@@ -123,6 +127,8 @@ export interface DoctorOptions extends AuditOptions {
   chatClientInstalled?: () => boolean;
   /** What tmux says about keys (default: asks the server this process runs under; tests inject). */
   probeTmux?: () => TmuxKeys;
+  /** Asks the chat server what the bridge needs, without changing anything (ticket 293). Not set: the check is skipped ("run toriel doctor"). `toriel doctor` passes the real one. */
+  probeChat?: ChatProbe;
   /** Asks the litellm proxy about its routes (ticket 215). Not set: the check is skipped ("run toriel doctor"). `toriel doctor` passes the real one. */
   probeLitellm?: LitellmProbe;
   /** What the daemon learned from litellm at start (ticket 221); read when `probeLitellm` is not set. The running daemon and controller pass theirs. */
@@ -293,8 +299,15 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
     if (!token.ok) {
       out.push({ id: "chat-bridge-token", level: "feature", message: `the chat bridge cannot start: ${token.problem}`, manual: "the token and where it is kept are yours (the bot's token from the chat server's settings; keep the file mode 600)" });
     }
-    if (!(opts.chatClientInstalled ?? chatClientInstalled)()) {
+    const installed = (opts.chatClientInstalled ?? chatClientInstalled)();
+    if (!installed) {
       out.push({ id: "chat-bridge-package", level: "feature", message: "the chat bridge's package @chatto/client is not installed: run npm install in the toriel checkout", manual: "a package install in the checkout, which doctor does not run" });
+    }
+    // only with a token and the package: without them the bridge cannot connect, and the checks above already say why
+    if (token.ok && installed && opts.probeChat) {
+      for (const message of opts.probeChat(loaded.settings.chatto, opts.env ?? process.env)) {
+        out.push({ id: "chat-bridge-server", level: "feature", message, manual: "groups, rooms and the bot's roles live on the chat server, and the inbox name is a choice of yours" });
+      }
     }
   }
   const piCli = opts.piCli ?? resolveChildConfig(loaded.settings, env).piCli;
@@ -507,6 +520,8 @@ export interface Check extends CatalogEntry {
 export function runDoctor(opts: DoctorOptions = {}): Check[] {
   const findings = collectFindings({ ...opts, permissionSystem: opts.permissionSystem ?? true });
   const noPackage = findings.some((f) => f.id === "permission-package");
+  // a machine without the chat bridge has nothing to ask the chat server about: its check is ok, not skipped
+  const chatOn = () => loadSettings(opts.settingsFile ?? settingsFile(opts.env ?? process.env)).settings.chatto !== undefined;
   const known = new Set(CATALOG.map((c) => c.id));
   const checks: Check[] = CATALOG.map((entry) => {
     const mine = findings.filter((f) => f.id === entry.id);
@@ -519,6 +534,13 @@ export function runDoctor(opts: DoctorOptions = {}): Check[] {
     // the bundle folder is a CLI input (ticket 240); without it the size check has not run, so it does not count as ok (like the probe checks)
     if (entry.id === "feedback-size" && opts.feedbackDir === undefined) {
       return { ...entry, state: "skipped", findings: [], note: "run `toriel doctor` in a terminal to check" };
+    }
+    // the probe is gated on the token and the package in collectFindings, so either problem means it never ran: not ok, then
+    if (entry.needsChatProbe && findings.some((f) => f.id === "chat-bridge-token" || f.id === "chat-bridge-package")) {
+      return { ...entry, state: "skipped", findings: [], note: "checks the chat server, which needs the token and the package (see the problems above)" };
+    }
+    if (entry.needsChatProbe && opts.probeChat === undefined && chatOn()) {
+      return { ...entry, state: "skipped", findings: [], note: "asks the chat server: run `toriel doctor` in a terminal to check" };
     }
     if (entry.needsProbe !== undefined && opts.probeLitellm === undefined) {
       const kind = entry.needsProbe;

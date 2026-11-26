@@ -12,7 +12,8 @@ import { answerValue, DEFAULT_GRANT_DURATIONS, type DialogRequest, grantRowFor, 
 import { isCappedSurface } from "../permissions.ts";
 import { fmtClock } from "../when.ts";
 import type { ChattoSettings } from "../settings.ts";
-import { type ChatAdapter, type ChatEvent, type ChatMessage, MAX_BODY } from "./adapter.ts";
+import { type ChatAdapter, type ChatEvent, type ChatMessage, type ChatRoom, MAX_BODY } from "./adapter.ts";
+import { CONNECT_HINTS, chatErrorText, describeChatError, isSetupCode, redactUrl, setupFailureText } from "./chat-error.ts";
 import type { DaemonPort } from "./daemon-client.ts";
 import { oneLine } from "../util.ts";
 import { parseChatCommand } from "./chat-commands.ts";
@@ -200,8 +201,8 @@ export class Bridge {
     this.chain = this.chain.then(() => this.withTimeout(fn)).catch((err: unknown) => this.problem(label, err));
   }
 
-  /** One step, given up on after `stepTimeoutMs`: a call to the chat server or the daemon that never answers must not freeze everything queued behind it. */
-  private withTimeout(fn: () => Promise<void>): Promise<void> {
+  /** One call, given up on after `stepTimeoutMs`: a call to the chat server that never answers must not freeze everything waiting on it. */
+  private withTimeout<T>(fn: () => Promise<T>): Promise<T> {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error(`took longer than ${Math.round(this.stepTimeoutMs / 1000)} s and was given up on`)), this.stepTimeoutMs);
       timer.unref();
@@ -289,18 +290,54 @@ export class Bridge {
     return this.chain;
   }
 
+  /**
+   * One step of `start()`, given up on after `stepTimeoutMs`. A failure says which step, what it was about, the server's code, text and
+   * detail, and what to do (ticket 293); the parts of the error go to the log once. A code that trying again will not fix (a refused
+   * token, a missing permission, a taken name) is a SetupError, so the daemon does not restart the bridge in a loop; a server that is
+   * down or slow is not, and is tried again.
+   */
+  private async setupStep<T>(step: string, fn: () => Promise<T>, hints: Partial<Record<string, string>> = {}): Promise<T> {
+    let result: T | undefined;
+    try {
+      await this.withTimeout(async () => {
+        result = await fn();
+      });
+      return result as T;
+    } catch (err) {
+      if (err instanceof SetupError) {
+        throw err;
+      }
+      const info = describeChatError(err);
+      this.log(`setup step "${step}" failed: ${JSON.stringify({ error: err instanceof Error ? err.name : typeof err, ...info })}`);
+      const text = setupFailureText(step, err, hints);
+      // the raw error rides along as the cause: a caller that wants to read the code back (the inbox's already_exists does) can
+      throw isSetupCode(info.code) ? Object.assign(new SetupError(text), { cause: err }) : Object.assign(new Error(text), { cause: err });
+    }
+  }
+
   async start(): Promise<void> {
     this.load();
-    await this.adapter.connect();
-    const group = await this.adapter.findGroup(this.settings.group);
+    const name = this.settings.group;
+    const url = redactUrl(this.settings.url);
+    await this.setupStep(`connect to the chat server at ${url}`, () => this.adapter.connect(), CONNECT_HINTS);
+    const group = await this.setupStep(`look up the room group "${name}"`, () => this.adapter.findGroup(name));
     if (!group) {
-      throw new SetupError(`the room group "${this.settings.group}" does not exist, or the bot cannot see it`);
+      // the room list this client projects fills in a moment after connecting, and findGroup has already waited for it in vain: ask the
+      // server itself. It may well know the group - then this is about waiting, not setup, and it is retried; it may genuinely not.
+      const visible = await this.withTimeout(() => this.adapter.listGroups()).catch(() => []);
+      const seen = visible.find((g) => g.id === name || g.name.toLowerCase() === name.toLowerCase());
+      if (seen) {
+        throw new Error(`the room group "${name}" is not in the room list of the client, though the server lists it as "${seen.name}" (room groups fill in shortly after connecting; if the bridge keeps saying this, the bot can see the group without belonging to it: check chatto.group and the bot's roles)`);
+      }
+      const note = visible.length > 0 ? ` (the bot can see: ${visible.map((g) => `"${g.name}"`).join(", ")})` : " (no room groups are visible to the bot, or the list could not be read)";
+      throw new SetupError(`the room group "${name}" does not exist, or the bot cannot see it${note}: create it on the chat server and give the bot access to it, or set chatto.group to a group it can see`);
     }
     this.groupId = group;
-    await this.ensureInbox();
+    const where = `in group "${name}" (${group})`;
+    await this.ensureInbox(where);
     // channels left open by a bridge that did not get to clean up (a crash, a kill) are cleared: the published sessions reopen theirs
-    await this.reconcile();
-    await this.sweepGroup();
+    await this.setupStep(`match the channels ${where} to sessions`, () => this.reconcile());
+    await this.setupStep(`join the channels ${where} and close the ones toriel does not own`, () => this.sweepGroup());
     await this.closeAll("toriel was restarted; this channel reopens when the session is published and listed again.");
     this.daemon.onMessage((msg) => this.run(`daemon ${msg.type}`, () => this.onDaemon(msg)));
     this.adapter.onEvent((e) => this.run(`chat ${e.type}`, () => this.onChat(e)));
@@ -311,7 +348,7 @@ export class Bridge {
       this.run("sync", () => this.syncSessions()); // tries again where a channel could not be made or closed
     }, DISCOVER_EVERY_MS);
     this.discoverTimer.unref();
-    await this.daemon.request({ type: "observe_dialogs" });
+    await this.setupStep("ask the daemon for permission dialogs", () => this.daemon.request({ type: "observe_dialogs" }));
     await this.daemon.request({ type: "chat_status", up: true });
     this.log(`bridge up: group ${this.settings.group}, ${Object.keys(this.state.channels).length} channel(s) known`);
   }
@@ -379,17 +416,77 @@ export class Bridge {
     fs.renameSync(tmp, this.stateFile);
   }
 
-  private async ensureInbox(): Promise<void> {
-    const rooms = await this.adapter.listRooms(this.groupId);
-    const found = rooms.find((r) => r.name.toLowerCase() === this.settings.inboxChannel.toLowerCase());
-    const room = found ?? (await this.adapter.createRoom(this.groupId, this.settings.inboxChannel, "Toriel: start a session by writing here; announcements"));
-    if (!found) {
-      this.log(`created the inbox channel ${room.name}`);
-      await this.addUsers(room.id);
+  /**
+   * Find, reuse or make the inbox channel (`chatto.inboxChannel`). The list of the group's rooms is trusted when it has the name; a
+   * closed room with it is reopened, and else the channel is created - the try comes first, because room names are unique server-wide
+   * and a directory lookup is only a guess (one the bot cannot see can still hold the name, and a server that matches names
+   * case-sensitively would be tripped by one). When the create fails on the name, the directory says where it went (ticket 293).
+   */
+  private async ensureInbox(where: string): Promise<void> {
+    const name = this.settings.inboxChannel;
+    const byName = (r: { name: string }) => r.name.toLowerCase() === name.toLowerCase();
+    const rooms = await this.setupStep(`list the channels ${where}`, () => this.adapter.listRooms(this.groupId));
+    let room = rooms.find(byName);
+    if (!room) {
+      // closed by an earlier run, or by hand: reopen it rather than fail on the name it still holds
+      const archived = await this.setupStep(`list the closed channels ${where}`, () => this.adapter.listArchived(this.groupId));
+      const old = archived.find(byName);
+      if (old) {
+        room = await this.reopenInbox(old, where);
+      }
     }
-    await this.adapter.joinRoom(room.id).catch(() => undefined);
-    this.state.inboxRoomId = room.id;
+    if (!room) {
+      const fix = `Room names are unique on a chat server: set chatto.inboxChannel in toriel's settings to a name no other room has (e.g. "${name}-2"), or rename or delete that room`;
+      room = await this.createInbox(name, where, fix);
+    }
+    const inbox = room;
+    await this.adapter.joinRoom(inbox.id).catch((err: unknown) => this.log(`could not join the inbox channel ${inbox.name} (${inbox.id}): ${chatErrorText(describeChatError(err))}`));
+    this.state.inboxRoomId = inbox.id;
     this.save();
+  }
+
+  /** Open the group's own closed room with the inbox's name again and put its users back (a member could have left while it was closed, or chatto.addUsers has changed). */
+  private async reopenInbox(old: ChatRoom, where: string): Promise<ChatRoom> {
+    await this.setupStep(`reopen the closed inbox channel "${old.name}" (${old.id}) ${where}`, () => this.adapter.unarchiveRoom(old.id));
+    await this.addUsers(old.id);
+    this.log(`reopened the inbox channel ${old.name}`);
+    return old;
+  }
+
+  /**
+   * Make the inbox channel. When the server already holds the name (`already_exists`), it is looked up in the directory for what to
+   * say: the group's own room (the room list of the client just did not have it yet), a room of another group the bot can see (named,
+   * with its id) or one the bot cannot see at all. Other failures keep the step's wording and the retry-or-not class the step chose.
+   */
+  private async createInbox(name: string, where: string, fix: string): Promise<ChatRoom> {
+    try {
+      const made = await this.setupStep(`create the inbox channel "${name}" ${where}`, () => this.adapter.createRoom(this.groupId, name, "Toriel: start a session by writing here; announcements"), {
+        permission_denied: `The bot needs permission to create rooms in group "${this.settings.group}" (and to read and post there): check its roles on the chat server`,
+      });
+      this.log(`created the inbox channel ${made.name}`);
+      await this.addUsers(made.id);
+      return made;
+    } catch (err) {
+      // setupStep already logged this failure once and chose its class; the raw error is the cause, and only it still carries the code
+      const raw = err instanceof Error && err.cause instanceof Error ? err.cause : err;
+      if (describeChatError(raw).code !== "already_exists") {
+        throw err;
+      }
+      const held = await this.withTimeout(() => this.adapter.findRoomsNamed(name)).catch(() => []);
+      const ours = held.find((r) => r.groupId === this.groupId);
+      if (ours) {
+        const taken = ours.archived ? await this.reopenInbox(ours, where) : ours;
+        this.log(`the inbox channel is "${taken.name}" (${taken.id}) ${where}, though the room list of this group did not have it yet: it is used`);
+        return taken;
+      }
+      const elsewhere = held.find((r) => r.groupId !== this.groupId);
+      if (elsewhere) {
+        const groups = await this.withTimeout(() => this.adapter.listGroups()).catch(() => []);
+        const heldNote = elsewhere.groupId ? `in group "${groups.find((g) => g.id === elsewhere.groupId)?.name ?? "?"}" (${elsewhere.groupId})` : "outside any group";
+        throw new SetupError(`could not create the inbox channel "${name}" ${where}: a room with that name already exists ${heldNote}${elsewhere.archived ? ", archived" : ""} (room ${elsewhere.id}). ${fix}`);
+      }
+      throw new SetupError(`could not create the inbox channel "${name}" ${where}: a room with that name already exists, and the bot cannot see it (another toriel's inbox, perhaps, or archived where the bot cannot list it). ${fix}`);
+    }
   }
 
   // ---- from the daemon ----
@@ -585,9 +682,10 @@ export class Bridge {
   private async addUsers(roomId: string): Promise<void> {
     for (const user of this.settings.addUsers) {
       await this.adapter.addMember(roomId, user).catch((err: unknown) => {
-        const why = err instanceof Error ? err.message : String(err);
-        if (!/already/i.test(why)) {
-          this.log(`could not add user ${user} to a channel: ${why}`);
+        const info = describeChatError(err);
+        if (!/already/i.test(`${info.code ?? ""} ${info.text}`)) {
+          const hint = info.code === "permission_denied" ? ": the bot needs permission to add members to the rooms it makes (chatto.addUsers lists who it adds)" : "";
+          this.log(`could not add user ${user} to channel ${roomId}: ${chatErrorText(info)}${hint}`);
         }
       });
     }

@@ -140,6 +140,35 @@ export async function connectChatto(opts: ChattoConnect): Promise<ChatAdapter> {
       }
       return groupId;
     },
+    async listGroups() {
+      // RoomDirectoryService.listRoomGroups: the groups visible to the bot, each with viewerState.permissions (not probed live: the
+      // permission keys are the server's, and a server that sends none leaves `permissions` out)
+      const res = await types_directory().listRoomGroups({});
+      return (Array.isArray(res.groups) ? (res.groups as Payload[]) : []).map((g) => {
+        const grants = Array.isArray(g.viewerState?.permissions) ? (g.viewerState.permissions as Payload[]) : [];
+        const permissions = Object.fromEntries(grants.map((p) => [String(p.permission), Boolean(p.granted)]));
+        return { id: String(g.id), name: String(g.name), ...(grants.length > 0 ? { permissions } : {}) };
+      });
+    },
+    async findRoomsNamed(name) {
+      // the directory lists only rooms the bot can see (archive filter 3 = active and archived, scope 2 = channels)
+      const out: Array<ChatRoom & { groupId?: string }> = [];
+      const seen = new Set<string>();
+      for (let offset = 0; offset < 5000; offset += 100) {
+        const res = await types_directory().listRooms({ scope: 2, archiveFilter: 3, page: { limit: 100, offset } });
+        for (const r of Array.isArray(res.rooms) ? (res.rooms as Payload[]) : []) {
+          const id = String(r.room?.id);
+          if (String(r.room?.name).toLowerCase() === name.toLowerCase() && !seen.has(id)) {
+            seen.add(id);
+            out.push({ id, name: String(r.room.name), archived: Boolean(r.room.archived), description: r.room.description || undefined, groupId: r.room.groupId || undefined });
+          }
+        }
+        if (!res.page?.hasMore) {
+          break;
+        }
+      }
+      return out;
+    },
     async listRooms() {
       return rooms();
     },

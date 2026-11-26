@@ -69,7 +69,9 @@ export async function doctorMain(args: readonly string[], io: DoctorIo, opts: Do
   const doctor = await import("./doctor.ts");
   // the CLI may spend a few seconds asking the litellm proxy about its routes (ticket 215); the in-app /doctor never does
   const { probeLitellm } = await import("./litellm-models.ts");
-  const options = { probeLitellm, ...opts, startup: [], tty: io.tty === true };
+  // and the chat server, when the chat bridge is set up (ticket 293): a child process, at most 20 s
+  const { probeChatServer } = await import("./bridge/probe-sync.ts");
+  const options = { probeLitellm, probeChat: probeChatServer, ...opts, startup: [], tty: io.tty === true };
   const checks = doctor.runDoctor(options);
   const style = io.color ? doctor.ANSI_STYLE : undefined;
   io.write(`${doctor.renderDoctor(checks, { style })}\n`);

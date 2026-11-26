@@ -9,6 +9,13 @@ export interface ChatRoom {
   description?: string;
 }
 
+export interface ChatGroup {
+  id: string;
+  name: string;
+  /** Group-scoped permission decisions for the bot (e.g. a create-rooms key), as the server reports them; absent when it reports none. */
+  permissions?: Record<string, boolean>;
+}
+
 export interface ChatMessage {
   id: string;
   roomId: string;
@@ -40,7 +47,11 @@ export interface ChatAdapter {
   onStatus(listener: (up: boolean) => void): () => void;
   /** Resolve the room group by name or id; undefined when there is none (the bridge says so and waits). */
   findGroup(nameOrId: string): Promise<string | undefined>;
-  /** Rooms in the group, archived ones included. */
+  /** The room groups the bot can see, with the group-scoped permissions the server says it has there (key -> granted), when it says. */
+  listGroups(): Promise<ChatGroup[]>;
+  /** Every channel the bot can see with this name (case-insensitive), in any group, archived ones included. Room names are unique server-wide, so a name can be taken by a room this does not list (one the bot cannot see). */
+  findRoomsNamed(name: string): Promise<Array<ChatRoom & { groupId?: string }>>;
+  /** The active rooms of the group (archived ones are left out; `listArchived` has them). */
   listRooms(groupId: string): Promise<ChatRoom[]>;
   /** Archived rooms of the group, with their descriptions (the room list leaves them out); a closed channel is found again by the tag in it. */
   listArchived(groupId: string): Promise<ChatRoom[]>;

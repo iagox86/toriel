@@ -232,6 +232,7 @@ describe("doctor checks", () => {
       setup({ piMcpJson: { mcpServers: { freecad: { url: "http://127.0.0.1:39280/mcp" } } } }).opts,
       setup({ config: { authorizerChain: ["toriel-grants"], permission: { "*": "allow", external_directory_write: { "/tmp/*": "allow" }, path: { "*": "ask", [GRANTS_RULE]: "ask" } } }, settings: JSON.stringify({ scopeGuardAcceptedAllows: [{ surface: "external_directory_write", pattern: "/tmp/*" }, { surface: "*", pattern: "*" }] }) }).opts,
       { ...setup({ settings: '{"chatto":{"url":"https://chat.example.com","tokenFile":"/nonexistent/chatto.token","group":"Toriel","allowedUser":"u1"}}' }).opts, chatClientInstalled: () => false },
+      { ...setup({ settings: '{"chatto":{"url":"https://chat.example.com","tokenEnv":"CHAT_T","group":"Toriel","allowedUser":"u1"}}' }).opts, env: { ...process.env, CHAT_T: "t" }, chatClientInstalled: () => true, probeChat: () => ["the inbox name is taken"] },
     ];
     const seen = new Set<string>();
     for (const opts of scenarios) {
@@ -540,6 +541,31 @@ describe("doctor checks", () => {
     assert.ok(noPackage[0]?.manual);
   });
 
+  it("asks the chat server only from a terminal, only with a token and the package, and reports what it found (ticket 293)", () => {
+    const settings = '{"chatto":{"url":"https://chat.example.com","tokenEnv":"CHAT_T","group":"G2","inboxChannel":"inbox-2","allowedUser":"u1"}}';
+    const asked: unknown[] = [];
+    const taken = 'the chat bridge\'s inbox name "inbox-2" is taken by a room in group "Other"';
+    const probeChat = (c: unknown) => {
+      asked.push(c);
+      return [taken];
+    };
+    const base = { ...setup({ settings }).opts, probeBwrap: () => undefined, chatClientInstalled: () => true };
+    const found = collectFindings({ ...base, env: { ...process.env, CHAT_T: "t" }, probeChat }).filter((f) => f.id === "chat-bridge-server");
+    assert.deepEqual(found.map((f) => [f.level, f.message]), [["feature", taken]]);
+    assert.ok(found[0]?.manual);
+    assert.match(JSON.stringify(asked[0]), /"group":"G2".*"inboxChannel":"inbox-2"/);
+    asked.length = 0;
+    const noToken = collectFindings({ ...base, env: { ...process.env, CHAT_T: "" }, probeChat });
+    assert.equal(asked.length, 0, "no token: the server is not asked");
+    assert.ok(noToken.some((f) => f.id === "chat-bridge-token"));
+    const inApp = runDoctor({ ...base, env: { ...process.env, CHAT_T: "t" } }).find((c) => c.id === "chat-bridge-server");
+    assert.equal(inApp?.state, "skipped", "the in-app /doctor does not block on the network");
+    assert.match(inApp?.note ?? "", /toriel doctor/);
+    const brokenToken = runDoctor({ ...base, env: { ...process.env, CHAT_T: "" }, probeChat }).find((c) => c.id === "chat-bridge-server");
+    assert.equal(brokenToken?.state, "skipped", "a skipped token check above means the server was never asked: not ok");
+    assert.match(brokenToken?.note ?? "", /the token and the package/);
+  });
+
   it("flags a model tier whose provider pi does not know, and stays quiet without lanes or with known providers", () => {
     const s = setup({ settings: '{"agentLanes":{"cheap":"litellm/local-model","medium":"nope/x"}}' });
     fs.writeFileSync(path.join(s.opts.agentDir as string, "models.json"), JSON.stringify({ providers: { litellm: {} } }));
@@ -601,7 +627,7 @@ describe("doctor report", () => {
     assert.match(text, /Required: all 5 ok/);
     assert.match(text, /Recommended: all 5 ok/);
     assert.doesNotMatch(text, / ok {7}/);
-    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(19 ok\)/);
+    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(20 ok\)/);
   });
 });
 
@@ -630,7 +656,7 @@ describe("doctor report colours", () => {
   it("colours the compact report too, with the passing checks' count dim", () => {
     const coloured = renderDoctor(checks(), { compact: true, style: ANSI_STYLE });
     assert.match(coloured, /Required\x1b\[22m: \x1b\[32mall 5 ok\x1b\[39m/);
-    assert.match(coloured, /\x1b\[2m {2}\(19 ok\)\x1b\[22m/);
+    assert.match(coloured, /\x1b\[2m {2}\(20 ok\)\x1b\[22m/);
   });
 });
 
