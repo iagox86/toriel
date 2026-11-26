@@ -170,10 +170,40 @@ export function parseMcpYaml(text: string): { servers: Record<string, McpServerC
   return { servers, problems };
 }
 
-/** What pi's registerMcpServer takes: the entry without toriel's own `whenUp` and `readOnly`. */
-export function piConfig(entry: McpServerConfig): Record<string, unknown> {
+/**
+ * The environment variable that names, comma-separated, the servers whose tools an agent profile lists (ticket 298): the session
+ * gets them declared at once (`direct`) whatever the entry says, since the profile's prompt expects them.
+ */
+export const MCP_DIRECT_ENV = "TORIEL_MCP_DIRECT";
+
+/** The exposure a server gets when its entry sets none: pi's own default is codemode; toriel's is deferred (found with tool_search). */
+export const DEFAULT_EXPOSURE = "deferred";
+
+/** A server name as tool names spell it (pi turns `-` into `_` in `mcp__<server>__<tool>`), for matching the two forms. */
+export function toolServerName(name: string): string {
+  return name.replace(/-/g, "_");
+}
+
+/** The server names of a comma-separated MCP_DIRECT_ENV value, in tool-name form. */
+export function parseDirectServers(value: string | undefined): Set<string> {
+  return new Set(
+    (value ?? "")
+      .split(",")
+      .map((s) => toolServerName(s.trim()))
+      .filter(Boolean),
+  );
+}
+
+/**
+ * What pi's registerMcpServer takes: the entry without toriel's own `whenUp` and `readOnly`, with `deferred` exposure when the
+ * entry sets none (ticket 298), or `direct` when the session's profile needs the server's tools declared.
+ */
+export function piConfig(entry: McpServerConfig, opts: { direct?: boolean } = {}): Record<string, unknown> {
   const { whenUp: _whenUp, readOnly: _readOnly, ...rest } = entry;
-  return rest;
+  if (opts.direct) {
+    return { ...rest, exposure: "direct" };
+  }
+  return { ...rest, exposure: rest.exposure ?? DEFAULT_EXPOSURE };
 }
 
 /** Whether something accepts a TCP connection at the URL's host and port within `timeoutMs`. A refused or silent port is down; the check never throws. */

@@ -215,11 +215,11 @@ describe("daemon: lifecycle (3/3)", () => {
       return JSON.parse(fs.readFileSync(`${f}.argv.json`, "utf8")) as string[];
     };
     const tools = (): string | undefined => argv()[argv().indexOf("--tools") + 1];
-    assert.equal(tools(), "+toriel_message,+toriel_schedule_create,+toriel_schedule_list,+toriel_schedule_cancel,+toriel_watch_create,+toriel_agent,+toriel_agents,+toriel_usage,+toriel_job,+enter_plan_mode,+exit_plan_mode,+todo_write");
+    assert.equal(tools(), "+toriel_message,+toriel_schedule_create,+toriel_schedule_list,+toriel_schedule_cancel,+toriel_watch_create,+toriel_agent,+toriel_agents,+toriel_usage,+toriel_job,+enter_plan_mode,+exit_plan_mode,+todo_write,+tool_search");
     await c.request({ type: "prompt", session: sessionId, message: "hi" });
     await c.waitFor(isSettled);
     await c.request({ type: "reload", session: sessionId });
-    assert.equal(tools(), "+toriel_message,+toriel_schedule_create,+toriel_schedule_list,+toriel_schedule_cancel,+toriel_watch_create,+toriel_agent,+toriel_agents,+toriel_usage,+toriel_job,+enter_plan_mode,+exit_plan_mode,+todo_write", "a /reload resume passes them again");
+    assert.equal(tools(), "+toriel_message,+toriel_schedule_create,+toriel_schedule_list,+toriel_schedule_cancel,+toriel_watch_create,+toriel_agent,+toriel_agents,+toriel_usage,+toriel_job,+enter_plan_mode,+exit_plan_mode,+todo_write,+tool_search", "a /reload resume passes them again");
 
     const explore = await c.request({ type: "spawn", cwd: harness.dir, agent: "explore" });
     await c.waitFor((m) => m.type === "history" && m.session === explore.sessionId);

@@ -2,11 +2,15 @@
 // TORIEL_MCP_FILE) and this extension registers them into pi with pi.registerMcpServer at session start; pi's own mcp.json is not
 // used. pi then connects, declares and reports them like any other server (/mcp, exposure, sign-in all work).
 //
+// An entry with no `exposure` is registered `deferred` (ticket 298): its tools are declared only once tool_search loads them, so a
+// server costs nothing per call until it is used. The servers an agent profile names are registered `direct` in that session
+// (TORIEL_MCP_DIRECT, set by the daemon), since the profile's prompt expects their tools at once.
+//
 // A server marked `whenUp: true` (an app's bridge that exists only while the app runs) is registered only when something listens at
 // its URL at that moment, so a server that is down on purpose costs a few milliseconds and no warning. `/mcp-up` looks again, for
 // the app that was started after the session was.
 import * as fs from "node:fs";
-import { MCP_FILE_ENV, type McpServerConfig, parseMcpYaml, piConfig, probeUrl, redactUrl } from "./lib/mcp-config.ts";
+import { MCP_DIRECT_ENV, MCP_FILE_ENV, type McpServerConfig, parseDirectServers, parseMcpYaml, piConfig, probeUrl, redactUrl, toolServerName } from "./lib/mcp-config.ts";
 
 // Only the slice of pi's extension API this file uses (see toriel-usage.ts).
 interface Ctx {
@@ -47,6 +51,7 @@ export async function reconcile(
   servers: Record<string, McpServerConfig>,
   probe: (url: string) => Promise<boolean> = probeUrl,
   only?: string,
+  direct: ReadonlySet<string> = parseDirectServers(process.env[MCP_DIRECT_ENV]),
 ): Promise<Record<string, Outcome>> {
   const have = new Set((pi.getMcpServers?.() ?? []).map((s) => s.name));
   const names = Object.keys(servers).filter((n) => only === undefined || n === only);
@@ -60,7 +65,7 @@ export async function reconcile(
         return [name, "down"];
       }
       try {
-        pi.registerMcpServer?.(name, piConfig(entry));
+        pi.registerMcpServer?.(name, piConfig(entry, { direct: direct.has(toolServerName(name)) }));
         return [name, "registered"];
       } catch {
         return [name, "failed"];

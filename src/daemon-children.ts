@@ -11,14 +11,14 @@ import { type BridgeTracker, INJECT_COMMAND, injectedId, mergedQueueTexts, parse
 import type { ClientHub } from "./daemon-hub.ts";
 import { autoOn, type DaemonSession } from "./daemon-session.ts";
 import { randomUUID } from "node:crypto";
-import { type AgentProfile, loadAgents, profileArgs, profileHasMcp, withResolvedModel } from "./agents.ts";
+import { type AgentProfile, loadAgents, mcpServersOf, profileArgs, profileHasMcp, withResolvedModel } from "./agents.ts";
 import { recordHandled } from "./handled-files.ts";
 import { brief, type DecisionBase, recordDecision } from "./decision-log.ts";
 import { exitNote, stderrTail } from "./subagent-exit.ts";
 import { historyLength } from "./daemon-history.ts";
 import { bundledArgs, bundledTools } from "./bundled-packages.ts";
 import { piAgentDir } from "./pi-dir.ts";
-import { resourceArgs, SESSION_TOOLS, SPAWN_TOOLS, TORIEL_TOOLS } from "./resources.ts";
+import { resourceArgs, SESSION_TOOLS, SPAWN_TOOLS, TOOL_SEARCH, TORIEL_TOOLS } from "./resources.ts";
 import { lineageArgs, loadLineage, parentMap, subagentDepth } from "./lineage.ts";
 import { sessionIdOfFile } from "./session-file.ts";
 import { mayDelegate, type SubagentLimits } from "./subagents.ts";
@@ -151,7 +151,7 @@ export class ChildManager {
       cliPath: cfg.piCli,
       cwd: s.cwd,
       args,
-      env: { ...childEnv(s, SOCK, process.env, scope, { sharedDir: SHARED_DIR, tmpDir: SANDBOX_TMP_DIR, sandboxWritable: sandbox, mcpFile: profileHasMcp(s.agent) ? mcpYamlFile() : undefined, fileHistoryDir: FILE_HISTORY_DIR, planDir: PLAN_DIR, freshness: settings.fileFreshness }), ...this.delegationEnv(s) },
+      env: { ...childEnv(s, SOCK, process.env, scope, { sharedDir: SHARED_DIR, tmpDir: SANDBOX_TMP_DIR, sandboxWritable: sandbox, mcpFile: profileHasMcp(s.agent) ? mcpYamlFile() : undefined, mcpDirect: mcpServersOf(s.agent?.tools ?? []), fileHistoryDir: FILE_HISTORY_DIR, planDir: PLAN_DIR, freshness: settings.fileFreshness }), ...this.delegationEnv(s) },
     });
     client.onEvent((event) => this.onEvent(s, event as Record<string, unknown>));
     this.launching.add(client);
@@ -234,7 +234,11 @@ export class ChildManager {
     // profile that lists tools owns the loadout (pi forbids mixing the two forms).
     if (!agent?.tools) {
       const mayDelegate = this.mayDelegate(s); // reads lineage.json: once per start, not once per tool
-      args.push("--tools", [...TORIEL_TOOLS.filter((t) => mayDelegate || !SPAWN_TOOLS.includes(t.slice(1))), ...bundledTools(agent, bundle)].join(","));
+      args.push("--tools", [...TORIEL_TOOLS.filter((t) => mayDelegate || !SPAWN_TOOLS.includes(t.slice(1))), ...bundledTools(agent, bundle), `+${TOOL_SEARCH}`].join(","));
+      // MCP tools are found with tool_search and called directly; codemode only when the settings ask for it (ticket 298)
+      if (!loadSettings().settings.codemode) {
+        args.push("--exclude-tools", "codemode");
+      }
     }
     if (isNew && cfg.thinking && !agent?.thinking) {
       args.push("--thinking", cfg.thinking);

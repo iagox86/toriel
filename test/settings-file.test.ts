@@ -61,6 +61,7 @@ describe("the settings template", () => {
       fileFreshness: true,
       permissionNotifications: true,
       permissionNotificationsCritical: false,
+      codemode: false,
       trashRetentionDays: DEFAULT_TRASH_RETENTION_DAYS,
       scheduleUsagePause: DEFAULT_USAGE_PAUSE,
       scheduleDailyLimit: DEFAULT_LIMITS.dailyFires,

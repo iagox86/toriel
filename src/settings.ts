@@ -129,6 +129,8 @@ export interface TorielSettings {
   sandbox?: "off" | "bwrap";
   /** Extra places a sandboxed command may write, absolute or ~/ paths, mainly package caches (default ~/.npm and ~/.cache; [] = none). */
   sandboxWritable?: string[];
+  /** Give sessions pi's `codemode` tool (MCP tools called from JavaScript) besides `tool_search` (default false: ticket 298; read when a session starts). */
+  codemode?: boolean;
   /** Bundled third-party pi packages (ticket 230, src/bundled-packages.ts) to leave out of every session; a package the user installed in pi's settings.json always wins over toriel's copy. Default: none are off. */
   bundledPackagesOff?: string[];
   /** Deleted sessions (and rewind/clear backups) stay in the trash this many days (default 90; 0 = keep forever; read daily by the daemon). */
@@ -185,7 +187,7 @@ export function settingsMtime(file: string = settingsFile()): number | null {
 }
 
 const NUMBER_KEYS = ["summaryIntervalMinutes", "summaryMinNewMessages", "scheduleUsagePause", "scheduleDailyLimit", "permissionGrantLimit", "trashRetentionDays", "subagentMaxConcurrent", "subagentMaxDepth", "subagentMaxSpawns", "subagentBudgetTokens", "subagentKeepMinutes", "subagentIdleMinutes", "subagentMaxMinutes"] as const;
-const BOOLEAN_KEYS = ["warnNoPermissionSystem", "preventSleep", "showExternalSessions", "autoName", "fileFreshness", "permissionNotifications", "permissionNotificationsCritical"] as const;
+const BOOLEAN_KEYS = ["warnNoPermissionSystem", "preventSleep", "showExternalSessions", "autoName", "fileFreshness", "permissionNotifications", "permissionNotificationsCritical", "codemode"] as const;
 /** Number settings where 0 is a meaningful "off". */
 const ZERO_OK: readonly string[] = ["summaryIntervalMinutes", "scheduleUsagePause", "trashRetentionDays", "subagentKeepMinutes", "subagentIdleMinutes", "subagentMaxMinutes"];
 /** The shortest and longest a prompt may wait before it is denied for nobody answering it (ticket 88). */
