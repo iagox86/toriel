@@ -61,14 +61,14 @@ describe("names", () => {
 
 describe("settings, token and guards", () => {
   it("validates the chatto mapping", () => {
-    assert.equal(validChatto({ url: "https://c", tokenFile: "~/t", allowedUser: "u" }).ok, true);
+    assert.equal(validChatto({ url: "https://c", group: "G", tokenFile: "~/t", allowedUser: "u" }).ok, true);
     assert.match((validChatto({ url: "https://c", allowedUser: "u" }) as { problem: string }).problem, /tokenFile and tokenEnv/);
     assert.match((validChatto({ url: "https://c", tokenFile: "t", tokenEnv: "E", allowedUser: "u" }) as { problem: string }).problem, /exactly one/);
     assert.match((validChatto({ url: "nope", tokenFile: "t", allowedUser: "u" }) as { problem: string }).problem, /URL/);
     assert.match((validChatto({ url: "https://c", tokenFile: "t" }) as { problem: string }).problem, /allowedUsers/);
     assert.match((validChatto({ url: "https://c", tokenFile: "t", allowedUser: "u", token: "secret" }) as { problem: string }).problem, /unknown chatto setting/);
-    const ok = validChatto({ url: "https://c", tokenFile: "t", allowedUser: "u" });
-    assert.ok(ok.ok && ok.chatto.group === "Toriel" && ok.chatto.inboxChannel === "inbox");
+    const ok = validChatto({ url: "https://c", group: "G", tokenFile: "t", allowedUser: "u" });
+    assert.ok(ok.ok && ok.chatto.group === "G" && ok.chatto.inboxChannel === "inbox");
   });
   it("reads the token from an owner-only file or the environment, and says what is wrong otherwise", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "token-"));
@@ -213,9 +213,9 @@ describe("the bridge: who joins the channels it makes", () => {
     assert.ok(t.logs.some((l) => l.includes("could not add user ron1")));
   });
   it("defaults to the allowed user, and validates the list", () => {
-    const ok = validChatto({ url: "https://c", tokenFile: "t", allowedUser: "u1" });
+    const ok = validChatto({ url: "https://c", group: "G", tokenFile: "t", allowedUser: "u1" });
     assert.ok(ok.ok && ok.chatto.addUsers.join() === "u1");
-    const none = validChatto({ url: "https://c", tokenFile: "t", allowedUser: "u1", addUsers: [] });
+    const none = validChatto({ url: "https://c", group: "G", tokenFile: "t", allowedUser: "u1", addUsers: [] });
     assert.ok(none.ok && none.chatto.addUsers.length === 0);
     assert.match((validChatto({ url: "https://c", tokenFile: "t", allowedUser: "u1", addUsers: "u2" }) as { problem: string }).problem, /list of user ids/);
   });
@@ -231,7 +231,7 @@ describe("the bridge: more than one allowed user, renames, numbered options", ()
     assert.deepEqual(t.daemon.of("prompt").map((p) => p.message), ["from the friend"]);
   });
   it("accepts allowedUsers as a list and allowedUser as one, together", () => {
-    const both = validChatto({ url: "https://c", tokenFile: "t", allowedUsers: ["a", "b"], allowedUser: "c" });
+    const both = validChatto({ url: "https://c", group: "G", tokenFile: "t", allowedUsers: ["a", "b"], allowedUser: "c" });
     assert.ok(both.ok && both.chatto.allowedUsers.join() === "a,b,c" && both.chatto.addUsers.join() === "a,b,c");
     assert.match((validChatto({ url: "https://c", tokenFile: "t", allowedUsers: "a" }) as { problem: string }).problem, /list of user ids/);
   });

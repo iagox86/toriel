@@ -16,6 +16,16 @@ const tmp = (content?: string) => {
 };
 
 describe("loadSettings", () => {
+  it("has no default chatto group: without one the chatto setting is rejected with a problem doctor shows (ticket 292)", () => {
+    const chatto = (extra: string) => `{"chatto":{"url":"https://chat.example.com","tokenEnv":"X","allowedUser":"u1"${extra}}}`;
+    const without = loadSettings(tmp(chatto("")));
+    assert.equal(without.settings.chatto, undefined);
+    assert.match(without.problems[0] as string, /chatto\.group is required.*id survives/);
+    const withGroup = loadSettings(tmp(chatto(',"group":"G1"')));
+    assert.deepEqual(withGroup.problems, []);
+    assert.equal(withGroup.settings.chatto?.group, "G1");
+  });
+
   it("treats a missing file as no settings and no problems", () => {
     assert.deepEqual(loadSettings(tmp()), { settings: {}, problems: [] });
   });
