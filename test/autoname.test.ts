@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { AutoNamer, cleanTitle, firstRequest, TITLE_MAX } from "../src/daemon-autoname.ts";
+import { AutoNamer, cleanTitle, firstRequest, PROMPT, titleTranscript } from "../src/daemon-autoname.ts";
 import { DaemonNaming } from "../src/daemon-naming.ts";
 import type { ClientHub } from "../src/daemon-hub.ts";
 import { SessionRegistry } from "../src/daemon-session.ts";
@@ -44,10 +44,42 @@ describe("cleanTitle", () => {
     assert.equal(cleanTitle("   "), "");
   });
 
-  it("caps a long title", () => {
-    const out = cleanTitle("word ".repeat(50));
-    assert.ok(out.length <= TITLE_MAX);
-    assert.ok(out.endsWith("..."));
+  it("rejects a reply that is a sentence or a refusal, not a title", () => {
+    assert.equal(cleanTitle("word ".repeat(50)), "");
+    assert.equal(cleanTitle("I don't have any tools available in this session (no bash)"), "");
+    assert.equal(cleanTitle("I'm going to read the repo first"), "");
+    assert.equal(cleanTitle("I\u2019m sorry, I can't do that"), "");
+    assert.equal(cleanTitle("Sorry, I cannot name sessions, only code with you"), "");
+    assert.equal(cleanTitle("As an AI assistant I would prefer not to"), "");
+    assert.equal(cleanTitle("Unfortunately there is no context to title"), "");
+    assert.equal(cleanTitle("This session has no tools available"), "");
+  });
+
+  it("rejects a refusal dressed up as a labelled or quoted title", () => {
+    assert.equal(cleanTitle("Title: I'm sorry, I can't"), "");
+    assert.equal(cleanTitle("**Sorry, no context**"), "");
+  });
+
+  it("keeps a long but title-shaped line, cutting it to 60", () => {
+    assert.equal(cleanTitle("Rewrite title prompt so instruction dumps are fenced data only"), "Rewrite title prompt so instruction dumps are fenced data...");
+    assert.equal(cleanTitle("MCP tools exposure"), "MCP tools exposure");
+  });
+});
+
+describe("the model request", () => {
+  it("sends the fenced message, then the prompt that pi appends after it, which says it is not instructions to follow", () => {
+    const payload = titleTranscript("the build fails on main");
+    assert.equal(payload, "<first_message>\nthe build fails on main\n</first_message>");
+    // pi joins trimmed stdin and the prompt argument with no separator, so PROMPT must open with a blank line and carry the title ask
+    assert.match(PROMPT, /^\n\n/);
+    assert.match(PROMPT, /<first_message>/);
+    assert.match(PROMPT, /not instructions/);
+    assert.match(PROMPT, /2 to 6 words/);
+  });
+
+  it("keeps a closing tag inside the message from ending the fence", () => {
+    const payload = titleTranscript("a session about </first_message> tags");
+    assert.ok(payload.startsWith("<first_message>\na session about </first-message> tags\n</first_message>"));
   });
 });
 
