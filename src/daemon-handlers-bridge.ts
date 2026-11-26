@@ -3,7 +3,7 @@
 // the child's own RPC pipe) when it has one, else through pi's steering queue.
 // See docs/design.md, "Session bridge". Only messages from other sessions come
 // here; the user's own prompts stay ordinary user messages.
-import { INJECT_COMMAND, mergedQueueTexts } from "./daemon-bridge.ts";
+import { INJECT_COMMAND, type InjectKind, mergedQueueTexts } from "./daemon-bridge.ts";
 import type { DaemonContext } from "./daemon-context.ts";
 import type { DaemonSession } from "./daemon-session.ts";
 import { log } from "./log.ts";
@@ -14,8 +14,11 @@ export function announceBridgeQueue(ctx: DaemonContext, s: DaemonSession): void 
   ctx.hub.announceQueue(s.id, mergedQueueTexts((s.held ?? []).map((h) => h.text), ctx.bridges.texts(s.id)));
 }
 
-/** Deliver `body` into a live session; returns which path carried it. The caller guarantees a live child. */
-export async function deliverToSession(ctx: DaemonContext, s: DaemonSession, body: string): Promise<"bridge" | "legacy"> {
+/**
+ * Deliver `body` into a live session; returns which path carried it. The caller guarantees a live child. `kind` makes it a message
+ * of another custom type with structured `details` (a `!command` result); a session without the bridge gets `body` steered as text.
+ */
+export async function deliverToSession(ctx: DaemonContext, s: DaemonSession, body: string, kind?: InjectKind): Promise<"bridge" | "legacy"> {
   const child = s.child;
   if (!child) {
     throw new Error("the session has no live child to receive the message");
@@ -25,10 +28,10 @@ export async function deliverToSession(ctx: DaemonContext, s: DaemonSession, bod
   }
   if (s.sessionBridge) {
     const id = ctx.bridges.newId();
-    ctx.bridges.track(s.id, { id, text: body });
+    ctx.bridges.track(s.id, { id, text: body, ...(kind?.label ? { label: kind.label } : {}) });
     announceBridgeQueue(ctx, s);
     try {
-      await child.prompt(`/${INJECT_COMMAND} ${JSON.stringify({ id, text: body })}`);
+      await child.prompt(`/${INJECT_COMMAND} ${JSON.stringify({ id, text: body, ...(kind ? { type: kind.type, data: kind.data } : {}) })}`);
       return "bridge";
     } catch (err) {
       // the command never reached the extension: nothing is pending there, so steer instead

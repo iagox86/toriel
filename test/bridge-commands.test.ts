@@ -111,6 +111,25 @@ describe("commands never reach the agent", () => {
     assert.ok(!posts.some((p) => p.body.includes("local-command")));
   });
 
+  it("shows a console !command result (a custom message) as the command and output, and nothing extra for a !! chat ran", async () => {
+    const t = await setup();
+    const result = (command: string, output: string) => ({ role: "custom", customType: "toriel-local-command", content: "wrapper", details: { command, output, exitCode: 0, cancelled: false } });
+    t.daemon.answers.set("bash", { output: "hello\n", exitCode: 0, cancelled: false, truncated: false });
+    await t.write("!!echo hello");
+    t.daemon.push({ type: "event", session: 1, event: { type: "message_end", message: result("echo hello", "hello\n") } });
+    await new Promise((r) => setImmediate(r));
+    await t.bridge.idle();
+    const before = t.chat.postsIn(t.room.id).length;
+    assert.ok(!t.chat.postsIn(t.room.id).some((p) => p.body.includes("local-command") || p.body.includes("ran in toriel")));
+    t.daemon.push({ type: "event", session: 1, event: { type: "message_end", message: result("ls /tmp", "a\nb\n") } });
+    t.daemon.push({ type: "event", session: 1, event: { type: "entry_appended", entry: { type: "custom_message", ...result("pwd", "/work\n") } } });
+    await t.bridge.idle();
+    const bodies = t.chat.postsIn(t.room.id).map((p) => p.body);
+    assert.equal(bodies.length, before + 2);
+    assert.equal(bodies[before], "> **ran in toriel:** `ls /tmp` (exit 0)\n> ```\n> a\n> b\n> ```");
+    assert.match(bodies[before + 1] ?? "", /ran in toriel:\*\* `pwd`/);
+  });
+
   it("a !! command does not hold up the bridge, and !abort stops it", async () => {
     const t = await setup();
     let finish: (v: unknown) => void = () => undefined;

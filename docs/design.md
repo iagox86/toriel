@@ -1109,6 +1109,8 @@ log-only in the first version.
 
 ### Controller rendering
 
+`toriel-local-command` is the same path with a different type: a `!command` result (ticket 291, built 2026-11-25). The daemon used to steer the result as a user prompt in a text wrapper, and every consumer (naming, history, rewind, transcript, the chat bridge) then had to parse the wrapper back out to tell it from something typed. Now `/toriel-inject` takes an optional `type` (allowlisted in the extension) and `data` (merged into `details` beside the id), `deliverToSession` takes the same as `InjectKind`, and consumers branch on `role: "custom"`. Behaviour change: such a result is not a rewind point. Still text-labelled user messages, to move the same way: scheduled prompts (`[scheduled #N]`) and the no-bridge fallback of `[from NAME]`.
+
 `toriel-inject` custom messages render as "from NAME" rows: `message_start`
 (idle delivery), `entry_appended` (boundary delivery) and `itemsFromMessages`
 (replay) each have a branch; rewind excludes them like received labels.

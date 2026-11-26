@@ -315,7 +315,7 @@ export function abnormalEnd(lastStop: string | undefined, lastError: string | un
 }
 
 /** The custom message types that mark an injection or a background-job exit notice - keep in sync with isInjectType in src/transcript.ts (a drift test pins this). */
-export const INJECT_TYPES = new Set(["toriel-inject", "ronpi-inject", "toriel-job"]);
+export const INJECT_TYPES = new Set(["toriel-inject", "ronpi-inject", "toriel-job", "toriel-local-command"]);
 
 /** The newest `count` non-empty assistant texts in a message list, newest first, plus whether a custom injection or job notice sits between the newest two. */
 function assistantTexts(messages: ReadonlyArray<{ role?: string; content?: unknown; customType?: string }>, count: number): { texts: string[]; injectBetween: boolean } {

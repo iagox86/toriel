@@ -159,6 +159,19 @@ describe("daemon: lifecycle (2/3)", () => {
     await c.waitFor((m) => cleared(m) && c.messages.indexOf(m) >= mark);
   });
 
+  it("with the session bridge, a !command result is a toriel-local-command custom message (not a user prompt) carrying the result", async () => {
+    harness = await startDaemon({ FAKE_PI_BRIDGE: "1" });
+    const c = await harness.connect();
+    const { sessionId } = await c.request({ type: "spawn", cwd: harness.dir });
+    await c.waitFor((m) => m.type === "history");
+    const done = await c.request({ type: "bash", session: sessionId, command: "echo hi; exit 3" });
+    assert.equal(done.exitCode, 3);
+    const told = await c.waitFor((m) => m.type === "event" && m.event?.type === "message_start" && m.event.message?.customType === "toriel-local-command");
+    assert.equal(told.event.message.role, "custom");
+    assert.deepEqual({ ...told.event.message.details, id: undefined }, { command: "echo hi; exit 3", output: "hi\n", exitCode: 3, cancelled: false, truncated: false, id: undefined });
+    assert.match(told.event.message.content, /<local-command>echo hi; exit 3<\/local-command>/, "the model still reads the wrapper text");
+  });
+
   it("runs a !command, tells the agent the result at once, and can stop a long one", async () => {
     harness = await startDaemon();
     const c = await harness.connect();
