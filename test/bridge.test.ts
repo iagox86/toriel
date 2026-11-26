@@ -535,7 +535,7 @@ describe("the bridge: dialogs", () => {
     const post = t.chat.postsIn(room.id).at(-1);
     assert.ok(post);
     assert.match(post.body, /1\. Yes[\s\S]*3\. No/);
-    assert.deepEqual([...post.reactions], ["one", "two", "three"]);
+    assert.deepEqual([...post.reactions], ["one", "two", "three", "x"]);
     t.chat.react$(room.id, post.id, "three");
     await t.bridge.idle();
     assert.deepEqual(t.daemon.of("ui_response"), [{ type: "ui_response", session: 1, source: "chatto", response: { type: "extension_ui_response", id: "d1", value: "No" } }]);

@@ -17,7 +17,8 @@ import type { DaemonPort } from "./daemon-client.ts";
 import { oneLine } from "../util.ts";
 import { parseChatCommand } from "./chat-commands.ts";
 import { runChatCommand } from "./command-runner.ts";
-import { HISTORY_TURNS, renderHistory } from "./history.ts";
+import { HISTORY_TURNS, quoteUser, renderHistory } from "./history.ts";
+import { parseLocalCommand } from "../local-command.ts";
 
 interface ChannelRecord {
   roomId: string;
@@ -116,6 +117,8 @@ export function splitBody(text: string, max = MAX_BODY): string[] {
 
 /** An indicator that started this recently is not stopped by a session list that says the session is idle (the list can lag the events). */
 const TYPING_GRACE_MS = 15_000;
+/** The red cross: dismisses a numbered question without answering it. */
+const CANCEL_EMOJI = "x";
 const NUMBER_EMOJI = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
 const TYPING_EVERY_MS = 3000;
 const DISCOVER_EVERY_MS = 30_000;
@@ -151,6 +154,7 @@ export class Bridge {
   private metas: SessionMeta[] = [];
   private chain: Promise<void> = Promise.resolve();
   private readonly dialogs = new Map<string, OpenDialog>(); // by dialog id
+  private readonly shellCommands: string[] = []; // `!!` commands this bridge ran, so the injected result is not posted again
   private readonly shells = new Set<number>(); // sessions with a `!!` shell command running
   private readonly pickers = new Map<string, { messageId: string; rows: string[]; emojis: string[]; onPick: (row: string) => Promise<void>; body: string }>(); // by room: a numbered question of the bridge's own
   private readonly typingTimers = new Map<string, NodeJS.Timeout>(); // by room id
@@ -814,8 +818,14 @@ export class Bridge {
         const echo = this.echoes.indexOf(text);
         if (echo >= 0) {
           this.echoes.splice(echo, 1);
-        } else if (!text.startsWith("[")) {
-          await this.postLong(rec.roomId, `> **typed in toriel:** ${text.length > 500 ? `${text.slice(0, 500)}…` : text}`);
+        } else if (!text.startsWith("[") || parseLocalCommand(text)) {
+          const local = parseLocalCommand(text);
+          const mine = local ? this.shellCommands.indexOf(local.command) : -1;
+          if (mine >= 0) {
+            this.shellCommands.splice(mine, 1); // a `!!` this bridge ran: it posted the output itself
+          } else {
+            await this.postLong(rec.roomId, quoteUser(text, "typed in toriel"));
+          }
         }
       }
     } else if (type === "compaction_start") {
@@ -861,8 +871,8 @@ export class Bridge {
       const options = req.options ?? [];
       // an extension that numbered its own rows (ask_user_question) would show every number twice (chat renders a list's numbers itself)
       const lines = optionsNumberedAlready(options) ? options : options.map((o, i) => `${i + 1}. ${o}`);
-      body = `**${meta.sessionName ?? rec.name} asks:**\n\`\`\`\n${title}\n\`\`\`\n${lines.join("\n")}${note}\n\nReact with the number, or write it.`;
-      emojis = NUMBER_EMOJI.slice(0, Math.min(options.length, NUMBER_EMOJI.length));
+      body = `**${meta.sessionName ?? rec.name} asks:**\n\`\`\`\n${title}\n\`\`\`\n${lines.join("\n")}${note}\n\nReact with the number, or write it (❌ or \`cancel\` dismisses).`;
+      emojis = [...NUMBER_EMOJI.slice(0, Math.min(options.length, NUMBER_EMOJI.length)), CANCEL_EMOJI];
     } else {
       body = `**${meta.sessionName ?? rec.name} asks:**\n${title}\n\nWrite your answer in the channel (\`cancel\` to dismiss).`;
       emojis = [];
@@ -938,6 +948,10 @@ export class Bridge {
       return false;
     }
     if (method === "select") {
+      if (choice.emoji === CANCEL_EMOJI || /^cancel$/i.test((choice.text ?? "").trim())) {
+        await this.answer(d, { cancelled: true }, "cancelled");
+        return true;
+      }
       const n = choice.emoji ? NUMBER_EMOJI.indexOf(choice.emoji) + 1 : /^\d+$/.test((choice.text ?? "").trim()) ? Number(choice.text) : 0;
       const option = n > 0 ? options?.[n - 1] : undefined;
       if (option === undefined) {
@@ -1247,6 +1261,7 @@ export class Bridge {
       metas: this.metas,
       say,
       shells: this.shells,
+      shellCommands: this.shellCommands,
       pick: (title, rows, onPick) => this.askPick(m.roomId, title, rows, onPick),
       prompt: async (t) => {
         if (where.meta) {
@@ -1259,10 +1274,11 @@ export class Bridge {
 
   /** A numbered question of the bridge's own (not a session's dialog): posted with number reactions, answered by one or by typing the number. */
   private async askPick(roomId: string, title: string, rows: string[], onPick: (row: string) => Promise<void>): Promise<void> {
-    const emojis = NUMBER_EMOJI.slice(0, Math.min(rows.length, NUMBER_EMOJI.length));
-    const body = `**${title}**\n${rows.slice(0, emojis.length).map((r, i) => `${i + 1}. ${r}`).join("\n")}\n\nReact with the number, or write it.`;
+    const shown = NUMBER_EMOJI.slice(0, Math.min(rows.length, NUMBER_EMOJI.length));
+    const emojis = [...shown, CANCEL_EMOJI];
+    const body = `**${title}**\n${rows.slice(0, shown.length).map((r, i) => `${i + 1}. ${r}`).join("\n")}\n\nReact with the number, or write it (❌ or \`cancel\` dismisses).`;
     const messageId = await this.adapter.post(roomId, body);
-    this.pickers.set(roomId, { messageId, rows: rows.slice(0, emojis.length), emojis, onPick, body });
+    this.pickers.set(roomId, { messageId, rows: rows.slice(0, shown.length), emojis, onPick, body });
     for (const e of emojis) {
       if (this.pickers.get(roomId)?.messageId !== messageId) {
         break;
@@ -1276,6 +1292,14 @@ export class Bridge {
     const pk = this.pickers.get(roomId);
     if (!pk || (choice.messageId !== undefined && choice.messageId !== pk.messageId)) {
       return false;
+    }
+    if (choice.emoji === CANCEL_EMOJI || /^cancel$/i.test((choice.text ?? "").trim())) {
+      this.pickers.delete(roomId);
+      await this.adapter.edit(roomId, pk.messageId, `${pk.body}\n\n**→ cancelled**`).catch(() => undefined);
+      for (const e of pk.emojis) {
+        await this.adapter.unreact(roomId, pk.messageId, e).catch(() => undefined);
+      }
+      return true;
     }
     const n = choice.emoji ? NUMBER_EMOJI.indexOf(choice.emoji) + 1 : /^\d+$/.test((choice.text ?? "").trim()) ? Number(choice.text) : 0;
     const row = n > 0 ? pk.rows[n - 1] : undefined;
