@@ -9,15 +9,21 @@
 // A server marked `whenUp: true` (an app's bridge that exists only while the app runs) is registered only when something listens at
 // its URL at that moment, so a server that is down on purpose costs a few milliseconds and no warning. `/mcp-up` looks again, for
 // the app that was started after the session was.
+//
+// A server whose tools are not declared is registered with the summary an earlier session saw (ticket 303; the file in
+// TORIEL_MCP_SUMMARIES), so the system prompt's server list does not change when the server connects. The end of each run records
+// the connected servers' summaries for the next session.
 import * as fs from "node:fs";
-import { MCP_DIRECT_ENV, MCP_FILE_ENV, type McpServerConfig, parseDirectServers, parseMcpYaml, piConfig, probeUrl, redactUrl, toolServerName } from "./lib/mcp-config.ts";
+import * as path from "node:path";
+import { learnSummaries, MCP_DIRECT_ENV, MCP_FILE_ENV, MCP_SUMMARIES_ENV, type McpServerConfig, parseDirectServers, parseMcpYaml, piConfig, probeUrl, redactUrl, type ToolNamespaceInfo, toolServerName } from "./lib/mcp-config.ts";
 
 // Only the slice of pi's extension API this file uses (see toriel-usage.ts).
 interface Ctx {
   ui?: { notify?(message: string, type?: "info" | "warning" | "error"): void };
 }
 interface Pi {
-  on(event: "session_start", handler: (event: unknown, ctx: Ctx) => unknown): unknown;
+  on(event: "session_start" | "agent_end", handler: (event: unknown, ctx: Ctx) => unknown): unknown;
+  getAllTools?(): ToolNamespaceInfo[];
   registerMcpServer?(name: string, config: Record<string, unknown>): void;
   getMcpServers?(): Array<{ name: string }>;
   registerCommand?(name: string, options: { description: string; handler: (args: string, ctx: Ctx) => Promise<void> | void }): void;
@@ -52,6 +58,7 @@ export async function reconcile(
   probe: (url: string) => Promise<boolean> = probeUrl,
   only?: string,
   direct: ReadonlySet<string> = parseDirectServers(process.env[MCP_DIRECT_ENV]),
+  summaries: Readonly<Record<string, string>> = {},
 ): Promise<Record<string, Outcome>> {
   const have = new Set((pi.getMcpServers?.() ?? []).map((s) => s.name));
   const names = Object.keys(servers).filter((n) => only === undefined || n === only);
@@ -65,7 +72,7 @@ export async function reconcile(
         return [name, "down"];
       }
       try {
-        pi.registerMcpServer?.(name, piConfig(entry, { direct: direct.has(toolServerName(name)) }));
+        pi.registerMcpServer?.(name, piConfig(entry, { direct: direct.has(toolServerName(name)), summary: summaries[name] }));
         return [name, "registered"];
       } catch {
         return [name, "failed"];
@@ -73,6 +80,42 @@ export async function reconcile(
     }),
   );
   return Object.fromEntries(outcomes);
+}
+
+/** The remembered summaries (ticket 303). A missing, unreadable or malformed file is none, so the worst case is the old behavior. */
+export function loadSummaries(file: string | undefined): Record<string, string> {
+  if (!file) {
+    return {};
+  }
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return {};
+    }
+    return Object.fromEntries(Object.entries(parsed).filter((e): e is [string, string] => typeof e[1] === "string"));
+  } catch {
+    return {};
+  }
+}
+
+/** Write the summaries atomically: several sessions may end a run at once, and a rename never leaves a half-written file. */
+export function saveSummaries(file: string, summaries: Record<string, string>): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify(summaries, null, 2)}\n`);
+  fs.renameSync(tmp, file);
+}
+
+/** Record the summaries of the servers connected now, when they differ from the file's. Never throws: a lost summary only means the next session's server list changes once. */
+export function recordSummaries(file: string, mcpFile: string, tools: readonly ToolNamespaceInfo[]): void {
+  try {
+    const next = learnSummaries(loadSummaries(file), tools, loadServers(mcpFile).servers);
+    if (next) {
+      saveSummaries(file, next);
+    }
+  } catch {
+    // see above
+  }
 }
 
 /** The words `/mcp-up` answers with, for the servers marked whenUp. */
@@ -97,17 +140,21 @@ export default function (pi: Pi): void {
   if (!file) {
     return;
   }
+  const summariesFile = process.env[MCP_SUMMARIES_ENV];
   pi.on("session_start", async (_event, ctx) => {
     try {
       const { servers, problems } = loadServers(file);
       if (problems.length > 0) {
         ctx.ui?.notify?.(`mcp.yaml (${file}):\n${problems.map((p) => `  ${p}`).join("\n")}`, "warning");
       }
-      await reconcile(pi, servers);
+      await reconcile(pi, servers, probeUrl, undefined, undefined, loadSummaries(summariesFile));
     } catch {
       // startup must never fail because of this
     }
   });
+  if (summariesFile) {
+    pi.on("agent_end", () => recordSummaries(summariesFile, file, pi.getAllTools?.() ?? []));
+  }
   pi.registerCommand?.(UP_COMMAND, {
     description: "toriel: connect the mcp.yaml servers marked whenUp that are running now (name one to check only it)",
     handler: async (args, ctx) => {
@@ -118,7 +165,7 @@ export default function (pi: Pi): void {
         ctx.ui?.notify?.(`${only} is not a whenUp server in mcp.yaml (those are: ${Object.keys(waiting).join(", ") || "none"})`, "warning");
         return;
       }
-      const outcomes = await reconcile(pi, waiting, probeUrl, only);
+      const outcomes = await reconcile(pi, waiting, probeUrl, only, undefined, loadSummaries(summariesFile));
       ctx.ui?.notify?.(describeOutcomes(outcomes, waiting), Object.values(outcomes).some((o) => o !== "registered" && o !== "already") ? "warning" : "info");
     },
   });

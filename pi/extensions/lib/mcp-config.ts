@@ -197,13 +197,61 @@ export function parseDirectServers(value: string | undefined): Set<string> {
 /**
  * What pi's registerMcpServer takes: the entry without toriel's own `whenUp` and `readOnly`, with `deferred` exposure when the
  * entry sets none (ticket 298), or `direct` when the session's profile needs the server's tools declared.
+ *
+ * `summary` (ticket 303) is the server's one-line summary from an earlier session. A server whose tools are not declared is listed
+ * in the system prompt's `mcp_servers` section with its entry's `description`, or with its instructions once it connects; the second
+ * changes the top of the prompt mid-session, which makes the next call re-send the whole conversation uncached. Passing the remembered
+ * summary as the description keeps the section the same from the first prompt on. The entry's own `description` wins.
  */
-export function piConfig(entry: McpServerConfig, opts: { direct?: boolean } = {}): Record<string, unknown> {
+export function piConfig(entry: McpServerConfig, opts: { direct?: boolean; summary?: string } = {}): Record<string, unknown> {
   const { whenUp: _whenUp, readOnly: _readOnly, ...rest } = entry;
   if (opts.direct) {
     return { ...rest, exposure: "direct" };
   }
-  return { ...rest, exposure: rest.exposure ?? DEFAULT_EXPOSURE };
+  const config: Record<string, unknown> = { ...rest, exposure: rest.exposure ?? DEFAULT_EXPOSURE };
+  if (!rest.description?.trim() && opts.summary) {
+    config.description = opts.summary;
+  }
+  return config;
+}
+
+/** The environment variable naming the file of remembered server summaries (ticket 303); the daemon sets it, the toriel-mcp extension reads and updates it. */
+export const MCP_SUMMARIES_ENV = "TORIEL_MCP_SUMMARIES";
+
+/** Longest summary kept: pi shows at most 250 characters of one in the section. */
+const SUMMARY_MAX = 250;
+
+/** The line pi would show for a server's instructions: the first line, trimmed (pi's `serverSummary`), capped. Empty for none. */
+export function summaryLine(instructions: string | undefined): string {
+  return ((instructions ?? "").split("\n", 1)[0] ?? "").trim().slice(0, SUMMARY_MAX);
+}
+
+/** What the extension sees of a tool: its name and, for an MCP tool of a connected server, the server's namespace. */
+export interface ToolNamespaceInfo {
+  name: string;
+  namespace?: { aliases?: readonly string[]; instructions?: string };
+}
+
+/**
+ * The summaries to remember after a run: `known` updated with the instructions of the connected servers among `tools`, for the
+ * servers of mcp.yaml that set no `description` of their own. Returns undefined when nothing changed, so the file is written only
+ * when it has to be.
+ */
+export function learnSummaries(known: Readonly<Record<string, string>>, tools: readonly ToolNamespaceInfo[], servers: Readonly<Record<string, McpServerConfig>>): Record<string, string> | undefined {
+  const next = { ...known };
+  let changed = false;
+  for (const tool of tools) {
+    const server = tool.namespace?.aliases?.[0];
+    if (!server || !tool.name.startsWith("mcp__") || !(server in servers) || servers[server]?.description?.trim()) {
+      continue;
+    }
+    const line = summaryLine(tool.namespace?.instructions);
+    if (line && next[server] !== line) {
+      next[server] = line;
+      changed = true;
+    }
+  }
+  return changed ? next : undefined;
 }
 
 /** Whether something accepts a TCP connection at the URL's host and port within `timeoutMs`. A refused or silent port is down; the check never throws. */
