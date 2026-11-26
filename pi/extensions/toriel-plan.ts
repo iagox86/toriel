@@ -92,7 +92,7 @@ export default function (pi: Pi): void {
     name: ENTER_TOOL,
     label: "Plan mode",
     description: "Switch to plan mode: you can only look (read, search, read-only commands), not change anything, until the user approves a plan you propose with exit_plan_mode. Use it before a change that is large, risky or unclear, so the user can agree on the approach first.",
-    promptSnippet: `${ENTER_TOOL}: look and plan first, change nothing until the user approves`,
+    promptSnippet: "look and plan first, change nothing until the user approves",
     parameters: { type: "object", properties: {}, additionalProperties: false },
     async execute(_id, _params, _signal, _onUpdate, ctx) {
       if (on(ctx)) {
@@ -113,7 +113,7 @@ export default function (pi: Pi): void {
     name: EXIT_TOOL,
     label: "Plan",
     description: `Present your plan to the user and ask to leave plan mode. Pass the complete plan: the steps in order, the files and commands involved, and how you will check the result. The user approves it (plan mode ends and you carry it out), asks for changes (revise and call this again) or rejects it. Use it only in plan mode.`,
-    promptSnippet: `${EXIT_TOOL}: show the user the plan and ask to start`,
+    promptSnippet: "show the user the plan and ask to start",
     parameters: {
       type: "object",
       properties: { plan: { type: "string", description: "The whole plan, in markdown." } },

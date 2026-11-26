@@ -241,7 +241,7 @@ export default function (pi: Pi) {
     defaultActive: false, // opt-in: a profile that wants it names it in tools
     description:
       "Ask whether ONE specific action would run without a permission prompt: allow, deny, ask, or granted (a user's grant covers it, with its expiry). Use it before batch or unattended work to pick a route that will not block, or to end with exactly what needs approval - not before every command: a refused action already tells you which rule stopped it. 'ask' does not say anyone is present or will approve.",
-    promptSnippet: "toriel_permission_check: would this action prompt, be allowed or be denied",
+    promptSnippet: "would this action prompt, be allowed or be denied",
     parameters: {
       type: "object",
       properties: {

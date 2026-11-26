@@ -91,7 +91,7 @@ export default function (pi: Pi): void {
     name: TOOL_NAME,
     label: "Tasks",
     description: DESCRIPTION,
-    promptSnippet: `${TOOL_NAME}: keep a visible task list for multi-step work`,
+    promptSnippet: "keep a visible task list for multi-step work",
     parameters: {
       type: "object",
       properties: {
