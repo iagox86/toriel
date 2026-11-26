@@ -26,7 +26,11 @@ export class FakeChat implements ChatAdapter {
   private listeners: Array<(e: ChatEvent) => void> = [];
   private seq = 0;
 
-  async connect(): Promise<void> {}
+  async connect(): Promise<void> {
+    if (this.failOn.connect) {
+      throw this.failOn.connect;
+    }
+  }
   onEvent(l: (e: ChatEvent) => void): () => void {
     this.listeners.push(l);
     return () => undefined;
@@ -48,7 +52,24 @@ export class FakeChat implements ChatAdapter {
   async findGroup(name: string): Promise<string | undefined> {
     return this.groups.get(name);
   }
+  /** Group-scoped permissions the server reports for the bot, by group id. */
+  groupPermissions = new Map<string, Record<string, boolean>>();
+  async listGroups(): Promise<Array<{ id: string; name: string; permissions?: Record<string, boolean> }>> {
+    return [...this.groups].map(([name, id]) => ({ id, name, ...(this.groupPermissions.has(id) ? { permissions: this.groupPermissions.get(id) } : {}) }));
+  }
+  /** Rooms in other groups the bot can see (the directory lists them); a name in `hiddenNames` is taken by a room it cannot see. */
+  otherRooms: Array<ChatRoom & { groupId: string }> = [];
+  hiddenNames = new Set<string>();
+  async findRoomsNamed(name: string): Promise<Array<ChatRoom & { groupId?: string }>> {
+    const mine = [...this.rooms.values()].map(({ id, name: n, archived, description }) => ({ id, name: n, archived, description, groupId: "g1" }));
+    return [...mine, ...this.otherRooms].filter((r) => r.name.toLowerCase() === name.toLowerCase());
+  }
+  /** Make one setup call fail with this error (a Connect-style `[code] text` message). */
+  failOn: Partial<Record<"connect" | "listRooms" | "joinRoom" | "addMember", Error>> = {};
   async listRooms(): Promise<ChatRoom[]> {
+    if (this.failOn.listRooms) {
+      throw this.failOn.listRooms;
+    }
     if (this.hangList) {
       return new Promise<ChatRoom[]>(() => undefined);
     }
@@ -63,7 +84,7 @@ export class FakeChat implements ChatAdapter {
     if (this.createFails) {
       throw new Error(this.createFails);
     }
-    if ([...this.rooms.values()].some((r) => r.name.toLowerCase() === name.toLowerCase())) {
+    if (this.hiddenNames.has(name.toLowerCase()) || [...this.rooms.values(), ...this.otherRooms].some((r) => r.name.toLowerCase() === name.toLowerCase())) {
       throw new Error("[already_exists] a room with this name already exists on this server");
     }
     const id = `room${++this.seq}`;
@@ -71,6 +92,9 @@ export class FakeChat implements ChatAdapter {
     return { id, name, archived: false };
   }
   async joinRoom(id: string): Promise<void> {
+    if (this.failOn.joinRoom) {
+      throw this.failOn.joinRoom;
+    }
     const r = this.rooms.get(id);
     if (r) {
       r.members = true;
@@ -86,6 +110,9 @@ export class FakeChat implements ChatAdapter {
   }
   added: Array<[string, string]> = [];
   async addMember(roomId: string, userId: string): Promise<void> {
+    if (this.failOn.addMember) {
+      throw this.failOn.addMember;
+    }
     this.added.push([roomId, userId]);
   }
   async renameRoom(id: string, name: string): Promise<void> {

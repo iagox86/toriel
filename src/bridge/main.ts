@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { DATA_DIR, SOCK } from "../config.ts";
 import { loadSettings } from "../settings.ts";
 import { Bridge, SetupError } from "./bridge.ts";
+import { setupFailureText } from "./chat-error.ts";
 import { connectChatto } from "./chatto-adapter.ts";
 import { connectDaemon } from "./daemon-client.ts";
 import { readToken } from "./token.ts";
@@ -22,7 +23,9 @@ async function main(): Promise<void> {
     say(`cannot start: ${token.problem}`);
     process.exit(2); // a setup problem: the daemon does not retry it in a loop
   }
-  const daemon = await connectDaemon(SOCK);
+  const daemon = await connectDaemon(SOCK).catch((err: unknown) => {
+    throw new Error(`could not connect to the daemon at ${SOCK}: ${err instanceof Error ? err.message : String(err)}`);
+  });
   let bridge: Bridge | undefined;
   /** Clear the channels (a few seconds at most), then end. */
   let leaving = false;
@@ -36,7 +39,11 @@ async function main(): Promise<void> {
     void (bridge ? bridge.shutdown() : Promise.resolve()).finally(() => process.exit(0));
   };
   daemon.onClose(() => leave("the daemon went away: clearing the channels and exiting"));
-  const adapter = await connectChatto({ url: settings.chatto.url, token: token.token });
+  const url = settings.chatto.url;
+  const adapter = await connectChatto({ url, token: token.token }).catch((err: unknown) => {
+    // the package failed to load or refused the URL: trying again will not change either
+    throw new SetupError(setupFailureText(`set up the chat client for ${url}`, err, { invalid_argument: "check chatto.url" }));
+  });
   bridge = new Bridge({ adapter, daemon, settings: settings.chatto, stateFile: path.join(DATA_DIR, "toriel", "chat-bridge.json"), log: say, ...(settings.permissionGrantDurations ? { grantDurations: settings.permissionGrantDurations } : {}) });
   await bridge.start();
   process.on("SIGTERM", () => leave("told to stop: clearing the channels and exiting"));

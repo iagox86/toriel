@@ -103,11 +103,12 @@ export const SETTINGS_TEMPLATE: readonly Group[] = [
     entries: [
       {
         key: "chatto",
-        example: "{ url: https://chat.example.com, tokenFile: ~/.config/toriel/chatto.token, allowedUsers: [<your chat user id>] }",
+        example: "{ url: https://chat.example.com, tokenFile: ~/.config/toriel/chatto.token, group: <room group name or id>, allowedUsers: [<your chat user id>] }",
         comment: [
           "Show published sessions (/publish) in a Chatto server, one channel each, and take your answers and messages from there. Read when the daemon starts.",
           "url, allowedUsers (a list of user ids, or allowedUser for one: the only people whose messages are acted on) and exactly one of tokenFile (a 0600 file, ~/ allowed) or tokenEnv (an environment variable)",
-          "are required; the token itself never goes in this file. Optional: group (room group, default Toriel), inboxChannel (default inbox),",
+          "and group (the room group's name or id; an id survives a rename) are required; the token itself never goes in this file. Optional: inboxChannel (default inbox;",
+          "room names are unique on a chat server, so a second toriel on the same server needs its own, e.g. inbox-2),",
           "defaultCwd and defaultModel (provider/id) for a session started from chat, and addUsers (a list of user ids added to every channel",
           "the bridge creates; default: the allowed users, so your own account joins each channel at once). Not started by `toriel --isolated`.",
         ],
