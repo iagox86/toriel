@@ -20,7 +20,7 @@ import { piAgentDir } from "./pi-dir.ts";
 import { startupProblems } from "./preflight.ts";
 import { type AuditOptions, auditFindings, type Finding, type Fix, type Level, PI_RESOURCES_DIR } from "./resources.ts";
 import { legacySettingsFile, loadSettings, resolveChildConfig, settingsFile, yamlSettingsFile } from "./settings.ts";
-import { addMcpServer, importMcpJson, readMcpYaml, redactEntry, renderMcpYaml, setMcpServerKey } from "./mcp-config.ts";
+import { addMcpServer, importMcpJson, readMcpYaml, redactEntry, renderMcpYaml } from "./mcp-config.ts";
 import { convertLegacySettings, renderSettings } from "./settings-file.ts";
 import { mcpYamlFile } from "./config-dir.ts";
 import type { ChatProbe } from "./bridge/probe-sync.ts";
@@ -71,7 +71,6 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: "permission-package", level: "recommended", title: "pi-permission-system is installed and has a usable config" },
   { id: "grants-chain", level: "feature", title: 'permission grants are switched on ("toriel-grants" in authorizerChain)', needsPermissionPackage: true },
   { id: "mcp-git-server", level: "feature", title: "the git MCP server is configured in mcp.yaml (the code-review, git-archaeology and advisory-diff agents need it)" },
-  { id: "mcp-codemode", level: "feature", title: "no MCP server is set to exposure: codemode while sessions have no codemode tool (ticket 298)" },
   { id: "web-package", level: "feature", title: "pi-web-access is installed (the research-web and advisory-diff agents need its web tools)" },
   { id: "bundled-packages", level: "feature", title: "the pi packages toriel carries are installed with it (ask_user_question, web search, the permission gate, memory; ticket 230)" },
   { id: "mcp-gdb-server", level: "feature", title: "the gdb MCP server is configured in mcp.yaml (the debug and crash-analysis agents need it)" },
@@ -332,33 +331,8 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
       });
     }
   }
-  // a codemode server's tools reach the agent only through scripts it writes, and toriel leaves codemode out unless the settings ask (ticket 298)
-  if (!loaded.settings.codemode) {
-    for (const [name, info] of Object.entries(servers)) {
-      if (info.exposure !== "codemode") {
-        continue;
-      }
-      out.push({
-        id: "mcp-codemode",
-        level: "feature",
-        message: `the "${name}" MCP server in ${mcpFile} has exposure: codemode, but sessions have no codemode tool (the codemode setting is off), so its tools are out of reach; deferred lets the agent find them with tool_search and call them directly`,
-        fix: {
-          file: mcpFile,
-          summary: `set "exposure": "deferred" on the "${name}" entry`,
-          edit: (c) => c,
-          custom: {
-            preview: () => `${mcpFile}: the "${name}" entry would get exposure: deferred (the original is kept as a backup).`,
-            apply: (now) => {
-              const backup = backupPath(mcpFile, now);
-              copyFileSync(mcpFile, backup);
-              setMcpServerKey(mcpFile, name, "exposure", "deferred");
-              return backup;
-            },
-          },
-        },
-      });
-    }
-  }
+  // an entry set to exposure: codemode needs no check: pi's tool_search searches codemode tools exactly like deferred ones
+  // (the server's tools carry tool exposure deferred either way), so they reach every session the same
   // the shipped research-web agent names pi-web-access's tools; without the package it has nothing to search with
   const webAgents = shipped.filter((a) => (a.tools ?? []).some((t) => t === "web_search" || t === "fetch_content"));
   const bundle = { agentDir: opts.agentDir ?? piAgentDir(env), off: loaded.settings.bundledPackagesOff, root: opts.bundledRoot };

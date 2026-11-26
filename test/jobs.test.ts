@@ -596,6 +596,24 @@ describe("the toriel-jobs extension", () => {
     assert.deepEqual(messages, [], "the read reported the exit, so no notice follows");
     handlers.get("session_shutdown")?.({}, {});
   });
+
+  it("waits on a since-read that would show nothing new too (ticket 296)", async () => {
+    const { tools, handlers, messages } = load();
+    await tools.get("bash")?.execute("c1", { command: "sleep 1; echo since-wait; sleep 0.4", run_in_background: true }, undefined, undefined, { cwd: tmpdir() });
+    const first = await tools.get("toriel_job")?.execute("c2", { action: "output", id: "j1" });
+    assert.match(first?.content[0]?.text ?? "", /\[j1 still running; continue from byte 0\]/);
+    const started = Date.now();
+    const second = await tools.get("toriel_job")?.execute("c3", { action: "output", id: "j1", since: 0 });
+    assert.ok(Date.now() - started >= 500, "the since-read waited for the news");
+    assert.match(second?.content[0]?.text ?? "", /since-wait\n\[j1 still running;/, "it answered as soon as there was news, without waiting for the exit");
+    const started2 = Date.now();
+    const third = await tools.get("toriel_job")?.execute("c4", { action: "output", id: "j1", since: 11 });
+    assert.ok(Date.now() - started2 >= 100, "the next since-read waited for the exit");
+    assert.match(third?.content[0]?.text ?? "", /\(no output yet\)\n\[j1 exited, code 0;/, "the tail since the last byte is empty, and the exit is reported");
+    await new Promise((r) => setTimeout(r, 300));
+    assert.deepEqual(messages, [], "no notice follows the since-read either");
+    handlers.get("session_shutdown")?.({}, {});
+  });
 });
 
 describe("sleep-only commands (ticket 296)", () => {

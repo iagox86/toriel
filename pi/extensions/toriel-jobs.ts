@@ -596,7 +596,9 @@ export default function (pi: Pi) {
 
   /**
    * Runs `wait` with the job marked as waited on, so its end is reported by this call and not by a notice as well. A call that
-   * was cancelled returns nothing to the agent, so a job that ended meanwhile still gets its notice.
+   * was cancelled returns nothing to the agent, so a job that ended meanwhile still gets its notice. A stopped job's end counts
+   * too (endedAt is set when the process is gone, also on the stop path). The lifetime cap's "timed out" state change is not an
+   * end: the process may linger up to the kill grace, so a wait keeps blocking and reports the real exit once.
    */
   const blockOn = async (job: Job, wait: () => Promise<boolean>, signal?: AbortSignal): Promise<boolean> => {
     const wasRunning = job.state === "running";
@@ -605,7 +607,7 @@ export default function (pi: Pi) {
       return await wait();
     } finally {
       waiting.set(job.id, (waiting.get(job.id) ?? 1) - 1);
-      if (signal?.aborted && wasRunning && job.state !== "running" && job.state !== "stopped") {
+      if (signal?.aborted && wasRunning && job.endedAt !== undefined) {
         notifyEnd(job);
       }
     }
@@ -683,7 +685,7 @@ export default function (pi: Pi) {
     name: "toriel_job",
     label: "Job",
     description:
-      'Manage this session\'s background shell jobs (started with bash and run_in_background). You are told when a job exits, so you never need to check on one. action "wait": block until the job (id required) exits, or timeoutSeconds passes, and return its output: use it when you have nothing else to do until the job is done, instead of reading its output again and again. action "output": the job\'s output (id required; the last part of it, or from byte offset `since` where a previous call said to continue); reading a running job that printed nothing since your last read waits up to a minute for news first. action "list": every job with its state. action "stop": stop a running job (id required).',
+      'Manage this session\'s background shell jobs (started with bash and run_in_background). You are told when a job exits, so you never need to check on one. action "wait": block until the job (id required) exits, or timeoutSeconds passes, and return its output: use it when you have nothing else to do until the job is done, instead of reading its output again and again. action "output": the job\'s output (id required; the last part of it, or from byte offset `since` where a previous call said to continue); reading a running job that has nothing new to show, with or without `since`, waits up to a minute for news first. action "list": every job with its state. action "stop": stop a running job (id required).',
     promptSnippet: "list, wait for, read the output of, or stop background shell jobs",
     parameters: {
       type: "object",
@@ -715,7 +717,9 @@ export default function (pi: Pi) {
       }
       if (params.action === "wait" || params.action === "output") {
         const logSize = (): number => registry.output(job.id, Number.MAX_SAFE_INTEGER)?.next ?? 0;
-        const ended = (): boolean => job.state !== "running";
+        // the process's own end, not a state change: the lifetime cap sets "timed out" before the kill lands, and a wait
+        // that returned then would be followed by a second notice at the real exit
+        const ended = (): boolean => job.endedAt !== undefined;
         let note = "";
         if (params.action === "wait") {
           const limitS = Math.min(Math.max(1, Math.floor(params.timeoutSeconds ?? WAIT_DEFAULT_S)), WAIT_MAX_S);
@@ -723,8 +727,8 @@ export default function (pi: Pi) {
           if (!done) {
             note = signal?.aborted ? " (the wait was cancelled)" : ` (still running after ${limitS}s; you will be told when it exits)`;
           }
-        } else if (job.state === "running" && params.since === undefined && logSize() === readTo.get(job.id)) {
-          // a read that would show the same thing again: wait for the job to print or end first
+        } else if (job.state === "running" && (params.since !== undefined ? params.since >= logSize() : logSize() === readTo.get(job.id))) {
+          // a read that would show nothing new (a plain re-read, or one from an offset at or past the end): wait for the job to print or end first
           const before = logSize();
           await blockOn(job, () => waitUntil(() => ended() || logSize() !== before, QUIET_READ_WAIT_MS, signal), signal);
           if (job.state === "running" && logSize() === before) {

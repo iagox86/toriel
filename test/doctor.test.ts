@@ -457,13 +457,9 @@ describe("doctor checks", () => {
     assert.equal(f?.fix, undefined, "a missing entry needs the user's own command and args");
   });
 
-  it("flags a codemode server while sessions have no codemode tool, and not when the codemode setting is on (ticket 298)", () => {
-    const [f] = collectFindings(setup({ gitMcp: "codemode" }).opts).filter((x) => x.id === "mcp-codemode");
-    assert.equal(f?.level, "feature");
-    assert.match(f?.message ?? "", /the "git" MCP server in .*mcp\.yaml has exposure: codemode, but sessions have no codemode tool/);
-    assert.match(f?.fix?.summary ?? "", /set "exposure": "deferred" on the "git" entry/);
+  it("does not flag a codemode server: pi's tool_search searches codemode tools like deferred ones, and toriel's sessions all have it (ticket 298)", () => {
+    assert.deepEqual(collectFindings(setup({ gitMcp: "codemode" }).opts).filter((x) => x.id === "mcp-codemode"), []);
     assert.deepEqual(collectFindings(setup({ gitMcp: "codemode", settings: "codemode: true\n" }).opts).filter((x) => x.id === "mcp-codemode"), []);
-    assert.deepEqual(collectFindings(setup({ gitMcp: "default" }).opts).filter((x) => x.id === "mcp-codemode"), [], "no exposure means deferred, not codemode");
   });
 
   it("asks for pi-web-access when it is neither bundled nor the user's own, since the research-web agent has no web tools without it", () => {
@@ -636,7 +632,7 @@ describe("doctor report", () => {
     assert.match(text, /Required: all 5 ok/);
     assert.match(text, /Recommended: all 5 ok/);
     assert.doesNotMatch(text, / ok {7}/);
-    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(21 ok\)/);
+    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(20 ok\)/);
   });
 });
 
@@ -665,7 +661,7 @@ describe("doctor report colours", () => {
   it("colours the compact report too, with the passing checks' count dim", () => {
     const coloured = renderDoctor(checks(), { compact: true, style: ANSI_STYLE });
     assert.match(coloured, /Required\x1b\[22m: \x1b\[32mall 5 ok\x1b\[39m/);
-    assert.match(coloured, /\x1b\[2m {2}\(21 ok\)\x1b\[22m/);
+    assert.match(coloured, /\x1b\[2m {2}\(20 ok\)\x1b\[22m/);
   });
 });
 
@@ -730,22 +726,6 @@ describe("doctor fixes", () => {
     assert.throws(() => previewFixes(s.config, [{ file: s.config, summary: "x", edit: (c) => c }]), /not a JSON object/);
     assert.equal(fs.readFileSync(s.config, "utf8"), "[]");
     assert.deepEqual(fs.readdirSync(path.dirname(s.config)), ["config.json"], "no backup for a failed fix");
-  });
-
-  it("sets exposure: deferred on a codemode mcp.yaml entry, leaving its siblings alone and keeping a backup (ticket 298)", () => {
-    const s = setup({ gdbMcp: "codemode" });
-    const original = fs.readFileSync(s.mcpFile, "utf8");
-    const [group] = plannedFixes(runDoctor(s.opts));
-    assert.equal(group?.file, s.mcpFile);
-    assert.equal(group?.fixes.length, 1);
-    assert.match(previewFixes(s.mcpFile, group?.fixes ?? []), /the "gdb" entry would get exposure: deferred/);
-    assert.equal(fs.readFileSync(s.mcpFile, "utf8"), original, "previewing writes nothing");
-    const backup = applyFixes(s.mcpFile, group?.fixes ?? []);
-    assert.equal(fs.readFileSync(backup as string, "utf8"), original, "the original is kept");
-    const { servers } = readMcpYaml(s.mcpFile);
-    assert.deepEqual(servers.gdb, { command: "node", args: ["x"], exposure: "deferred" });
-    assert.deepEqual(servers.git, { command: "node", args: ["x"], exposure: "direct" }, "the healthy sibling is untouched");
-    assert.deepEqual(collectFindings(s.opts), [], "and the setup is healthy again");
   });
 
   it("offers no fix for the package, the files or the settings: those need a person", () => {
