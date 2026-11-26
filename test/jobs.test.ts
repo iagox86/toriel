@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { makeWrap, readSandbox } from "../pi/extensions/lib/sandbox.ts";
-import extension, { describeJob, endNotice, formatDuration, type Job, JobRegistry, jobEnv, shellEnv } from "../pi/extensions/toriel-jobs.ts";
+import extension, { describeJob, endNotice, formatDuration, type Job, JobRegistry, jobEnv, shellEnv, sleepOnlySeconds } from "../pi/extensions/toriel-jobs.ts";
 
 const until = async (cond: () => boolean, ms = 5000): Promise<void> => {
   const end = Date.now() + ms;
@@ -536,5 +536,84 @@ describe("the toriel-jobs extension", () => {
     const ctx = { cwd: tmpdir(), sessionManager: { getSessionId: () => "s1", getSessionFile: () => undefined } };
     const result = await tools.get("bash")?.execute("c1", { command: "echo sync-ok" }, undefined, undefined, ctx);
     assert.match(result?.content[0]?.text ?? "", /sync-ok/);
+  });
+
+  it("refuses a foreground command that only sleeps a long time, and says how to wait instead (ticket 296)", async () => {
+    const { tools } = load();
+    const ctx = { cwd: tmpdir(), sessionManager: { getSessionId: () => "s1", getSessionFile: () => undefined } };
+    for (const command of ["sleep 90", "sleep 70 && echo ok", "sleep 1m", "sleep 20; sleep 20"]) {
+      const result = await tools.get("bash")?.execute("c1", { command }, undefined, undefined, ctx);
+      assert.equal(result?.isError, true, command);
+      assert.match(result?.content[0]?.text ?? "", /Not run: this command only sleeps.*toriel_job \{"action":"wait"/, command);
+    }
+    const short = await tools.get("bash")?.execute("c2", { command: "sleep 0.1 && echo short-ok" }, undefined, undefined, ctx);
+    assert.match(short?.content[0]?.text ?? "", /short-ok/, "a short sleep still runs");
+  });
+
+  it("waits for a job and returns its output in that call, with no exit notice as well (ticket 296)", async () => {
+    const { tools, handlers, messages } = load();
+    await tools.get("bash")?.execute("c1", { command: "sleep 0.5; echo waited-out", run_in_background: true }, undefined, undefined, { cwd: tmpdir() });
+    const result = await tools.get("toriel_job")?.execute("c2", { action: "wait", id: "j1" });
+    assert.match(result?.content[0]?.text ?? "", /waited-out\n\[j1 exited, code 0;/);
+    await new Promise((r) => setTimeout(r, 300));
+    assert.deepEqual(messages, [], "the wait reported the exit, so no notice follows");
+    handlers.get("session_shutdown")?.({}, {});
+  });
+
+  it("gives up a wait at its timeout and still sends the exit notice later", async () => {
+    const { tools, handlers, messages } = load();
+    await tools.get("bash")?.execute("c1", { command: "sleep 1.5; echo late", run_in_background: true }, undefined, undefined, { cwd: tmpdir() });
+    const result = await tools.get("toriel_job")?.execute("c2", { action: "wait", id: "j1", timeoutSeconds: 1 });
+    assert.match(result?.content[0]?.text ?? "", /j1 still running \(still running after 1s; you will be told when it exits\)/);
+    await until(() => messages.length === 1);
+    assert.match(messages[0]?.content ?? "", /j1 \(sleep 1.5; echo late\) exited with code 0/);
+    handlers.get("session_shutdown")?.({}, {});
+  });
+
+  it("still sends the exit notice for a job whose wait was cancelled before it ended", async () => {
+    const { tools, handlers, messages } = load();
+    await tools.get("bash")?.execute("c1", { command: "sleep 0.8", run_in_background: true }, undefined, undefined, { cwd: tmpdir() });
+    const ac = new AbortController();
+    const pending = tools.get("toriel_job")?.execute("c2", { action: "wait", id: "j1" }, ac.signal);
+    await new Promise((r) => setTimeout(r, 200));
+    ac.abort();
+    await pending;
+    await until(() => messages.length === 1);
+    assert.match(messages[0]?.content ?? "", /j1 \(sleep 0.8\) exited with code 0/);
+    handlers.get("session_shutdown")?.({}, {});
+  });
+
+  it("makes a second read of a quiet running job wait for it instead of answering the same thing again", async () => {
+    const { tools, handlers, messages } = load();
+    await tools.get("bash")?.execute("c1", { command: "sleep 1", run_in_background: true }, undefined, undefined, { cwd: tmpdir() });
+    const first = await tools.get("toriel_job")?.execute("c2", { action: "output", id: "j1" });
+    assert.match(first?.content[0]?.text ?? "", /\(no output yet\)\n\[j1 still running;/, "the first read answers at once");
+    const started = Date.now();
+    const second = await tools.get("toriel_job")?.execute("c3", { action: "output", id: "j1" });
+    assert.ok(Date.now() - started >= 500, "the second read waited");
+    assert.match(second?.content[0]?.text ?? "", /\(no output yet\)\n\[j1 exited, code 0;/);
+    await new Promise((r) => setTimeout(r, 300));
+    assert.deepEqual(messages, [], "the read reported the exit, so no notice follows");
+    handlers.get("session_shutdown")?.({}, {});
+  });
+});
+
+describe("sleep-only commands (ticket 296)", () => {
+  it("adds up the sleeps of a command that does nothing else", () => {
+    assert.equal(sleepOnlySeconds("sleep 90"), 90);
+    assert.equal(sleepOnlySeconds("sleep 90 && echo waited"), 90);
+    assert.equal(sleepOnlySeconds("sleep 1m 30s"), 90);
+    assert.equal(sleepOnlySeconds("sleep 20; sleep 0.5\ntrue"), 20.5);
+    assert.equal(sleepOnlySeconds("sleep 2h"), 7200);
+    assert.equal(sleepOnlySeconds("sleep infinity"), Number.POSITIVE_INFINITY);
+  });
+
+  it("does not count a sleep that delays real work, or a command with no sleep", () => {
+    assert.equal(sleepOnlySeconds("sleep 60 && npm test"), undefined);
+    assert.equal(sleepOnlySeconds("sleep 60; curl http://x"), undefined);
+    assert.equal(sleepOnlySeconds("echo hi"), undefined);
+    assert.equal(sleepOnlySeconds("sleep $N"), undefined);
+    assert.equal(sleepOnlySeconds("sleep 60 | cat"), undefined);
+    assert.equal(sleepOnlySeconds("echo $(rm -rf x); sleep 60"), undefined);
   });
 });

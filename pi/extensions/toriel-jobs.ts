@@ -26,6 +26,14 @@ export const MAX_LOG_BYTES = 8 * 1024 * 1024;
 export const OUTPUT_LIMIT = 8000;
 export const NOTICE_TAIL = 1500;
 const KILL_GRACE_MS = 3000;
+/** `toriel_job wait`: how long it blocks by default, and at most (ticket 296). */
+export const WAIT_DEFAULT_S = 300;
+export const WAIT_MAX_S = 1800;
+/** An `output` read of a running job that printed nothing since the last read waits this long for news before answering (ticket 296). */
+export const QUIET_READ_WAIT_MS = 60_000;
+/** A foreground command that only sleeps longer than this is refused (ticket 296). */
+export const SLEEP_LIMIT_S = 10;
+const WAIT_POLL_MS = 250;
 
 export type JobState = "running" | "exited" | "stopped" | "timed out";
 
@@ -422,7 +430,80 @@ export function describeJob(job: Job, now: number): string {
 }
 
 const BASH_ADDENDUM =
-  ' Set run_in_background to true for a command that keeps running (a dev server, a watcher, a long build or test run): it starts at once and returns a job id, you carry on, and you are told when it exits. Read its output or stop it with toriel_job. Do not use it for commands that finish quickly, and do not poll in a loop: the exit notice arrives on its own.';
+  ' Set run_in_background to true for a command that keeps running (a dev server, a watcher, a long build or test run): it starts at once and returns a job id, you carry on, and you are told when it exits. Read its output or stop it with toriel_job. Do not use it for commands that finish quickly, and do not poll in a loop: the exit notice arrives on its own. A command that only sleeps is refused: to wait for a job use toriel_job action "wait".';
+
+const SLEEP_UNITS: Record<string, number> = { "": 1, s: 1, m: 60, h: 3600, d: 86400 };
+
+/**
+ * The seconds a command spends sleeping when sleeping is all it does: `sleep N` (several arguments add up, with s/m/h/d
+ * suffixes, `infinity`), alone or joined with `;`, `&&` or newlines to other sleeps and to `echo`, `true` or `:`. Undefined
+ * for anything else, so a sleep that delays real work (`sleep 5 && curl ...`) is never counted.
+ */
+export function sleepOnlySeconds(command: string): number | undefined {
+  const parts = command
+    .split(/&&|;|\n/)
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0);
+  if (parts.length === 0) {
+    return undefined;
+  }
+  let total = 0;
+  let slept = false;
+  for (const part of parts) {
+    if (/^(echo(\s[^|&<>`$()]*)?|true|:)$/.test(part)) {
+      continue;
+    }
+    const m = /^sleep((?:\s+(?:\d+(?:\.\d+)?[smhd]?|infinity))+)$/.exec(part);
+    if (!m) {
+      return undefined;
+    }
+    slept = true;
+    for (const arg of (m[1] as string).trim().split(/\s+/)) {
+      if (arg === "infinity") {
+        return Number.POSITIVE_INFINITY;
+      }
+      const [, n, unit] = /^(\d+(?:\.\d+)?)([smhd]?)$/.exec(arg) as RegExpExecArray;
+      total += Number(n) * (SLEEP_UNITS[unit as string] as number);
+    }
+  }
+  return slept ? total : undefined;
+}
+
+/** What a refused sleep returns: why, and what to do instead. */
+export function sleepRefusal(seconds: number): string {
+  const how = Number.isFinite(seconds) ? `${seconds}s` : "forever";
+  return `Not run: this command only sleeps (${how}), and every turn spent waiting resends the whole conversation. A background job tells you when it exits, so carry on with other work; to block until one ends use toriel_job {"action":"wait","id":"j1"}; for a check much later use toriel_schedule_create. Sleeps of up to ${SLEEP_LIMIT_S}s are allowed.`;
+}
+
+/**
+ * Resolves once `done()` holds (true), or after `timeoutMs` or when `signal` aborts (false). Polls: the job registry has one
+ * end callback, owned by the exit notice.
+ */
+export function waitUntil(done: () => boolean, timeoutMs: number, signal?: AbortSignal, pollMs = WAIT_POLL_MS): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (done()) {
+      resolve(true);
+      return;
+    }
+    const finish = (ok: boolean): void => {
+      clearInterval(tick);
+      clearTimeout(limit);
+      signal?.removeEventListener("abort", onAbort);
+      resolve(ok);
+    };
+    const onAbort = (): void => finish(false);
+    const tick = setInterval(() => {
+      if (done()) {
+        finish(true);
+      }
+    }, pollMs);
+    const limit = setTimeout(() => finish(done()), timeoutMs);
+    signal?.addEventListener("abort", onAbort);
+    if (signal?.aborted) {
+      finish(false);
+    }
+  });
+}
 
 interface Ctx {
   cwd?: string;
@@ -486,6 +567,10 @@ export default function (pi: Pi) {
   // the per-command sandbox (board 190): off unless the daemon set TORIEL_SANDBOX for this scoped child
   const sandbox = readSandbox(process.env);
   const sandboxWrap = makeWrap(sandbox);
+  // toriel_job calls blocked on a job, by id: a job that ends while one waits is reported by that call, not by a second notice
+  const waiting = new Map<string, number>();
+  // how far toriel_job output has read each job, so a read that would show nothing new waits for news instead (ticket 296)
+  const readTo = new Map<string, number>();
   const registry: JobRegistry = new JobRegistry({
     dir,
     // in plan mode (ticket 229) every command runs with the whole filesystem read-only, whatever the sandbox setting; the marker is read at each launch
@@ -495,12 +580,36 @@ export default function (pi: Pi) {
       ui?.setStatus(STATUS_KEY, JSON.stringify({ v: 1, running: n }));
     },
     onEnd: (job) => {
-      const out = registry.output(job.id, 0, NOTICE_TAIL * 2);
-      void Promise.resolve(
-        pi.sendMessage({ customType: CUSTOM_TYPE, content: endNotice(job, out?.text ?? ""), display: true, details: { id: job.id, state: job.state, exitCode: job.exitCode } }, { triggerTurn: true, deliverAs: "followUp" }),
-      ).catch(() => {});
+      if ((waiting.get(job.id) ?? 0) > 0) {
+        return;
+      }
+      notifyEnd(job);
     },
   });
+
+  function notifyEnd(job: Job): void {
+    const out = registry.output(job.id, 0, NOTICE_TAIL * 2);
+    void Promise.resolve(
+      pi.sendMessage({ customType: CUSTOM_TYPE, content: endNotice(job, out?.text ?? ""), display: true, details: { id: job.id, state: job.state, exitCode: job.exitCode } }, { triggerTurn: true, deliverAs: "followUp" }),
+    ).catch(() => {});
+  }
+
+  /**
+   * Runs `wait` with the job marked as waited on, so its end is reported by this call and not by a notice as well. A call that
+   * was cancelled returns nothing to the agent, so a job that ended meanwhile still gets its notice.
+   */
+  const blockOn = async (job: Job, wait: () => Promise<boolean>, signal?: AbortSignal): Promise<boolean> => {
+    const wasRunning = job.state === "running";
+    waiting.set(job.id, (waiting.get(job.id) ?? 0) + 1);
+    try {
+      return await wait();
+    } finally {
+      waiting.set(job.id, (waiting.get(job.id) ?? 1) - 1);
+      if (signal?.aborted && wasRunning && job.state !== "running" && job.state !== "stopped") {
+        notifyEnd(job);
+      }
+    }
+  };
 
   pi.on("session_start", (_event, ctx) => {
     ui = ctx.ui;
@@ -539,6 +648,10 @@ export default function (pi: Pi) {
     },
     async execute(id: string, params: Params, signal: unknown, onUpdate: unknown, ctx: Ctx) {
       if (!params.run_in_background) {
+        const slept = sleepOnlySeconds(params.command);
+        if (slept !== undefined && slept > SLEEP_LIMIT_S) {
+          return { ...text(sleepRefusal(slept)), isError: true };
+        }
         return base.execute(id, params, signal, onUpdate, ctx);
       }
       try {
@@ -570,19 +683,20 @@ export default function (pi: Pi) {
     name: "toriel_job",
     label: "Job",
     description:
-      'Manage this session\'s background shell jobs (started with bash and run_in_background). action "list": every job with its state. action "output": the job\'s output (id required; the last part of it, or from byte offset `since` where a previous call said to continue). action "stop": stop a running job (id required).',
-    promptSnippet: "toriel_job: list, read the output of, or stop background shell jobs",
+      'Manage this session\'s background shell jobs (started with bash and run_in_background). You are told when a job exits, so you never need to check on one. action "wait": block until the job (id required) exits, or timeoutSeconds passes, and return its output: use it when you have nothing else to do until the job is done, instead of reading its output again and again. action "output": the job\'s output (id required; the last part of it, or from byte offset `since` where a previous call said to continue); reading a running job that printed nothing since your last read waits up to a minute for news first. action "list": every job with its state. action "stop": stop a running job (id required).',
+    promptSnippet: "list, wait for, read the output of, or stop background shell jobs",
     parameters: {
       type: "object",
       properties: {
-        action: { type: "string", enum: ["list", "output", "stop"] },
+        action: { type: "string", enum: ["list", "wait", "output", "stop"] },
         id: { type: "string", description: 'Job id such as "j1"' },
         since: { type: "number", description: "output: byte offset to read from (the next offset is printed after each read)" },
+        timeoutSeconds: { type: "integer", minimum: 1, description: `wait only: give up after this long (default ${WAIT_DEFAULT_S}, at most ${WAIT_MAX_S})` },
       },
       required: ["action"],
       additionalProperties: false,
     },
-    async execute(_id: string, params: { action: string; id?: string; since?: number }) {
+    async execute(_id: string, params: { action: string; id?: string; since?: number; timeoutSeconds?: number }, signal?: AbortSignal) {
       const now = Date.now();
       if (params.action === "list") {
         const jobs = registry.list();
@@ -599,11 +713,29 @@ export default function (pi: Pi) {
         registry.stop(job.id);
         return text(`Stopping ${job.id}.`);
       }
-      if (params.action === "output") {
-        const out = registry.output(job.id, params.since);
+      if (params.action === "wait" || params.action === "output") {
+        const logSize = (): number => registry.output(job.id, Number.MAX_SAFE_INTEGER)?.next ?? 0;
+        const ended = (): boolean => job.state !== "running";
+        let note = "";
+        if (params.action === "wait") {
+          const limitS = Math.min(Math.max(1, Math.floor(params.timeoutSeconds ?? WAIT_DEFAULT_S)), WAIT_MAX_S);
+          const done = await blockOn(job, () => waitUntil(ended, limitS * 1000, signal), signal);
+          if (!done) {
+            note = signal?.aborted ? " (the wait was cancelled)" : ` (still running after ${limitS}s; you will be told when it exits)`;
+          }
+        } else if (job.state === "running" && params.since === undefined && logSize() === readTo.get(job.id)) {
+          // a read that would show the same thing again: wait for the job to print or end first
+          const before = logSize();
+          await blockOn(job, () => waitUntil(() => ended() || logSize() !== before, QUIET_READ_WAIT_MS, signal), signal);
+          if (job.state === "running" && logSize() === before) {
+            note = ` (nothing new for ${QUIET_READ_WAIT_MS / 1000}s; you will be told when it exits, or use action "wait")`;
+          }
+        }
+        const out = registry.output(job.id, params.action === "wait" ? 0 : params.since);
+        readTo.set(job.id, out?.next ?? 0);
         const skipped = out && out.skipped > 0 ? `[${out.skipped} earlier bytes not shown]\n` : "";
         const state = job.state === "running" ? "still running" : `${job.state}${job.exitCode !== undefined && job.exitCode !== null ? `, code ${job.exitCode}` : ""}`;
-        return text(`${skipped}${out?.text.trimEnd() || "(no output yet)"}\n[${job.id} ${state}; continue from byte ${out?.next ?? 0}]`);
+        return text(`${skipped}${out?.text.trimEnd() || "(no output yet)"}\n[${job.id} ${state}${note}; continue from byte ${out?.next ?? 0}]`);
       }
       return { ...text(`Unknown action ${params.action}.`), isError: true };
     },
