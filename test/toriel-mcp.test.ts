@@ -256,6 +256,7 @@ describe("explore records (ticket 308)", () => {
     const x = load(yamlFile("servers:\n  git: { command: g }\n  gdb: { command: d }\n"), undefined, tools, file);
     await x.handlers[1]?.({ messageType: "user", prompt: mcpExplorePrompt("git") }, {} as never);
     await x.handlers[2]?.({ type: "agent_before_settle", outcome: "completed" }, {} as never);
+    await x.handlers[3]?.({ type: "agent_settled" }, {} as never);
     const fresh = computeToolHashes(tools);
     const records = loadExploreRecords(file);
     assert.equal(records.latest.git?.hash, fresh.git);
@@ -265,8 +266,10 @@ describe("explore records (ticket 308)", () => {
     assert.match(records.explored.git?.at ?? "/", /^\d{4}-\d{2}-\d{2}T/, "stamped with the run's end time");
     await x.handlers[1]?.({ messageType: "user", prompt: "fix a bug in the parser" }, {} as never);
     await x.handlers[2]?.({ type: "agent_before_settle", outcome: "error" }, {} as never);
+    await x.handlers[3]?.({ type: "agent_settled" }, {} as never);
     await x.handlers[1]?.({ messageType: "custom" }, {} as never);
     await x.handlers[2]?.({ type: "agent_before_settle", outcome: "completed" }, {} as never);
+    await x.handlers[3]?.({ type: "agent_settled" }, {} as never);
     assert.deepEqual(loadExploreRecords(file).explored, records.explored, "a run the prompt did not open as explore leaves the stamp");
     // an aborted run skips pi's agent_before_settle and goes to agent_settled: the skill is never marked written
     await x.handlers[1]?.({ messageType: "user", prompt: mcpExplorePrompt("git") }, {} as never);
@@ -280,9 +283,11 @@ describe("explore records (ticket 308)", () => {
     const x = load(yamlFile("servers:\n  git: { command: g }\n"), undefined, tools, file);
     await x.handlers[1]?.({ messageType: "user", prompt: "hello" }, {} as never);
     await x.handlers[2]?.({ type: "agent_before_settle", outcome: "completed" }, {} as never);
+    await x.handlers[3]?.({ type: "agent_settled" }, {} as never);
     const first = fs.readFileSync(file, "utf8");
     await x.handlers[1]?.({ messageType: "user", prompt: "hello again" }, {} as never);
     await x.handlers[2]?.({ type: "agent_before_settle", outcome: "completed" }, {} as never);
+    await x.handlers[3]?.({ type: "agent_settled" }, {} as never);
     assert.equal(fs.readFileSync(file, "utf8"), first, "a session that saw the same tools again wrote nothing (it stamps the same sighting time)");
   });
 
@@ -300,7 +305,7 @@ describe("explore records (ticket 308)", () => {
     saveExploreRecords(file, { explored: {}, latest: { git: { at: new Date(Date.now() + 60_000).toISOString(), hash: "h-newer" } } });
     const tools = [rtool("mcp__git__git_read", "git")];
     const x = load(yamlFile("servers:\n  git: { command: g }\n"), undefined, tools, file);
-    await x.handlers[2]?.({ type: "agent_before_settle", outcome: "completed" }, {} as never);
+    await x.handlers[3]?.({ type: "agent_settled" }, {} as never);
     assert.equal(loadExploreRecords(file).latest.git?.hash, "h-newer", "this session's view was set up before that sighting");
   });
 
@@ -311,6 +316,7 @@ describe("explore records (ticket 308)", () => {
     const x = load(yamlFile("servers:\n  git: { command: g }\n"), undefined, tools, file);
     await x.handlers[1]?.({ messageType: "user", prompt: mcpExploreAllFirstLine(["git", "gdb"]) }, {} as never);
     await x.handlers[2]?.({ type: "agent_before_settle", outcome: "completed" }, {} as never);
+    await x.handlers[3]?.({ type: "agent_settled" }, {} as never);
     const records = loadExploreRecords(file);
     assert.equal(records.latest.git?.hash, computeToolHashes(tools).git, "latest takes the fresh hash of a server this run saw");
     assert.deepEqual(records.latest.gdb, { at: "t0", hash: "old" }, "a server this run did not see keeps its sighting");
@@ -322,7 +328,30 @@ describe("explore records (ticket 308)", () => {
   it("never throws when the records file cannot be written", () => {
     const blocked = path.join(yamlFile(""), "under-a-file", "s.json");
     const x = load(yamlFile("servers:\n  git: { command: g }\n"), undefined, [rtool("mcp__git__git_read", "git")], blocked);
-    assert.doesNotThrow(() => x.handlers[2]?.({ type: "agent_before_settle", outcome: "completed" }, {} as never));
+    assert.doesNotThrow(() => x.handlers[3]?.({ type: "agent_settled" }, {} as never));
+  });
+
+  it("leaves explored unmarked when a continued run's last settle boundary is not completed", async () => {
+    const file = recordsFile();
+    const tools = [rtool("mcp__git__git_read", "git", { type: "object" })];
+    const x = load(yamlFile("servers:\n  git: { command: g }\n"), undefined, tools, file);
+    await x.handlers[1]?.({ messageType: "user", prompt: mcpExplorePrompt("git") }, {} as never);
+    // an extension can continue a run past its first settle boundary (toriel-tasks does), so a later boundary outranks the first
+    await x.handlers[2]?.({ type: "agent_before_settle", outcome: "completed" }, {} as never);
+    await x.handlers[2]?.({ type: "agent_before_settle", outcome: "error" }, {} as never);
+    await x.handlers[3]?.({ type: "agent_settled" }, {} as never);
+    assert.deepEqual(loadExploreRecords(file).explored, {}, "the continuation's error is the run's outcome, so the skill is not marked written");
+    assert.equal(loadExploreRecords(file).latest.git?.hash, computeToolHashes(tools).git, "the sighting still lands");
+  });
+
+  it("leaves explored unmarked when a run whose first boundary was completed ends aborted", async () => {
+    const file = recordsFile();
+    const tools = [rtool("mcp__git__git_read", "git")];
+    const x = load(yamlFile("servers:\n  git: { command: g }\n"), undefined, tools, file);
+    await x.handlers[1]?.({ messageType: "user", prompt: mcpExplorePrompt("git") }, {} as never);
+    await x.handlers[2]?.({ type: "agent_before_settle", outcome: "completed" }, {} as never);
+    await x.handlers[3]?.({ type: "agent_settled", aborted: true }, {} as never);
+    assert.deepEqual(loadExploreRecords(file).explored, {}, "the user aborted the run before it settled");
   });
 });
 

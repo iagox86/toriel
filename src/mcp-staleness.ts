@@ -4,7 +4,7 @@
 // hash, with the time the sighting session's view was set up). A skill is stale when the server's tools
 // changed since it was explored, or when the explore record is old. A sighting only counts when it was
 // recorded at or after the skill was written, so a session whose view of the server predates the explore
-// cannot make it look fresh. Pure logic, no fs: the caller reads the records and the skill presence and
+// cannot make a newly written skill look changed. Pure logic, no fs: the caller reads the records and the skill presence and
 // hands them in.
 
 /** How long a skill stays trusted before it is re-explored even though nothing has changed. */

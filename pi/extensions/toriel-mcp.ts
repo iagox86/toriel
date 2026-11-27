@@ -14,13 +14,13 @@
 // TORIEL_MCP_SUMMARIES), so the system prompt's server list does not change when the server connects. The end of each run records
 // the connected servers' summaries for the next session.
 //
-// At the settle boundary of each run the extension also stamps /mcp explore records (ticket 308; the file in
-// TORIEL_MCP_RECORDS): the hash of every connected server's tools as it is now, whatever the run's outcome -
-// seeing the tools is unconditional - stamped with the session start as the sighting time; and, when the run was
-// opened by an /mcp explore prompt and completed, the servers it names stamped with that hash and the settle
-// time, as the skill's write time -- so a later reader can tell when a server's skill was last written and
-// whether its tools changed since. An aborted run skips pi's agent_before_settle boundary, so its sighting
-// lands from agent_settled.
+// When a run settles (pi's agent_settled, once per run, whatever ended it) the extension also stamps /mcp
+// explore records (ticket 308; the file in TORIEL_MCP_RECORDS): the hash of every connected server's tools as
+// it is now - seeing the tools is unconditional - stamped with the session start as the sighting time; and,
+// when the run was opened by an /mcp explore prompt and completed (the last agent_before_settle boundary said
+// "completed" - one can fire more than once per run when an extension continues it, so the last one counts),
+// the servers it names stamped with that hash and the settle time, as the skill's write time -- so a later
+// reader can tell when a server's skill was last written and whether its tools changed since.
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { canonicalize, computeToolHashes, explorePromptServerNames, learnSummaries, loadExploreRecords, MCP_DIRECT_ENV, MCP_FILE_ENV, MCP_RECORDS_ENV, MCP_SUMMARIES_ENV, type McpServerConfig, mergeExploreRecords, parseDirectServers, parseMcpYaml, piConfig, probeUrl, redactUrl, saveExploreRecords, type ToolNamespaceInfo, toolServerName } from "./lib/mcp-config.ts";
@@ -234,16 +234,20 @@ export default function (pi: Pi): void {
       recordExploreRecords(recordsFile, pi.getAllTools?.() ?? [], names, sightedAt);
       pendingExplore = undefined;
     };
+    // agent_settled is the only event a run certainly ends with: before_settle can fire more than once per run
+    // (an extension may continue the run there - toriel-tasks does), so the outcome that counts is the last one.
+    let lastOutcome: RunOutcome | undefined;
     pi.on("agent_before_settle", (event) => {
-      // the boundary is the only place the outcome is said: an explore skill is stamped only for a run that completed, while what the tools looked like is recorded whatever ended the run
-      stamp((event as { outcome?: RunOutcome }).outcome === "completed" ? (pendingExplore ?? []) : []);
+      lastOutcome = (event as { outcome?: RunOutcome }).outcome;
       return undefined;
     });
     pi.on("agent_settled", (event) => {
-      // an aborted run skips agent_before_settle (it goes agent_end -> agent_settled), so its sighting lands here
-      if ((event as { aborted?: boolean }).aborted === true) {
-        stamp([]);
-      }
+      // an explore skill is stamped only for a run that completed its every turn: an aborted run skips before_settle
+      // (it goes agent_end -> agent_settled) and a run continued past its first boundary counts only by its last
+      // boundary - either way what the tools looked like is recorded, whatever ended the run
+      const ok = (event as { aborted?: boolean }).aborted !== true && lastOutcome === "completed";
+      stamp(ok ? (pendingExplore ?? []) : []);
+      lastOutcome = undefined;
     });
   }
   pi.registerCommand?.(UP_COMMAND, {
