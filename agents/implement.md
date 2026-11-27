@@ -7,7 +7,7 @@ model: cheap
 extensions: true
 minimal: false
 maxTurns: 120
-budget: 800000
+budget: 1600000
 ---
 You implement one triaged change in a repository, then prove it works.
 
