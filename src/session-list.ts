@@ -213,11 +213,14 @@ function belowByRow(rows: readonly SwitcherSession[]): Map<string, string[]> {
 }
 
 /**
- * shift+up/down on a session row: swap within its section, or cross into the
- * adjacent section (reassigning its group). Mutates `groups.order` and
- * `groups.assignments`; `sessions` is the displayed list.
+ * shift+up/down on a session row: swap with the row above or below it in its section, or cross into the adjacent
+ * section (reassigning its group). Mutates `groups.order` and `groups.assignments`. `displayed` is what the user sees
+ * (it decides the neighbor and the section edges); `ordered` is the switcher's complete arranged list
+ * (filter-hidden and hidden external rows included), which gives each parent its whole subtree. Like
+ * archiveSession, the moved subtree is cut from the stored order and put back next to its new neighbor, so entries
+ * that no displayed row carries keep their places (ticket 337).
  */
-export function moveSession(groups: GroupsFile, sessions: SwitcherSession[], s: SwitcherSession, delta: number): MutationResult {
+export function moveSession(groups: GroupsFile, displayed: readonly SwitcherSession[], ordered: readonly SwitcherSession[], s: SwitcherSession, delta: number): MutationResult {
   const uuid = s.sessionId;
   if (uuid === undefined) {
     return { changed: false };
@@ -226,48 +229,52 @@ export function moveSession(groups: GroupsFile, sessions: SwitcherSession[], s: 
     return { changed: false, hint: "move the parent instead - children stay under it" };
   }
   // A parent moves with everything below it: only top-level sessions are placed, descendants follow.
-  const below = belowByRow(sessions);
-  // Section structure INCLUDING empty groups: [ungrouped, ...groups]. Moves
-  // are section-relative, so an empty group is a valid target (the moved
-  // session becomes its only member).
-  const sections: Array<{ group: string | null; uuids: string[] }> = [{ group: null, uuids: [] }];
-  for (const g of groups.groups) {
-    sections.push({ group: g, uuids: [] });
-  }
+  const below = belowByRow(ordered);
+  const subtreeOf = (id: string): string[] => [id, ...(below.get(id) ?? [])];
+  // Sections INCLUDING empty groups: [ungrouped, ...groups]. Moves are section-relative, so an empty group is a valid
+  // target (the moved session becomes its only member).
+  const sectionCount = 1 + groups.groups.length;
   const sectionIndex = (group: string | null) => (group === null ? 0 : 1 + groups.groups.indexOf(group));
-  for (const x of sessions) {
-    if (x.sessionId !== undefined && (x.depth ?? 0) === 0) {
-      sections[sectionIndex(x.group ?? null)].uuids.push(x.sessionId);
-    }
-  }
   const secIdx = sectionIndex(s.group ?? null);
-  const section = sections[secIdx];
-  const pos = section.uuids.indexOf(uuid);
+  const visible = displayed.flatMap((x) => (x.sessionId !== undefined && (x.depth ?? 0) === 0 && sectionIndex(x.group ?? null) === secIdx ? [x.sessionId] : []));
+  const pos = visible.indexOf(uuid);
   if (pos === -1) {
     return { changed: false };
   }
   const step = delta > 0 ? 1 : -1;
-  const neighbor = section.uuids[pos + step];
-  const adjacent = sections[secIdx + step];
-  if (neighbor !== undefined) {
-    section.uuids[pos + step] = uuid;
-    section.uuids[pos] = neighbor;
-  } else if (adjacent) {
-    // edge of the section: first of the next / last of the previous one
-    section.uuids.splice(pos, 1);
-    if (step > 0) {
-      adjacent.uuids.unshift(uuid);
-    } else {
-      adjacent.uuids.push(uuid);
-    }
-    groups.assignments[uuid] = adjacent.group;
-    for (const kid of below.get(uuid) ?? []) {
-      groups.assignments[kid] = adjacent.group;
-    }
-  } else {
+  const neighbor = visible[pos + step];
+  const adjIdx = secIdx + step;
+  if (neighbor === undefined && (adjIdx < 0 || adjIdx >= sectionCount)) {
     return { changed: false, hint: step > 0 ? "already at the bottom" : "already at the top" };
   }
-  groups.order = sections.flatMap((sec) => sec.uuids.flatMap((id) => [id, ...(below.get(id) ?? [])]));
+  const subtree = subtreeOf(uuid);
+  const moving = new Set(subtree);
+  const flat = (groups.order ?? ordered.flatMap((x) => (x.sessionId !== undefined ? [x.sessionId] : []))).filter((id) => !moving.has(id));
+  // where in `flat` a set of ids starts and ends (-1 when none of it is there)
+  const firstOf = (ids: string[]) => flat.findIndex((id) => ids.includes(id));
+  const lastOf = (ids: string[]) => flat.findLastIndex((id) => ids.includes(id));
+  let at: number;
+  if (neighbor !== undefined) {
+    // past the neighbor and everything below it
+    const theirs = subtreeOf(neighbor);
+    at = step > 0 ? lastOf(theirs) + 1 : firstOf(theirs);
+    if (at === -1 || (step > 0 && at === 0)) {
+      at = step > 0 ? flat.length : 0;
+    }
+  } else {
+    // edge of the section: first of the next / last of the previous one, among ALL its members (hidden ones too)
+    const group = adjIdx === 0 ? null : (groups.groups[adjIdx - 1] ?? null);
+    const members = ordered.flatMap((x) => (x.sessionId !== undefined && (x.depth ?? 0) === 0 && (x.group ?? null) === group ? subtreeOf(x.sessionId) : []));
+    at = step > 0 ? firstOf(members) : lastOf(members) + 1;
+    if (at === -1 || (step < 0 && at === 0)) {
+      at = flat.length; // an empty section: ranks only compare within a section, so anywhere will do
+    }
+    groups.assignments[uuid] = group;
+    for (const kid of below.get(uuid) ?? []) {
+      groups.assignments[kid] = group;
+    }
+  }
+  groups.order = [...flat.slice(0, at), ...subtree, ...flat.slice(at)];
   return { changed: true };
 }
 

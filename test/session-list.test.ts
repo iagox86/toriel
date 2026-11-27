@@ -206,7 +206,7 @@ describe("moveSession", () => {
   it("swaps with the neighbor inside a section", () => {
     const groups: GroupsFile = { groups: [], assignments: {} };
     const list = [row("a"), row("b"), row("c")];
-    const res = moveSession(groups, list, list[0], 1);
+    const res = moveSession(groups, list, list, list[0], 1);
     assert.equal(res.changed, true);
     assert.deepEqual(names(groups), ["b", "a", "c"]);
   });
@@ -214,7 +214,7 @@ describe("moveSession", () => {
   it("moves into the next group when crossing the end of a section", () => {
     const groups: GroupsFile = { groups: ["g"], assignments: { c: "g" } };
     const list = [row("a"), row("b"), row("c", "g")];
-    moveSession(groups, list, list[1], 1);
+    moveSession(groups, list, list, list[1], 1);
     assert.equal(groups.assignments.b, "g");
     assert.deepEqual(names(groups), ["a", "b", "c"]);
   });
@@ -222,7 +222,7 @@ describe("moveSession", () => {
   it("moves into the previous section when crossing upward, landing last", () => {
     const groups: GroupsFile = { groups: ["g"], assignments: { c: "g" } };
     const list = [row("a"), row("c", "g")];
-    moveSession(groups, list, list[1], -1);
+    moveSession(groups, list, list, list[1], -1);
     assert.equal(groups.assignments.c, null);
     assert.deepEqual(names(groups), ["a", "c"]);
   });
@@ -230,15 +230,15 @@ describe("moveSession", () => {
   it("can move into an empty group", () => {
     const groups: GroupsFile = { groups: ["empty"], assignments: {} };
     const list = [row("a")];
-    moveSession(groups, list, list[0], 1);
+    moveSession(groups, list, list, list[0], 1);
     assert.equal(groups.assignments.a, "empty");
   });
 
   it("reports the edges instead of moving", () => {
     const groups: GroupsFile = { groups: [], assignments: {} };
     const list = [row("a")];
-    assert.deepEqual(moveSession(groups, list, list[0], 1), { changed: false, hint: "already at the bottom" });
-    assert.deepEqual(moveSession(groups, list, list[0], -1), { changed: false, hint: "already at the top" });
+    assert.deepEqual(moveSession(groups, list, list, list[0], 1), { changed: false, hint: "already at the bottom" });
+    assert.deepEqual(moveSession(groups, list, list, list[0], -1), { changed: false, hint: "already at the top" });
   });
 
   it("does not move a child whose row follows a session without an id", () => {
@@ -247,16 +247,65 @@ describe("moveSession", () => {
     const groups: GroupsFile = { groups: [], assignments: {} };
     const anon: SwitcherSession = { key: "anon", name: "anon", state: "inactive" };
     const list = [row("a"), { ...row("kidA2"), depth: 1 }, anon, { ...row("kidX"), depth: 1 }, row("b")];
-    const res = moveSession(groups, list, list[0], 1);
+    const res = moveSession(groups, list, list, list[0], 1);
     assert.equal(res.changed, true);
     assert.equal(groups.assignments.kidX, undefined);
-    assert.deepEqual(names(groups), ["b", "a", "kidA2"]);
+    assert.deepEqual(names(groups), ["kidX", "b", "a", "kidA2"], "kidX stays in the order where it was, ahead of the moved block");
   });
 
   it("does nothing for a session without an id", () => {
     const groups: GroupsFile = { groups: [], assignments: {} };
     const s: SwitcherSession = { key: "k", name: "k", state: "inactive" };
-    assert.equal(moveSession(groups, [s], s, 1).changed, false);
+    assert.equal(moveSession(groups, [s], [s], s, 1).changed, false);
+  });
+
+  describe("under a /filter (ticket 337)", () => {
+    it("keeps order entries that no displayed row carries in their places", () => {
+      // h1 and h2 are filter-hidden, ghost is in the order but on no row at all (trashed): only a moves
+      const groups: GroupsFile = { groups: [], assignments: {}, order: ["h1", "a", "ghost", "b", "h2", "c"] };
+      const ordered = [row("h1"), row("a"), row("b"), row("h2"), row("c")];
+      const displayed = [row("a"), row("b"), row("c")];
+      assert.equal(moveSession(groups, displayed, ordered, displayed[0], 1).changed, true);
+      assert.deepEqual(groups.order, ["h1", "ghost", "b", "a", "h2", "c"]);
+      assert.equal(moveSession(groups, [row("b"), row("a"), row("c")], ordered, row("a"), 1).changed, true);
+      assert.deepEqual(groups.order, ["h1", "ghost", "b", "h2", "c", "a"], "moving down passes the hidden h2 along with c");
+    });
+
+    it("swaps with the displayed neighbor, skipping hidden rows between them, moving up too", () => {
+      const groups: GroupsFile = { groups: [], assignments: {}, order: ["a", "h", "b"] };
+      const ordered = [row("a"), row("h"), row("b")];
+      const displayed = [row("a"), row("b")];
+      moveSession(groups, displayed, ordered, displayed[1], -1);
+      assert.deepEqual(groups.order, ["b", "a", "h"]);
+    });
+
+    it("carries filter-hidden children with their parent", () => {
+      // the filter matched the parent but not its child, so the displayed list has no row for kid
+      const groups: GroupsFile = { groups: [], assignments: {}, order: ["a", "kid", "b"] };
+      const ordered = [row("a"), { ...row("kid"), depth: 1 }, row("b")];
+      const displayed = [row("a"), row("b")];
+      moveSession(groups, displayed, ordered, displayed[0], 1);
+      assert.deepEqual(groups.order, ["b", "a", "kid"]);
+    });
+
+    it("crosses into the next group ahead of its hidden members, and reassigns the hidden children too", () => {
+      const groups: GroupsFile = { groups: ["g"], assignments: { gh: "g", gv: "g" }, order: ["a", "kid", "gh", "gv"] };
+      const ordered = [row("a"), { ...row("kid"), depth: 1 }, row("gh", "g"), row("gv", "g")];
+      const displayed = [row("a"), row("gv", "g")];
+      moveSession(groups, displayed, ordered, displayed[0], 1);
+      assert.equal(groups.assignments.a, "g");
+      assert.equal(groups.assignments.kid, "g");
+      assert.deepEqual(groups.order, ["a", "kid", "gh", "gv"], "first of g, so still above the hidden gh when the filter is cleared");
+    });
+
+    it("crosses up into the previous section behind its hidden members", () => {
+      const groups: GroupsFile = { groups: ["g"], assignments: { x: "g" }, order: ["v", "h", "x"] };
+      const ordered = [row("v"), row("h"), row("x", "g")];
+      const displayed = [row("v"), row("x", "g")];
+      moveSession(groups, displayed, ordered, displayed[1], -1);
+      assert.equal(groups.assignments.x, null);
+      assert.deepEqual(groups.order, ["v", "h", "x"]);
+    });
   });
 });
 

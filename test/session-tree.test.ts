@@ -93,7 +93,7 @@ describe("moving a parent", () => {
 
   it("moves the whole block past the neighbour", () => {
     const g = groups();
-    const res = moveSession(g, list(), list()[0] as SwitcherSession, 1);
+    const res = moveSession(g, list(), list(), list()[0] as SwitcherSession, 1);
     assert.equal(res.changed, true);
     assert.deepEqual(g.order, ["b", "a", "a1", "c"]);
   });
@@ -101,7 +101,7 @@ describe("moving a parent", () => {
   it("carries the children into the group the parent crosses into", () => {
     const g = groups();
     const l = arrangeTree([row("a"), row("a1"), row("x", { group: "G" })], new Map([["a1", "a"]]));
-    moveSession(g, l, l[0] as SwitcherSession, 1);
+    moveSession(g, l, l, l[0] as SwitcherSession, 1);
     assert.equal(g.assignments.a, "G");
     assert.equal(g.assignments.a1, "G");
     assert.deepEqual(g.order, ["a", "a1", "x"]);
@@ -109,7 +109,7 @@ describe("moving a parent", () => {
 
   it("refuses to move a child on its own and says why", () => {
     const l = list();
-    const res = moveSession(groups(), l, l[1] as SwitcherSession, 1);
+    const res = moveSession(groups(), l, l, l[1] as SwitcherSession, 1);
     assert.equal(res.changed, false);
     assert.match(res.hint ?? "", /move the parent/);
   });

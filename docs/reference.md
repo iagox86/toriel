@@ -164,7 +164,10 @@ summary column says `compacting`:
 - `left`/`right`/`enter` on a group header fold/unfold it (`left` folds, `right` unfolds, `enter` toggles; remembered across runs; dragging a session into a folded group unfolds it): a folded group shows `▸`, hides its sessions and gives a one-line summary (count, working/idle, newest age); a filter unfolds everything while it is on
 - Sessions an agent started (subagents) hang under their parent; copies you make yourself with `/fork` or `/adopt` do not (they stay recorded in `lineage.json`, but are ordinary sessions): indented with `└`, in the parent's group, and the parent row says `N children, M working, K parked`. `left` on an open parent folds its children (`▸`), `right` on a folded one unfolds it, `left` on a child jumps to its parent; folds are remembered with the group folds. `shift+up`/`down` on a parent moves it with everything below it (a child cannot be moved alone). `/park` on a child hides it under its parent (`/filter` shows it again); deleting a parent leaves its children listed on their own. The tree comes from `lineage.json` (`session-tree.ts` builds it).
 - `shift+up`/`shift+down` move the highlighted session or group (crossing a
-  header moves the session between groups; persisted to groups.json)
+  header moves the session between groups; persisted to groups.json). Under a
+  `/filter` the move swaps with the neighbor you see, and sessions the filter
+  hides keep their places in the order (`moveSession` cuts the moved block out
+  of the stored order and puts it back, like `/park`)
 - `ctrl-n` new session (controller's cwd), `ctrl-k` stop the highlighted
   session's process (file kept), `ctrl-x` delete it (press twice; moves to
   trash, stopping it first if running; on an empty group header: delete the
