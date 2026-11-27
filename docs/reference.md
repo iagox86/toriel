@@ -248,8 +248,9 @@ summary column says `compacting`:
   50, kept after a clear, copied on /fork, dropped with the session) and the `goal` command's `history` action
   answers them. The controller lays one dim row per event (`goal set: <text>`, `goal done: <text>`, `goal
   cleared: <text>`) among a view's items by time (`goal-lines.ts`; items carry `at`, their message's time on
-  replay and their arrival live), when a view is built and again whenever the sessions list's goal map shows a
-  change (`GoalSummary.at` stamps the last change). A goal the agent marks done also flashes on the viewed session.
+  replay and their arrival live), when a view is built (an open counts: a view that live events built has no rows yet) and again
+  whenever the sessions list's goal map shows a change (`GoalSummary.at` stamps the last change); a refetch that repeats the
+  cached log re-places nothing (`sameGoalEvents`). A goal the agent marks done also flashes on the viewed session.
 - Opening a session from the switcher (enter, right arrow, `/parent`) clears its done goal as the user (ticket
   350): the check and the dimmed badge go, and a `goal cleared` line is left. Agent turns, scheduled prompts and
   daemon events never clear it.

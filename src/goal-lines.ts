@@ -31,6 +31,14 @@ export function changedGoals(prev: Record<string, GoalSummary>, next: Record<str
   return out;
 }
 
+/** Whether two goal-event lists say the same thing (an unchanged refetch): same length, events equal field by field. */
+export function sameGoalEvents(a: readonly GoalEvent[], b: readonly GoalEvent[]): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+  return a.every((e, i) => b[i].kind === e.kind && b[i].text === e.text && b[i].at === e.at && b[i].by === e.by);
+}
+
 /** What placeGoalLines needs of an item: when it happened, and whether it is a goal row it put there. */
 export interface Placeable {
   at?: number;

@@ -331,7 +331,7 @@ describe("goal history and clear-on-open (tickets 348, 350)", () => {
     await actions.enter(row);
     assert.equal(host.viewing, "/nowhere/s.jsonl");
     await until(() => asked.length > 0);
-    assert.deepEqual(asked, [{ type: "goal", action: "clear", sessionId: "uuid-1", by: "user" }]);
+    assert.deepEqual(asked, [{ type: "goal", action: "clear", sessionId: "uuid-1" }]);
   });
 
   it("opening a session whose goal is still open leaves the goal alone", async () => {

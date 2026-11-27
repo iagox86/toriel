@@ -49,7 +49,7 @@ import { guardClicks } from "./click-guard.ts";
 import { autocompleteMaxVisible, hideThinkingBlock, wheelScrollLines } from "./pi-settings.ts";
 import { SessionActions } from "./session-actions.ts";
 import type { GoalEvent, GoalSummary } from "./goals.ts";
-import { changedGoals, goalLineText, placeGoalLines } from "./goal-lines.ts";
+import { changedGoals, goalLineText, placeGoalLines, sameGoalEvents } from "./goal-lines.ts";
 import { SwitcherActions } from "./switcher-actions.ts";
 import { killServer } from "./lifecycle.ts";
 import { compareDaemon, describeDaemon, type DaemonVerdict, type Hello } from "./version-check.ts";
@@ -729,7 +729,9 @@ class Controller {
     if (key === undefined) {
       return;
     }
-    if (this.placeGoals(key) && key === this.viewing) {
+    // every view build places the cached log first (goalLines), so a fetch that repeats it has nothing new: no re-place, no rebuild
+    const alreadyPlaced = sameGoalEvents(before, events) && (this.views.get(key)?.items.some((i) => i.goalLine) ?? false);
+    if (!alreadyPlaced && this.placeGoals(key) && key === this.viewing) {
       this.rebuildChat();
     }
     const newest = events.at(-1);

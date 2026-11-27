@@ -236,12 +236,13 @@ export class SwitcherActions {
     this.h.viewing = s.key;
     if (!this.h.views.has(s.key)) {
       this.h.views.set(s.key, { ...newView(), items: itemsFromFile(s.key, this.h.tui, s.cwd ?? process.cwd()) });
-      this.h.goalLines(s.key);
     }
+    // also for a view that already existed: live events build a view without ever requesting a history (controller.ts), so its goal rows were never placed
+    this.h.goalLines(s.key);
     // opening the session is the acknowledgment of its finished goal (ticket 350): only this explicit open clears it, never an agent
     // turn, a scheduled prompt or a daemon event; the clear leaves its "goal cleared" line (ticket 348)
     if (s.goalDone && s.sessionId !== undefined) {
-      this.fire(this.h.request({ type: "goal", action: "clear", sessionId: s.sessionId, by: "user" }, 5000), "clearing the finished goal");
+      this.fire(this.h.request({ type: "goal", action: "clear", sessionId: s.sessionId }, 5000), "clearing the finished goal");
     }
     this.close();
     this.h.rebuildChat();
