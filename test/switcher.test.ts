@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { type SwitcherSession, Switcher } from "../src/switcher.ts";
+import { attention } from "../src/theme.ts";
+import { WAITING_NOTE } from "../src/session-tree.ts";
 
 const session = (key: string, group: string | undefined, state: SwitcherSession["state"] = "idle"): SwitcherSession =>
   ({ key, name: key, group, state, age: "1h", ageMs: 3600_000 }) as SwitcherSession;
@@ -94,5 +96,22 @@ describe("switcher group folding", () => {
     const row = lines.find((l) => l.startsWith("c  k")) ?? "";
     assert.ok(row, `no row with the c marker: ${JSON.stringify(lines)}`);
     assert.match(row, /compacting/);
+  });
+});
+
+describe("switcher row markers", () => {
+  it("marks a badly ended subagent with the dead glyph in the attention style, and still gives the bang to one waiting on permission", () => {
+    const sw = new Switcher();
+    sw.sessions = [
+      { ...session("d", undefined), subagentFail: true },
+      { ...session("e", undefined), note: WAITING_NOTE, subagentFail: true },
+    ];
+    sw.refresh();
+    const raw = sw.render(100);
+    const failLine = raw.find((l) => strip(l).startsWith("x  d")) ?? "";
+    assert.ok(failLine, `no row with the x marker: ${JSON.stringify(raw.map(strip))}`);
+    assert.ok(failLine.includes(attention("x")), "the x is drawn in the attention style");
+    const waitLine = raw.find((l) => strip(l).startsWith("!  e")) ?? "";
+    assert.ok(waitLine, `no row with the ! marker: ${JSON.stringify(raw.map(strip))}`);
   });
 });

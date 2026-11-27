@@ -6,6 +6,7 @@ import { fmtAge, firstMessageLabel } from "./format.ts";
 import { type GroupsFile, isParked } from "./groups.ts";
 import type { SessionMeta } from "./shared.ts";
 import { budgetText } from "./subagent-budget.ts";
+import { badEnd, endedPrefix } from "./subagent-exit.ts";
 import { WAITING_NOTE } from "./session-tree.ts";
 import type { SessionState, SwitcherSession } from "./switcher.ts";
 
@@ -81,12 +82,21 @@ export function buildSessionList(inp: ListInputs): SwitcherSession[] {
       note = "crashed - prompt respawns";
     }
     const modified = info?.modified ?? 0;
-    const description =
+    let description =
       note ||
       (sessionId ? inp.groups.summaries?.[sessionId]?.text : undefined) ||
       inp.summaries.get(key) ||
       info?.lastActivity ||
       (explicitName ? (first ?? path.basename(cwd)) : path.basename(cwd));
+    const subagent = meta?.subagent;
+    const subagentFail = subagent && badEnd(subagent.state) ? true : undefined;
+    if (subagent?.state === "running") {
+      // a subagent that is still running shows how much of its budget it has used, ahead of the usual text
+      description = `${budgetText(subagent)} - ${description}`;
+    } else if (subagent && badEnd(subagent.state)) {
+      // a subagent that ended badly says so up front, with the reason it was cut off
+      description = `${endedPrefix(subagent.state, subagent.note)} - ${description}`;
+    }
     list.push({
       key,
       // Unnamed sessions show their first message as the name; the project
@@ -96,6 +106,7 @@ export function buildSessionList(inp: ListInputs): SwitcherSession[] {
       state,
       muted: !!meta?.externallyLive,
       finished: meta?.subagent ? meta.subagent.state !== "running" && meta.subagent.delivered : undefined,
+      subagentFail,
       daemonId: meta?.id,
       sessionId,
       cwd,
@@ -109,8 +120,7 @@ export function buildSessionList(inp: ListInputs): SwitcherSession[] {
       ageMs: modified > 0 && !isParked(inp.groups, sessionId, modified) ? inp.now - modified : undefined,
       parked: isParked(inp.groups, sessionId, modified),
       model: meta?.model ? meta.model.split("/").pop() : info?.model,
-      // a subagent that is still running shows how much of its budget it has used, ahead of the usual text
-      description: meta?.subagent?.state === "running" ? `${budgetText(meta.subagent)} - ${description}` : description,
+      description,
     });
   }
   return list;

@@ -18,7 +18,7 @@ import { detachFromParent, loadLineage, parentMap, recordSubagent, subagentDepth
 import { log } from "./log.ts";
 import { loadSettings } from "./settings.ts";
 import { formatReceived } from "./received.ts";
-import { verbLine } from "./subagent-exit.ts";
+import { scrubSecrets, verbLine } from "./subagent-exit.ts";
 import {
   childBudget,
   describeRecord,
@@ -212,7 +212,7 @@ export class SubagentManager {
     }
     rec.tokens += messageTokens(message.usage);
     rec.lastStop = message.stopReason;
-    rec.lastError = message.errorMessage;
+    rec.lastError = message.errorMessage ? scrubSecrets(message.errorMessage) : undefined;
     this.ctx().hub.broadcastSessions(); // the budget figure in the UI moves with each message
     const why = limitBreach({ turns: rec.turns, maxTurns: rec.maxTurns, tokens: rec.tokens, budget: rec.budget, continuing: message.stopReason === "toolUse" });
     if (why) {
@@ -407,7 +407,7 @@ export class SubagentManager {
       await (child.child as NonNullable<DaemonSession["child"]>).prompt(cmd.task);
       void settled.then(() => this.finish(rec, "done"));
     } catch (err) {
-      await this.finish(rec, "failed", errText(err));
+      await this.finish(rec, "failed", scrubSecrets(errText(err)));
     }
     ctx.hub.broadcastSessions();
     return rec;
