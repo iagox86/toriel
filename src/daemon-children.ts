@@ -57,6 +57,11 @@ export interface StartOptions {
 }
 
 
+/** The environment the toriel_agent tool reads in a delegating child: the pair the extension registers the tools on. The single source of truth for the delegation variables: test/child-env.test.ts derives the tested set from this output. */
+export function delegateEnv(types: string): Record<string, string> {
+  return { TORIEL_CAN_SPAWN: "1", TORIEL_AGENT_TYPES: types };
+}
+
 export class ChildManager {
   private readonly hub: ClientHub;
   /** Newest usage report per provider (all sessions on a provider share one account). */
@@ -123,7 +128,7 @@ export class ChildManager {
       return {};
     }
     const types = loadAgents(s.cwd).agents.map((a) => `- ${a.name}: ${a.description}`).join("\n");
-    return { TORIEL_CAN_SPAWN: "1", TORIEL_AGENT_TYPES: types };
+    return delegateEnv(types);
   }
 
   /**

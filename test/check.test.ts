@@ -1,7 +1,50 @@
 // `npm run check` (ticket 340): which steps run, when the test lock is abandoned, and what the summary prints.
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { chooseSteps, firstLine, LOCK_STALE_MS, lockIsStale, MAX_FAILURES_SHOWN, pickLines, testSummaryLines } from "../scripts/check-lib.ts";
+import { chooseSteps, firstLine, LOCK_STALE_MS, lockIsStale, MAX_FAILURES_SHOWN, pickLines, testSummaryLines, type TestSummary } from "../scripts/check-lib.ts";
+import checkReporter, { type EventData } from "../scripts/check-reporter.ts";
+import { isTestFileArg } from "../scripts/test-env.ts";
+
+describe("npm test's file arguments", () => {
+  it("sees a test file argument but not a flag or a flag's value, so flags alone still run every file", () => {
+    assert.equal(isTestFileArg("test/a.test.ts"), true);
+    assert.equal(isTestFileArg("a.test.ts"), true);
+    assert.equal(isTestFileArg("x.mjs"), true);
+    assert.equal(isTestFileArg("--test-name-pattern=foo.ts"), false);
+    assert.equal(isTestFileArg("--test-name-pattern"), false);
+    assert.equal(isTestFileArg("-w"), false);
+  });
+});
+
+describe("the check reporter", () => {
+  const summaryOf = async (events: Array<{ type: string; data: EventData }>): Promise<TestSummary> => {
+    const source = async function* (): AsyncGenerator<{ type: string; data: EventData }> {
+      for (const e of events) {
+        yield e;
+      }
+    };
+    let out = "";
+    for await (const line of checkReporter(source())) {
+      out += line;
+    }
+    return JSON.parse(out) as TestSummary;
+  };
+
+  it("counts a failing todo test as skipped, as node --test treats it (it exits 0 there)", async () => {
+    const fail = (todo: unknown): Array<{ type: string; data: EventData }> => [
+      { type: "test:start", data: { file: "/r/test/a.test.ts", name: "t", nesting: 0, todo } },
+      { type: "test:fail", data: { file: "/r/test/a.test.ts", name: "t", nesting: 0, todo, details: { error: { message: "boom" } } } },
+    ];
+    const todo = await summaryOf(fail("not finished yet"));
+    assert.equal(todo.failed, 0);
+    assert.equal(todo.skipped, 1);
+    assert.deepEqual(todo.failures, []);
+    const plain = await summaryOf(fail(false));
+    assert.equal(plain.failed, 1);
+    assert.equal(plain.skipped, 0);
+    assert.equal(plain.failures[0]?.message, "boom");
+  });
+});
 
 describe("which steps a check runs", () => {
   it("runs everything by default, only the tests for named files or a name pattern, and only the named steps when given", () => {

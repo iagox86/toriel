@@ -33,3 +33,8 @@ export function allTestFiles(root: string = REPO_ROOT): string[] {
     .sort()
     .map((f) => path.join("test", f));
 }
+
+/** Whether a `npm test` argument names a test file: not a flag, and matching a script/test extension. A flag's value such as `--test-name-pattern=foo.ts` rides on its flag's dash, so flags alone still run every file. */
+export function isTestFileArg(a: string): boolean {
+  return !a.startsWith("-") && /\.(test\.)?[cm]?[jt]s$/.test(a);
+}

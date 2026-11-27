@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { SESSION_ENV, withoutSessionEnv } from "../scripts/test-env.ts";
 import { bangEnv, CHILD_ENV_KEYS, childEnv, sandboxWritableRoots } from "../src/child-env.ts";
+import { delegateEnv } from "../src/daemon-children.ts";
 import { BACKGROUND_COMMAND as DAEMON_COMMAND } from "../src/daemon-handlers-ops.ts";
 import { BACKGROUND_COMMAND as EXTENSION_COMMAND } from "../pi/extensions/toriel-jobs.ts";
 
@@ -126,6 +127,8 @@ describe("the background command name", () => {
 
 describe("what a test run drops from a surrounding session (ticket 339)", () => {
   it("lists every variable the daemon sets on a child, so a test inside a sandboxed, scoped session sees none of them", () => {
+    // the extras turn on every conditional branch childEnv has (session id, scope pair, sandbox pair and tmp, every MCP/
+    // file-history/plan/freshness switch), so any new conditional key shows up in this set
     const full = childEnv({ sessionId: "abc", sessionFile: "/f" }, "/sock", {}, { root: "/w", mode: "deny" }, {
       sharedDir: "/s",
       tmpDir: "/t",
@@ -137,13 +140,15 @@ describe("what a test run drops from a surrounding session (ticket 339)", () => 
       planDir: "/p",
       freshness: false,
     });
-    const set = [...Object.keys(full), "TORIEL_CAN_SPAWN", "TORIEL_AGENT_TYPES"];
+    // the delegation pair comes straight from delegateEnv's output, so a new key there fails this test until CHILD_ENV_KEYS lists it
+    const fullWithDelegation = { ...full, ...delegateEnv("types") };
+    const set = Object.keys(fullWithDelegation);
     assert.deepEqual(
       set.filter((k) => !CHILD_ENV_KEYS.includes(k)),
       [],
-      "a key childEnv sets is missing from CHILD_ENV_KEYS",
+      "a key the daemon sets on a child is missing from CHILD_ENV_KEYS",
     );
-    assert.deepEqual(Object.keys(withoutSessionEnv({ ...full, PATH: "/bin", TORIEL_PROFILE: "x", TORIEL_TIMING: "1" })), ["PATH"]);
+    assert.deepEqual(Object.keys(withoutSessionEnv({ ...fullWithDelegation, PATH: "/bin", TORIEL_PROFILE: "x", TORIEL_TIMING: "1" })), ["PATH"]);
     assert.ok(SESSION_ENV.includes("TORIEL_SANDBOX") && SESSION_ENV.includes("TORIEL_SCOPE_ROOT"));
   });
 });

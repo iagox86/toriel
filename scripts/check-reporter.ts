@@ -2,7 +2,7 @@
 // line, and yields one JSON TestSummary at the end. check.ts sends it to a file next to the log and prints from that.
 import { type Failure, firstLine, type TestSummary } from "./check-lib.ts";
 
-interface EventData {
+export interface EventData {
   name?: string;
   nesting?: number;
   file?: string;
@@ -46,6 +46,11 @@ export default async function* checkReporter(source: AsyncIterable<{ type: strin
       continue;
     }
     if (suite && (data.details?.error as { failureType?: string } | undefined)?.failureType === "subtestsFailed") {
+      continue;
+    }
+    // node --test exits 0 for a failing todo test, so the summary must not fail the step on one either
+    if (data.todo) {
+      summary.skipped++;
       continue;
     }
     summary.failed++;

@@ -100,7 +100,8 @@ async function lock(): Promise<() => void> {
       for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
         process.on(sig, () => {
           release();
-          process.exit(130);
+          // the usual shell convention: 128 + the signal number
+          process.exit(128 + { SIGINT: 2, SIGTERM: 15, SIGHUP: 1 }[sig]);
         });
       }
       return release;
@@ -111,8 +112,15 @@ async function lock(): Promise<() => void> {
     }
     const owner = readOwner();
     if (lockIsStale(owner, alive, Date.now())) {
-      fs.rmSync(LOCK, { force: true });
-      continue;
+      // the takeover is one atomic step: the rename either moves the dead lock (gone for the next racer, whose own
+      // rename then throws) or throws because another run moved it a moment ago - rmSync would let two racers that
+      // both saw the lock stale take it one after the other
+      try {
+        fs.renameSync(LOCK, `${LOCK}.stale-${process.pid}-${Math.random().toString(36).slice(2)}`);
+        continue;
+      } catch {
+        // lost the race: fall through and read the lock again
+      }
     }
     if (!told && owner) {
       console.log(`waiting for another test run to finish (pid ${owner.pid}, ${owner.root})`);

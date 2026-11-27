@@ -272,26 +272,33 @@ export class SubagentManager {
     rec.note = forced?.note ?? abnormal?.note ?? note ?? rec.note;
     rec.endedAt = Date.now();
     this.forced.delete(rec.handle);
+    // the slot is free from here on: hand it to the next waiting spawn now, before the awaits below, so a spawn (or a
+    // depth>0 refusal check) arriving in that gap cannot take it ahead of the queue (first come first served, ticket 341)
+    this.wakeWaiters();
     const ctx = this.ctx();
     const child = ctx.registry.get(rec.session);
     try {
       if (child?.child) {
-        rec.result = subagentResultText((await child.child.getMessages()) as Array<{ role?: string; content?: unknown }>);
+        try {
+          rec.result = subagentResultText((await child.child.getMessages()) as Array<{ role?: string; content?: unknown }>);
+        } catch (err) {
+          log(`subagent #${rec.handle}: could not read its last answer: ${errText(err)}`);
+        }
       }
-    } catch (err) {
-      log(`subagent #${rec.handle}: could not read its last answer: ${errText(err)}`);
+      this.settling.delete(rec.session);
+      if (child?.child) {
+        await ctx.children.deactivate(child);
+      }
+    } finally {
+      // even when the awaited part throws, the waiting spawns and the foreground call must not hang on this record
+      log(`subagent #${rec.handle} (${rec.agent}) ${rec.state}${rec.note ? `: ${rec.note}` : ""}`);
+      this.wakeWaiters();
+      ctx.hub.broadcastSessions();
+      for (const wake of this.ending.get(rec.handle) ?? []) {
+        wake();
+      }
+      this.ending.delete(rec.handle);
     }
-    this.settling.delete(rec.session);
-    if (child?.child) {
-      await ctx.children.deactivate(child);
-    }
-    log(`subagent #${rec.handle} (${rec.agent}) ${rec.state}${rec.note ? `: ${rec.note}` : ""}`);
-    this.wakeWaiters();
-    ctx.hub.broadcastSessions();
-    for (const wake of this.ending.get(rec.handle) ?? []) {
-      wake();
-    }
-    this.ending.delete(rec.handle);
   }
 
   /** How many spawns are waiting for a slot. */
@@ -305,16 +312,16 @@ export class SubagentManager {
    * (the caller went away).
    */
   private waitForSlot(signal: AbortSignal | undefined, label: string): Promise<void> {
+    const cancelled = (): Error => new Error("cancelled while waiting for a free subagent slot");
+    // an already-given-up caller takes no slot, fast path included
+    if (signal?.aborted) {
+      return Promise.reject(cancelled());
+    }
     if (this.waiting.length === 0 && slotFree(this.book.running().length, this.reserved, this.limits)) {
       this.reserved++;
       return Promise.resolve();
     }
     return new Promise<void>((resolve, reject) => {
-      const cancelled = (): Error => new Error("cancelled while waiting for a free subagent slot");
-      if (signal?.aborted) {
-        reject(cancelled());
-        return;
-      }
       const entry = {
         go: (): void => {
           signal?.removeEventListener("abort", onAbort);
@@ -423,6 +430,10 @@ export class SubagentManager {
     let name: string;
     let rec: SubagentRecord;
     try {
+      // the caller may have gone away while its spawn held the slot: give the slot back and never start for it
+      if (held && signal?.aborted) {
+        throw new Error("cancelled while waiting for a free subagent slot");
+      }
       // from here on synchronous with the record below, so parallel calls cannot both slip past a limit
       if (held) {
         refuse(); // the per-parent count may have moved while it waited
