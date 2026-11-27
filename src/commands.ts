@@ -147,8 +147,8 @@ export const SWITCHER_COMMANDS = [
   },
   {
     name: "park", needsSession: true,
-    description: "park the highlighted session: shown in the oldest colour until you use it again",
-    help: "Parking is a marker, not a state: the session is drawn in the oldest colour until you use it again. A parked subagent is hidden under its parent (/filter shows it).\n\nExample: /park -u   (unpark)",
+    description: "park the highlighted session: oldest colour until reused, idle one stopped, top-level filed under Archive",
+    help: "Parking is a marker, not a state: the session is drawn in the oldest colour until you use it again, and using it again unparks it (the session stays in Archive). Parking also stops an idle session and moves a top-level session to the bottom of the Archive group (created if missing); a parked subagent stays hidden under its parent (/filter shows it) and keeps its group. -u only clears the marker.",
     build: (cmd) => {
       cmd.option("-u, --undo", "unpark it");
     },
@@ -289,8 +289,8 @@ export const SESSION_COMMANDS = [
   },
   {
     name: "park",
-    description: "park this session (oldest colour in the switcher until used again), stop it if idle, and go back to the list",
-    help: "Marks the session parked (oldest colour in the list; hidden if it is a subagent), stops it if it is idle, and goes back to the list. Using it again unparks it.",
+    description: "park this session (oldest colour in the switcher until used again), stop it if idle, archive it, and go back to the list",
+    help: "Marks the session parked (oldest colour in the list; hidden if it is a subagent), stops it if it is idle, and goes back to the list. A top-level session also moves to the bottom of the Archive group (created if missing) and stays there; a subagent only hides under its parent. Using it again unparks it.",
   },
   {
     name: "help",

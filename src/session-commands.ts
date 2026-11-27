@@ -20,7 +20,7 @@ import { mayWake } from "./wake-on-type.ts";
 import { forkName, placeFork } from "./fork-placement.ts";
 import { loadGroups, saveGroups, withComment, withParked } from "./groups.ts";
 import type { Host } from "./host.ts";
-import { displayName } from "./session-list.ts";
+import { archiveSession, displayName } from "./session-list.ts";
 import { runFeedback } from "./feedback-command.ts";
 import { askBtw, saveBtw } from "./btw.ts";
 import { runPerformance, savePerformance } from "./performance.ts";
@@ -229,7 +229,7 @@ export class SessionCommands {
     }
   }
 
-  /** Mark the viewed session parked, stop its process unless it is busy, and return to the switcher. */
+  /** Mark the viewed session parked (top-level: also filed under Archive), stop its process unless it is busy, and return to the switcher. */
   private async park(): Promise<void> {
     const key = this.h.viewing;
     const meta = this.viewedMeta();
@@ -240,21 +240,28 @@ export class SessionCommands {
     }
     const groups = loadGroups();
     groups.parked = withParked(groups, sessionId, true);
+    // File a top-level session under Archive as well; a child stays hidden under its parent.
+    const ordered = this.h.switcher.sessions;
+    const row = ordered.find((x) => x.sessionId === sessionId);
+    let archived = false;
+    if (row && (row.depth ?? 0) === 0) {
+      archived = archiveSession(groups, ordered, row).changed;
+    }
     saveGroups(groups);
     if (meta?.published) {
       // parking closes the chat channel and the session stays unpublished until /publish says otherwise (ticket 269)
       await this.h.request({ type: "publish", sessionId, on: false, resume: true }).catch(() => undefined);
     }
-    let note = "parked";
+    let note = archived ? "parked and archived" : "parked";
     if (meta?.active) {
       if (meta.streaming || meta.pendingDialog) {
-        note = "parked (still running: it is working or waiting on you)";
+        note = `${note} (still running: it is working or waiting on you)`;
       } else {
         try {
           await this.h.request({ type: "deactivate", session: meta.id });
-          note = "parked and stopped";
+          note = archived ? "parked, archived and stopped" : "parked and stopped";
         } catch (err) {
-          note = `parked, but stopping it failed: ${errText(err)}`;
+          note = `${archived ? "parked and archived" : "parked"}, but stopping it failed: ${errText(err)}`;
         }
       }
     }

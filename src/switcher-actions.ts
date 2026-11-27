@@ -15,6 +15,7 @@ import {
   buildSessionList,
   isExternalRow,
   appendUnranked,
+  archiveSession,
   deleteEmptyGroup,
   moveGroup,
   moveSession,
@@ -22,7 +23,7 @@ import {
   type MutationResult,
 } from "./session-list.ts";
 import { detachFromParent, loadLineage, parentMap } from "./lineage.ts";
-import { arrangeTree, markFinishedSubagents } from "./session-tree.ts";
+import { arrangeTree, markFinishedSubagents, WAITING_NOTE } from "./session-tree.ts";
 import { styleHelp, styleListing } from "./help-format.ts";
 import { INIT_PROMPT } from "./init-prompt.ts";
 import { loadAgentsChecked } from "./agents.ts";
@@ -582,7 +583,12 @@ export class SwitcherActions {
           return;
         }
         const undo = call.opts.undo === true;
+        const row = this.h.switcher.sessions.find((x) => x.sessionId === t.sessionId);
         this.groups.parked = withParked(this.groups, t.sessionId, !undo);
+        let archived = false;
+        if (!undo && row && (row.depth ?? 0) === 0) {
+          archived = archiveSession(this.groups, this.h.switcher.sessions, row).changed;
+        }
         saveGroups(this.groups);
         if (!undo && t.published) {
           // parking closes the chat channel; using the session again publishes it again (ticket 269)
@@ -590,8 +596,22 @@ export class SwitcherActions {
         } else if (undo) {
           await this.h.request({ type: "publish", sessionId: t.sessionId, unpark: true }).catch(() => undefined);
         }
+        let hint: string;
+        if (undo) {
+          hint = `${t.name} unparked`;
+        } else {
+          const working = t.state === "streaming" || t.state === "compacting" || row?.note === WAITING_NOTE;
+          hint = `${t.name} parked${archived ? " and archived" : ""}${working ? " (still running: it is working or waiting on you)" : ""} (using it again unparks it)`;
+          if (!working && t.state === "idle" && t.daemonId !== undefined) {
+            try {
+              await this.h.request({ type: "deactivate", session: t.daemonId });
+            } catch (err) {
+              hint = `${hint} - stopping it failed: ${errText(err)}`;
+            }
+          }
+        }
         this.refresh();
-        this.h.switcher.hint = undo ? `${t.name} unparked` : `${t.name} parked (using it again unparks it)`;
+        this.h.switcher.hint = hint;
       }),
       comment: needsTarget("comment", async (t, arg, call) => {
         if (!t.sessionId) {

@@ -3,7 +3,7 @@
 // shift-move and group delete. No I/O, no UI - everything takes plain data.
 import * as path from "node:path";
 import { fmtAge, firstMessageLabel } from "./format.ts";
-import { type GroupsFile, isParked } from "./groups.ts";
+import { ARCHIVE_GROUP, type GroupsFile, isParked, resolveGroup } from "./groups.ts";
 import type { SessionMeta } from "./shared.ts";
 import { budgetText } from "./subagent-budget.ts";
 import { badEnd, endedPrefix } from "./subagent-exit.ts";
@@ -246,6 +246,68 @@ export function moveSession(groups: GroupsFile, sessions: SwitcherSession[], s: 
     }
   } else {
     return { changed: false, hint: step > 0 ? "already at the bottom" : "already at the top" };
+  }
+  groups.order = sections.flatMap((sec) => sec.uuids.flatMap((id) => [id, ...(below.get(id) ?? [])]));
+  return { changed: true };
+}
+
+/**
+ * /park on a top-level session: file it (with everything below it) at the
+ * bottom of the Archive group, creating the group if missing. Mutates
+ * `groups.groups`, `groups.assignments` and `groups.order`; `ordered` is the
+ * switcher's ordered list (hidden-but-ordered rows included). The park marker
+ * itself is the caller's job (withParked).
+ */
+export function archiveSession(groups: GroupsFile, ordered: readonly SwitcherSession[], s: SwitcherSession): MutationResult {
+  const uuid = s.sessionId;
+  if (uuid === undefined) {
+    return { changed: false };
+  }
+  if ((s.depth ?? 0) > 0) {
+    return { changed: false, hint: "children stay under the parent" };
+  }
+  // A parent moves with everything below it: only top-level sessions are placed, descendants follow.
+  const below = new Map<string, string[]>();
+  let owner: string | undefined;
+  for (const x of ordered) {
+    if (x.sessionId === undefined) {
+      continue;
+    }
+    if ((x.depth ?? 0) === 0) {
+      owner = x.sessionId;
+    } else if (owner !== undefined) {
+      below.set(owner, [...(below.get(owner) ?? []), x.sessionId]);
+    }
+  }
+  // Section structure INCLUDING empty groups: [ungrouped, ...groups].
+  const sections: Array<{ group: string | null; uuids: string[] }> = [{ group: null, uuids: [] }];
+  for (const g of groups.groups) {
+    sections.push({ group: g, uuids: [] });
+  }
+  const sectionIndex = (g: string | null) => (g === null ? 0 : 1 + groups.groups.indexOf(g));
+  for (const x of ordered) {
+    if (x.sessionId !== undefined && (x.depth ?? 0) === 0) {
+      sections[sectionIndex(x.group ?? null)].uuids.push(x.sessionId);
+    }
+  }
+  const source = sections[sectionIndex(s.group ?? null)];
+  const pos = source.uuids.indexOf(uuid);
+  if (pos === -1) {
+    return { changed: false };
+  }
+  source.uuids.splice(pos, 1);
+  const group = resolveGroup(groups, ARCHIVE_GROUP);
+  // resolveGroup either found the group (its section is already in `sections`,
+  // built from the same list) or appended it: that section goes last.
+  const existing = sections[1 + groups.groups.indexOf(group)];
+  const target = existing ?? { group, uuids: [] as string[] };
+  if (!existing) {
+    sections.push(target);
+  }
+  target.uuids.push(uuid);
+  groups.assignments[uuid] = group;
+  for (const kid of below.get(uuid) ?? []) {
+    groups.assignments[kid] = group;
   }
   groups.order = sections.flatMap((sec) => sec.uuids.flatMap((id) => [id, ...(below.get(id) ?? [])]));
   return { changed: true };

@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import type { GroupsFile } from "../src/groups.ts";
 import {
   appendUnranked,
+  archiveSession,
   buildSessionList,
   deleteEmptyGroup,
   displayName,
@@ -226,6 +227,74 @@ describe("moveSession", () => {
     const groups: GroupsFile = { groups: [], assignments: {} };
     const s: SwitcherSession = { key: "k", name: "k", state: "inactive" };
     assert.equal(moveSession(groups, [s], s, 1).changed, false);
+  });
+});
+
+describe("archiveSession", () => {
+  const row = (id: string, group?: string, depth?: number): SwitcherSession => ({
+    key: id,
+    name: id,
+    state: "inactive",
+    sessionId: id,
+    group,
+    ...(depth !== undefined ? { depth } : {}),
+  });
+
+  it("moves a top-level session with its subtree to the bottom of a new Archive group", () => {
+    const groups: GroupsFile = { groups: ["g"], assignments: { a: "g", kid: "g", other: "g" } };
+    const list = [row("a", "g"), row("kid", "g", 1), row("b"), row("other", "g")];
+    const res = archiveSession(groups, list, list[0]);
+    assert.equal(res.changed, true);
+    assert.deepEqual(groups.groups, ["g", "Archive"]);
+    assert.equal(groups.assignments.a, "Archive");
+    assert.equal(groups.assignments.kid, "Archive");
+    assert.deepEqual(groups.order, ["b", "other", "a", "kid"]);
+  });
+
+  it("uses the existing Archive group when one is there, whatever its casing", () => {
+    const groups: GroupsFile = { groups: ["archive"], assignments: { a: "g" } };
+    const list = [row("a", "g"), row("b", "archive")];
+    const res = archiveSession(groups, list, list[0]);
+    assert.equal(res.changed, true);
+    assert.deepEqual(groups.groups, ["archive"]);
+    assert.equal(groups.assignments.a, "archive");
+    assert.deepEqual(groups.order, ["b", "a"]);
+  });
+
+  it("appends a session that is already in Archive to its bottom", () => {
+    const groups: GroupsFile = { groups: ["Archive"], assignments: { a: "Archive", b: "Archive" } };
+    const list = [row("a", "Archive"), row("b", "Archive")];
+    const res = archiveSession(groups, list, list[0]);
+    assert.equal(res.changed, true);
+    assert.deepEqual(groups.groups, ["Archive"]);
+    assert.deepEqual(groups.order, ["b", "a"]);
+  });
+
+  it("moves an ungrouped session into Archive in an empty groups file", () => {
+    const groups: GroupsFile = { groups: [], assignments: {} };
+    const list = [row("a")];
+    const res = archiveSession(groups, list, list[0]);
+    assert.equal(res.changed, true);
+    assert.deepEqual(groups.groups, ["Archive"]);
+    assert.deepEqual(groups.order, ["a"]);
+  });
+
+  it("does nothing for a child row", () => {
+    const groups: GroupsFile = { groups: ["g"], assignments: { kid: "g" }, order: ["kid"] };
+    const kid = row("kid", "g", 1);
+    const res = archiveSession(groups, [kid], kid);
+    assert.equal(res.changed, false);
+    assert.deepEqual(groups.groups, ["g"]);
+    assert.deepEqual(groups.assignments, { kid: "g" });
+    assert.deepEqual(groups.order, ["kid"]);
+  });
+
+  it("does nothing for a session without an id", () => {
+    const groups: GroupsFile = { groups: [], assignments: {} };
+    const s: SwitcherSession = { key: "k", name: "k", state: "inactive" };
+    assert.equal(archiveSession(groups, [s], s).changed, false);
+    assert.deepEqual(groups.groups, []);
+    assert.equal(groups.order, undefined);
   });
 });
 
