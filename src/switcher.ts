@@ -106,6 +106,8 @@ type Row = { kind: "header"; title: string; count: number; collapsed: boolean; t
 export class Switcher extends Container implements Focusable {
   focused = false;
   sessions: SwitcherSession[] = [];
+  /** Every session row arranged and sorted, before external and /filter hiding - parked lookups and below-maps need the whole list. */
+  orderedAll: SwitcherSession[] = [];
   groups: string[] = [];
   assignments: Record<string, string | null> = {};
   counts = { running: 0, waiting: 0 };

@@ -15,6 +15,7 @@ import {
   buildSessionList,
   isExternalRow,
   appendUnranked,
+  archiveSession,
   deleteEmptyGroup,
   moveGroup,
   moveSession,
@@ -22,7 +23,7 @@ import {
   type MutationResult,
 } from "./session-list.ts";
 import { detachFromParent, loadLineage, parentMap } from "./lineage.ts";
-import { arrangeTree, markFinishedSubagents } from "./session-tree.ts";
+import { arrangeTree, markFinishedSubagents, WAITING_NOTE } from "./session-tree.ts";
 import { styleHelp, styleListing } from "./help-format.ts";
 import { INIT_PROMPT } from "./init-prompt.ts";
 import { loadAgentsChecked } from "./agents.ts";
@@ -168,6 +169,7 @@ export class SwitcherActions {
     if (order) {
       this.groups.order = order;
     }
+    this.h.switcher.orderedAll = list;
     // an empty file list means the listing has not loaded, not that every session is gone
     const pruned = this.h.local.size > 0 && pruneStale(this.groups, new Set(list.flatMap((s) => (s.sessionId ? [s.sessionId] : []))));
     if (order || pruned) {
@@ -582,7 +584,12 @@ export class SwitcherActions {
           return;
         }
         const undo = call.opts.undo === true;
+        const row = this.h.switcher.orderedAll.find((x) => x.sessionId === t.sessionId);
         this.groups.parked = withParked(this.groups, t.sessionId, !undo);
+        let archived = false;
+        if (!undo && row && (row.depth ?? 0) === 0) {
+          archived = archiveSession(this.groups, this.h.switcher.orderedAll, row).changed;
+        }
         saveGroups(this.groups);
         if (!undo && t.published) {
           // parking closes the chat channel; using the session again publishes it again (ticket 269)
@@ -590,8 +597,25 @@ export class SwitcherActions {
         } else if (undo) {
           await this.h.request({ type: "publish", sessionId: t.sessionId, unpark: true }).catch(() => undefined);
         }
+        // Note shapes as in /park (session-commands.ts): working, stopped, stop
+        // failed or plain parked. The stop outcome replaces the parked note.
+        const working = t.state === "streaming" || t.state === "compacting" || row?.note === WAITING_NOTE;
+        let stopped = "";
+        if (!undo && !working && t.state === "idle" && t.daemonId !== undefined) {
+          try {
+            await this.h.request({ type: "deactivate", session: t.daemonId });
+            stopped = `${t.name} ${archived ? "parked, archived and stopped" : "parked and stopped"}`;
+          } catch (err) {
+            stopped = `${t.name} parked${archived ? " and archived" : ""}, but stopping it failed: ${errText(err)}`;
+          }
+        }
+        const hint = undo
+          ? `${t.name} unparked`
+          : stopped !== ""
+            ? `${stopped} (using it again unparks it)`
+            : `${t.name} parked${archived ? " and archived" : ""}${working ? " (still running: it is working or waiting on you)" : ""} (using it again unparks it)`;
         this.refresh();
-        this.h.switcher.hint = undo ? `${t.name} unparked` : `${t.name} parked (using it again unparks it)`;
+        this.h.switcher.hint = hint;
       }),
       comment: needsTarget("comment", async (t, arg, call) => {
         if (!t.sessionId) {
