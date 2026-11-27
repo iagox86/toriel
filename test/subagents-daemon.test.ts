@@ -469,6 +469,20 @@ describe("daemon: subagents", () => {
     assert.match((await c.request({ type: "agents_op", from: uuid, action: "status", ref: "#1" })).text, /\[failed, 2 turn\(s\)/);
   });
 
+  it("masks the credential in a failed subagent's error text before it reaches the parent or the session meta", async () => {
+    harness = await startDaemon();
+    const { c, uuid } = await parentSession(harness);
+    const r = await spawn(c, uuid, { task: "[secret-error] dig" });
+    assert.equal(r.state, "failed");
+    assert.doesNotMatch(r.text, /ghp_[A-Za-z0-9]{20,}/);
+    assert.match(r.text, /failed: ended with an error: provider exploded: gh\*\*\* rejected the request/);
+    const named = () => c.sessions().find((x) => x.sessionName?.startsWith("worker: look"));
+    await until(() => !!named()?.subagent?.note);
+    const note = named()?.subagent?.note ?? "";
+    assert.doesNotMatch(note, /ghp_[A-Za-z0-9]{20,}/, "the session meta never shows the raw token");
+    assert.match(note, /gh\*\*\*/, "the record's masked failure reaches the session meta");
+  });
+
   it("stops every pi process when the daemon shuts down: live sessions, a background subagent and one still starting", async () => {
     harness = await startDaemon({ FAKE_PI_STARTUP_MS: "1200", FAKE_PI_STAY: "1" });
     const h = harness;
