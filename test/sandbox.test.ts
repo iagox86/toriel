@@ -5,18 +5,16 @@ import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import net from "node:net";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { after, describe, it } from "node:test";
 import { bwrapArgs, derivePolicy, gitPolicy, makeWrap, readSandbox, SANDBOX_ENV, SANDBOX_RW_ENV, SHARED_DIR_ENV, sandboxNote } from "../pi/extensions/lib/sandbox.ts";
+import { FIXTURE_BASE, FIXTURE_SKIP } from "./fixture-base.ts";
 
-// The sandbox hides /tmp, so test trees live in /var/tmp (a scope root under /tmp is refused, tested below).
-const BASE = existsSync("/var/tmp") ? "/var/tmp" : tmpdir();
-// These tests build their fixtures under /var/tmp, which is read-only inside a toriel sandbox (ticket 203): they cannot run there, and the EROFS failures look like broken code.
-const inSandbox = process.env.TORIEL_SANDBOX !== undefined;
-const IN_SANDBOX = "this test builds sandbox fixtures under /var/tmp and cannot run inside a sandbox";
-// Only the tests that build fixtures skip: the rest are pure and run in a sandbox too (ticket 207). The fixtures cannot move to the sandbox's own /tmp, which readSandbox and derivePolicy refuse as a root.
-const FIXTURE = { skip: inSandbox ? IN_SANDBOX : false };
+// Test trees live under /var/tmp (a scope root under /tmp is refused, tested below). Only the tests that build fixtures skip
+// where it is not writable: the rest are pure and run in a sandbox too (ticket 207). The fixtures cannot move to the sandbox's
+// own /tmp, which readSandbox and derivePolicy refuse as a root.
+const BASE = FIXTURE_BASE;
+const FIXTURE = { skip: FIXTURE_SKIP };
 const made: string[] = [];
 function mk(): string {
   const dir = realpathSync(mkdtempSync(join(BASE, "toriel-sandbox-test-")));
@@ -205,7 +203,7 @@ const bwrapUsable = (() => {
   return r.status === 0;
 })();
 
-describe("real bwrap", { skip: inSandbox ? IN_SANDBOX : bwrapUsable ? false : "bwrap is not usable here" }, () => {
+describe("real bwrap", { skip: FIXTURE_SKIP || (bwrapUsable ? false : "bwrap is not usable here") }, () => {
   const run = (cfg: ReturnType<typeof cfgFor>, command: string, cwd: string, extra: string[] = []) => {
     const w = makeWrap(cfg, () => extra);
     assert.ok(w);
