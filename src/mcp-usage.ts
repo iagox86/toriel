@@ -16,7 +16,7 @@ export const DIRECT_SHARE = 0.25;
 /** A server declared at once but called in less than this share of the sessions is worth deferring. */
 export const DEFERRED_SHARE = 0.05;
 /** At most this many session files are read (the newest), so a large history cannot make the doctor slow. */
-const MAX_FILES = 400;
+export const MAX_FILES = 400;
 /** Longest prefix of a session file read, for the same reason: a multi-MB file cannot make the doctor slow either. A session's tool declarations sit at its top (they go into the leading system message), so capping the head keeps what the advice needs; a truncated final line fails to parse and is skipped. */
 export const MAX_FILE_BYTES = 2_000_000;
 
@@ -85,7 +85,7 @@ export function sessionUsage(text: string): { called: boolean; servers: Set<stri
 }
 
 /** The first max bytes of a file as text; undefined when it cannot be read. Reads instead of whole-file `readFileSync`, so a multi-MB session file does not make the doctor slow. */
-function readHead(file: string, max = MAX_FILE_BYTES): string | undefined {
+export function readHead(file: string, max = MAX_FILE_BYTES): string | undefined {
   let fd: number;
   try {
     fd = fs.openSync(file, "r");
@@ -111,7 +111,7 @@ function readHead(file: string, max = MAX_FILE_BYTES): string | undefined {
 }
 
 /** Every .jsonl under `dir` changed since `since`, newest first. A missing directory is none. */
-function sessionFiles(dir: string, since: number): string[] {
+export function sessionFiles(dir: string, since: number): string[] {
   const found: Array<{ file: string; mtime: number }> = [];
   const walk = (d: string): void => {
     let entries: fs.Dirent[];

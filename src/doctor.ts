@@ -21,6 +21,7 @@ import { startupProblems } from "./preflight.ts";
 import { type AuditOptions, auditFindings, type Finding, type Fix, type Level, PI_RESOURCES_DIR } from "./resources.ts";
 import { legacySettingsFile, loadSettings, resolveChildConfig, settingsFile, yamlSettingsFile } from "./settings.ts";
 import { addMcpServer, importMcpJson, readMcpYaml, redactEntry, renderMcpYaml, setMcpServerKey } from "./mcp-config.ts";
+import { type CacheReport, LONG_SESSION_CALLS, LONG_SESSION_CONTEXT, uncachedModels } from "./cache-reporting.ts";
 import { DIRECT_SHARE, exposureAdvice, type McpUsage, USAGE_WINDOW_DAYS } from "./mcp-usage.ts";
 import { piSkillsDirs, skillForServer } from "./mcp.ts";
 import { stalenessReason, stalenessVerdict, type StalenessInput } from "./mcp-staleness.ts";
@@ -88,6 +89,7 @@ export const CATALOG: readonly CatalogEntry[] = [
   { id: "bifrost-models", level: "feature", title: "pi's models.json matches what the bifrost gateway says about each route (context window, output limit)", needsProbe: "bifrost" },
   { id: "mcp-yaml", level: "recommended", title: "toriel's mcp.yaml (the MCP servers) is valid" },
   { id: "mcp-exposure", level: "recommended", title: "each MCP server's exposure fits how often sessions use it (declared at once when most do, found with tool_search otherwise; ticket 304)" },
+  { id: "cache-reporting", level: "recommended", title: "every model with long sessions reports prompt-cache reads (else the cost, toriel_usage and subagent budgets count the whole context on every call; ticket 311)" },
   { id: "mcp-json", level: "recommended", title: "pi's own mcp.json holds no servers (toriel keeps them in mcp.yaml and pi would start the old ones itself)" },
   { id: "chat-bridge-token", level: "feature", title: "the chat bridge's token (the chatto setting's tokenFile or tokenEnv) can be read, and a token file is owner-only" },
   { id: "chat-bridge-package", level: "feature", title: "the chat bridge's package (@chatto/client) is installed, when the chatto setting is on" },
@@ -152,6 +154,8 @@ export interface DoctorOptions extends AuditOptions {
   feedbackDir?: string;
   /** How much recent sessions used each MCP server (ticket 304; reads pi's session files, so only `toriel doctor` passes it). Not set: the exposure check is skipped. */
   mcpUsage?: () => McpUsage;
+  /** Per model, the long recent sessions and the calls that reported a cache read (ticket 311; reads pi's session files, so only `toriel doctor` passes it). Not set: the check is skipped. */
+  cacheReport?: () => CacheReport;
 }
 
 /** Past this much disk, the bundle folders are worth a word (each holds a full copy of a session). */
@@ -377,6 +381,18 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
       });
     }
   }
+  // a route that drops the provider's cached-token count makes every call look like a full re-read: the budgets and costs, which
+  // count fresh tokens, then run 10-30x high (ticket 311: litellm's ollama_chat/ route to Ollama did this)
+  if (opts.cacheReport !== undefined) {
+    for (const { model, longSessions } of uncachedModels(opts.cacheReport())) {
+      out.push({
+        id: "cache-reporting",
+        level: "recommended",
+        message: `${model} reported no prompt-cache read in any call of its last ${longSessions} long sessions (more than ${LONG_SESSION_CALLS} calls, a context over ${LONG_SESSION_CONTEXT / 1000}k; ${USAGE_WINDOW_DAYS} days): the cost, toriel_usage and the subagent budgets then count the whole context on every call. If the server does cache, the route is dropping the count: a litellm route to Ollama should use provider openai with api_base <ollama>/v1, not ollama_chat/`,
+        manual: "the route lives in your gateway's config (litellm or similar), which is machine-specific; doctor does not edit it",
+      });
+    }
+  }
   // an entry set to exposure: codemode needs no check: pi's tool_search searches codemode tools exactly like deferred ones
   // (the server's tools carry tool exposure deferred either way), so they reach every session the same
   // the shipped research-web agent names pi-web-access's tools; without the package it has nothing to search with
@@ -588,6 +604,9 @@ export function runDoctor(opts: DoctorOptions = {}): Check[] {
       return { ...entry, state: "skipped", findings: [], note: "run `toriel doctor` in a terminal to check" };
     }
     // reading the session files takes a moment, so only the CLI does it (ticket 304)
+    if (entry.id === "cache-reporting" && opts.cacheReport === undefined) {
+      return { ...entry, state: "skipped", findings: [], note: "reads the recent sessions: run `toriel doctor` in a terminal to check" };
+    }
     if (entry.id === "mcp-exposure" && opts.mcpUsage === undefined) {
       return { ...entry, state: "skipped", findings: [], note: "reads the recent sessions: run `toriel doctor` in a terminal to check" };
     }
