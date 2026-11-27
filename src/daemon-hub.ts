@@ -1,6 +1,7 @@
 // The connected controller sockets: fan-out of messages to them, and which
 // sockets count as controllers at all.
 import type * as net from "node:net";
+import type { GoalSummary } from "./goals.ts";
 import { encodeLine, type DaemonMessage, type SessionMeta } from "./shared.ts";
 
 export class ClientHub {
@@ -14,12 +15,15 @@ export class ClientHub {
   private readonly observers = new Set<net.Socket>();
   private sessionsDirty = false;
   private readonly metasFor: (socket: net.Socket) => SessionMeta[];
+  /** The goal map that rides along with each session list (ticket 258): the sessions its metas do not cover fall back to it. */
+  private readonly goalsFor?: () => Record<string, GoalSummary>;
 
   private readonly hello?: DaemonMessage;
 
-  /** `metasFor` builds the session list as one particular socket should see it (its own attaches differ); `hello` says which code this daemon runs. */
-  constructor(metasFor: (socket: net.Socket) => SessionMeta[], hello?: DaemonMessage) {
+  /** `metasFor` builds the session list as one particular socket should see it (its own attaches differ); `goalsFor` adds the goal map of ticket 258; `hello` says which code this daemon runs. */
+  constructor(metasFor: (socket: net.Socket) => SessionMeta[], goalsFor?: () => Record<string, GoalSummary>, hello?: DaemonMessage) {
     this.metasFor = metasFor;
+    this.goalsFor = goalsFor;
     this.hello = hello;
   }
 
@@ -103,7 +107,7 @@ export class ClientHub {
 
   sendSessions(socket: net.Socket): void {
     this.flushSessions();
-    this.write(socket, { type: "sessions", sessions: this.metasFor(socket) });
+    this.writeSessions(socket);
   }
 
   /**
@@ -126,8 +130,13 @@ export class ClientHub {
     }
     this.sessionsDirty = false;
     for (const socket of this.controllers) {
-      this.write(socket, { type: "sessions", sessions: this.metasFor(socket) });
+      this.writeSessions(socket);
     }
+  }
+
+  /** The session list, plus the goal map the rows without a live meta read (ticket 258). */
+  private writeSessions(socket: net.Socket): void {
+    this.write(socket, { type: "sessions", sessions: this.metasFor(socket), goals: this.goalsFor?.() });
   }
 
   /** Tell controllers which messages are waiting, in the shape of pi's own queue_update. */

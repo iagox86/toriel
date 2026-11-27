@@ -66,6 +66,8 @@ export const SANDBOX_TMP_DIR = process.env.TORIEL_SANDBOX_TMP_DIR ?? path.join(D
 export const PERMISSIONS_FILE =process.env.TORIEL_PERMISSIONS ?? path.join(DATA_DIR, "toriel", "permissions.json");
 /** The sessions published to chat (ticket 269). */
 export const PUBLISHED_FILE = process.env.TORIEL_PUBLISHED ?? path.join(DATA_DIR, "toriel", "published.json");
+/** One goal text per session (ticket 258). */
+export const GOALS_FILE = process.env.TORIEL_GOALS ?? path.join(DATA_DIR, "toriel", "goals.json");
 export const LINEAGE_FILE =process.env.TORIEL_LINEAGE ?? path.join(DATA_DIR, "toriel", "lineage.json");
 export const SESSION_AGENTS_FILE = process.env.TORIEL_SESSION_AGENTS ?? path.join(DATA_DIR, "toriel", "session-agents.json");
 export const HANDLED_FILE = process.env.TORIEL_HANDLED ?? path.join(DATA_DIR, "toriel", "handled-files.json");
@@ -84,6 +86,8 @@ export const FILE_HISTORY_DIR = process.env.TORIEL_FILE_HISTORY_DIR ?? path.join
 export const PLAN_DIR = process.env.TORIEL_PLAN_DIR ?? path.join(STATE_DIR, "plan-mode");
 /** The one-line summary of each MCP server, remembered from an earlier session (ticket 303): the toriel-mcp extension registers servers with it so the system prompt's server list stays the same when they connect. */
 export const MCP_SUMMARIES_FILE = process.env.TORIEL_MCP_SUMMARIES_FILE ?? path.join(STATE_DIR, "mcp-summaries.json");
+/** When each MCP server's skill was last written by /mcp explore (with the server's tool hash then) and each server's last tool sighting (ticket 308): together these tell whether a skill has gone stale. TORIEL_MCP_EXPLORE_RECORDS_FILE overrides the path daemon-side; children that may stamp it are given the path as TORIEL_MCP_RECORDS. */
+export const MCP_EXPLORE_RECORDS_FILE = process.env.TORIEL_MCP_EXPLORE_RECORDS_FILE ?? path.join(STATE_DIR, "mcp-explore-records.json");
 export const LITELLM_CACHE_FILE = process.env.TORIEL_LITELLM_CACHE ?? path.join(STATE_DIR, "litellm-routes.json");
 
 /**

@@ -2,6 +2,7 @@
 // this structurally; keeping it as an interface makes the dependency explicit
 // and lets the action classes be read (and later tested) on their own.
 import type { ImageBlock } from "./format.ts";
+import type { GoalSummary } from "./goals.ts";
 import type { Attachments } from "./attachments.ts";
 import type { InputEditor } from "./editor.ts";
 import type { SessionMeta, ClientCommand, DistributiveOmit } from "./shared.ts";
@@ -24,6 +25,8 @@ export interface Host {
   switcherLayout: VStack;
   /** Daemon-known sessions by daemon id. */
   sessions: Map<number, SessionMeta>;
+  /** A goal summary per session UUID, from the daemon's session lists (ticket 258): rows without a live meta fall back to it. */
+  goalSummaries: Record<string, GoalSummary>;
   /** Sessions from the filesystem, by session file path. */
   local: Map<string, LocalSession>;
   views: Map<string, SessionView>;

@@ -13,6 +13,7 @@ import { LOCAL_COMMAND_TYPE } from "./daemon-bridge.ts";
 import { deliverToSession } from "./daemon-handlers-bridge.ts";
 import { digestHistory, readHistoryOf, sendHistory } from "./daemon-history.ts";
 import { answerText, recordDecision } from "./decision-log.ts";
+import type { GoalRecord } from "./goals.ts";
 import { autoOn, type DaemonSession, type HeldPrompt, requireIdle } from "./daemon-session.ts";
 import { formatLocalCommand, type LocalResult, runLocal } from "./local-command.ts";
 import { log } from "./log.ts";
@@ -24,7 +25,7 @@ import { setSessionFileCwd } from "./session-header.ts";
 import { encodeLine } from "./shared.ts";
 import { fmtClock, fmtDuration, parseDurationText } from "./when.ts";
 import { MAX_DENY_MS, minDenyMs } from "./settings.ts";
-import { cleanSource } from "./util.ts";
+import { cleanSource, oneLine } from "./util.ts";
 
 /** The longest one stretch of timed auto mode (a forgotten one should not outlive the day). */
 const MAX_AUTO_MS = 24 * 3_600_000;
@@ -201,6 +202,66 @@ export function handlePublish(ctx: DaemonContext, cmd: Cmd<"publish">, res: Resp
     ctx.hub.broadcastSessions();
   }
   res(true, undefined, { published: on });
+}
+
+/** When the *user* marks a live session's goal done, the transcript says so, so the agent drops its own reminders (ticket 258). */
+export const GOAL_DONE_BY_USER_NOTICE = "Goal marked done by user (agent: if your goal was already marked done, ignore remaining goal reminders)";
+
+/** A goal is one status line, not a transcript: one line, controls gone, at most this many characters (ticket 258). */
+const GOAL_TEXT_MAX = 200;
+
+/**
+ * The session's goal (ticket 258): set, done, clear, get, keyed by UUID. Like /publish it only changes the daemon's state, so it never
+ * touches a sleeping session. A set/done answer carries the record after the change, a clear the record it removed, and null when
+ * none results (ticket 258); a mutation that changed something starts a new session list, since the rows show the goal.
+ */
+export function handleGoal(ctx: DaemonContext, cmd: Cmd<"goal">, res: Responder): void {
+  let record: GoalRecord | undefined;
+  let changed = false;
+  const by = cmd.by === "agent" ? "agent" : "user";
+  switch (cmd.action) {
+    case "set": {
+      // strip escape sequences first (oneLine turns a control character into a space, which would leave "[31m" junk in the row), then oneLine collapses newlines and the remaining control characters; the cap keeps a goal a status word
+      const text = oneLine((cmd.text ?? "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")).slice(0, GOAL_TEXT_MAX);
+      if (!text) {
+        throw new Error("set needs a text (what the session is working towards)");
+      }
+      record = ctx.goals.set(cmd.sessionId, text);
+      changed = true;
+      log(`session ${cmd.sessionId}: goal set: ${oneLine(text).slice(0, 120)}`);
+      break;
+    }
+    case "done": {
+      record = ctx.goals.done(cmd.sessionId, by);
+      changed = record !== undefined;
+      if (record) {
+        log(`session ${cmd.sessionId}: goal marked done by ${by}`);
+        if (by === "user") {
+          const s = ctx.registry.all().find((x) => x.sessionId === cmd.sessionId);
+          if (s?.child) {
+            ctx.hub.broadcast({ type: "notice", session: s.id, text: GOAL_DONE_BY_USER_NOTICE, durable: true });
+          }
+        }
+      }
+      break;
+    }
+    case "clear": {
+      // the reply carries the goal it removed (null when the session had none), so the controller says "cleared" from the answer, not from a guess (ticket 258)
+      record = ctx.goals.clear(cmd.sessionId);
+      changed = record !== undefined;
+      if (changed) {
+        log(`session ${cmd.sessionId}: goal removed`);
+      }
+      break;
+    }
+    case "get":
+      record = ctx.goals.get(cmd.sessionId);
+      break;
+  }
+  if (changed) {
+    ctx.hub.broadcastSessions();
+  }
+  res(true, undefined, record ?? null);
 }
 
 const autoNotice = (on: boolean, until: number | undefined): string =>

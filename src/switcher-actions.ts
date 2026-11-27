@@ -39,6 +39,7 @@ import { runDoctorCommand } from "./doctor-commands.ts";
 import { renameNotice } from "./session-id.ts";
 import { runPermissions } from "./permission-commands.ts";
 import { operateSchedule, showSchedules } from "./schedule-commands.ts";
+import { goalAction, requestGoal } from "./goals.ts";
 import { errText, fireAndReport } from "./util.ts";
 
 const LOCK_BITS = 64 | 128; // kitty caps_lock / num_lock, reported in the modifier field
@@ -156,6 +157,7 @@ export class SwitcherActions {
       local: this.h.local,
       groups: this.groups,
       summaries: this.h.summaries,
+      goals: this.h.goalSummaries,
       now: Date.now(),
     });
     // Freeze the display order while the switcher is open.
@@ -601,7 +603,7 @@ export class SwitcherActions {
   }
 
   /** Commands that file sessions and shape the list: groups, parking, notes, the filter, summaries. */
-  private groupCommands(): Pick<Record<SwitcherCommandName, CommandHandler>, "group" | "ungroup" | "park" | "comment" | "filter" | "summarize" | "external"> {
+  private groupCommands(): Pick<Record<SwitcherCommandName, CommandHandler>, "group" | "ungroup" | "park" | "comment" | "goal" | "filter" | "summarize" | "external"> {
     const needsTarget = this.needsTarget.bind(this);
     return {
       group: needsTarget("group", async (t, arg) => {
@@ -687,6 +689,19 @@ export class SwitcherActions {
         saveGroups(this.groups);
         this.refresh();
         this.h.switcher.hint = call.opts.clear === true ? `${t.name}: comment removed` : `${t.name}: comment saved (searchable with /filter)`;
+      }),
+      goal: needsTarget("goal", async (t, arg) => {
+        if (!t.sessionId) {
+          this.h.switcher.hint = "goal: session has no id yet";
+          return;
+        }
+        const parsed = goalAction(arg);
+        if ("error" in parsed) {
+          this.h.switcher.hint = `goal: ${parsed.error}`;
+          return;
+        }
+        this.h.switcher.hint = `${t.name}: ${await requestGoal(this.h, t.sessionId, parsed.action, parsed.text)}`;
+        this.refresh();
       }),
       filter: async (call) => {
         const text = call.args.join(" ");

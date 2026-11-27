@@ -48,6 +48,7 @@ import { rewindTargets } from "./rewind.ts";
 import { guardClicks } from "./click-guard.ts";
 import { autocompleteMaxVisible, hideThinkingBlock, wheelScrollLines } from "./pi-settings.ts";
 import { SessionActions } from "./session-actions.ts";
+import type { GoalSummary } from "./goals.ts";
 import { SwitcherActions } from "./switcher-actions.ts";
 import { killServer } from "./lifecycle.ts";
 import { compareDaemon, describeDaemon, type DaemonVerdict, type Hello } from "./version-check.ts";
@@ -152,6 +153,8 @@ class Controller {
 
   /** Daemon-known sessions by daemon id. */
   sessions = new Map<number, SessionMeta>();
+  /** A goal summary per session UUID, from the daemon's session lists (ticket 258): rows without a live meta fall back to it. */
+  goalSummaries: Record<string, GoalSummary> = {};
   /** Sessions from the filesystem (listAll), by session file path. */
   local = new Map<string, LocalSession>();
   /** Transcript state by canonical key (session file path, or daemon:N). */
@@ -412,6 +415,7 @@ class Controller {
   handleDaemonMessage(msg: DaemonMessage): void {
     switch (msg.type) {
       case "sessions":
+        this.goalSummaries = msg.goals ?? {};
         this.onSessions(msg.sessions);
         return;
       case "history":

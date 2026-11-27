@@ -1,7 +1,7 @@
 // The /commands toriel handles itself inside a session (SESSION_COMMANDS);
 // anything else typed with a leading slash goes to pi.
-import { readdirSync, type Dirent } from "node:fs";
 import * as path from "node:path";
+import { MCP_EXPLORE_RECORDS_FILE } from "./config.ts";
 import { type Invocation, listing, parseCommandLine } from "./cli.ts";
 import { SESSION_COMMANDS, type SessionCommandName } from "./commands.ts";
 import { fmtTokens } from "./format.ts";
@@ -11,12 +11,15 @@ import { piAgentDir } from "./pi-dir.ts";
 import { ModeNoticeDebounce, modeOf, nextMode, switches } from "./mode-cycle.ts";
 import { probeEntry, parseStatusDetailed, readConfigs, statusReport } from "./mcp-doctor.ts";
 import { addMcpServer, readMcpYaml, removeMcpServer, setMcpServerHeaders } from "./mcp-config.ts";
-import { bearerEnvHeader, bearerTokenHeader, MCP_ACTIONS, type McpAuthOptions, type McpEntry, mcpConfigFile, mcpEntry, mcpListLines, mcpServerConnected, parseHeaderArg, withHeaders } from "./mcp.ts";
-import { mcpExplorePrompt } from "./mcp-explore-prompt.ts";
+import { loadExploreRecords } from "../pi/extensions/lib/mcp-config.ts";
+import { bearerEnvHeader, bearerTokenHeader, MCP_ACTIONS, type McpAuthOptions, type McpEntry, mcpConfigFile, mcpEntry, mcpListLines, mcpServerConnected, parseHeaderArg, piSkillsDirs, skillForServer, withHeaders } from "./mcp.ts";
+import { mcpExploreAllPrompt, mcpExplorePrompt } from "./mcp-explore-prompt.ts";
+import { stalenessReason, stalenessVerdict, type StalenessInput } from "./mcp-staleness.ts";
 import { gatewayKind, probeLitellmAsync } from "./litellm-models.ts";
 import { addProvider, apiKeyValue, checkProviderId, DEFAULT_API, fetchModels, listProviders, MAX_MODELS, type NewModel, type ProviderOptions, type ProviderRow, removeProvider, resolveForProbe, setProviderKey } from "./providers.ts";
 import { readHeader } from "./session-file.ts";
 import { mayWake } from "./wake-on-type.ts";
+import { goalAction, requestGoal } from "./goals.ts";
 import { forkName, placeFork } from "./fork-placement.ts";
 import { loadGroups, saveGroups, withComment, withParked } from "./groups.ts";
 import type { Host } from "./host.ts";
@@ -161,6 +164,7 @@ export class SessionCommands {
       fire: (c) => operateSchedule(this.h, "fire", c, this.viewedMeta()?.id),
       permissions: (c) => runPermissions(this.h, c, this.viewedMeta()?.id),
       doctor: (c) => runDoctorCommand(this.h, c),
+      goal: (c) => this.goal(c.args.join(" ")),
     };
   }
 
@@ -190,6 +194,24 @@ export class SessionCommands {
   private viewedSessionId(): string | undefined {
     const key = this.h.viewing;
     return this.viewedMeta()?.sessionId ?? (key ? this.h.local.get(key)?.id : undefined);
+  }
+
+  /**
+   * /goal (ticket 258): set, show, mark done or clear this session's goal. Daemon state only (keyed by the session's UUID), so it never
+   * wakes a sleeping session - it needs just its saved id, which a session with no message does not have.
+   */
+  private async goal(words: string): Promise<void> {
+    const sessionId = this.viewedSessionId();
+    if (!sessionId) {
+      this.h.notify("no goal yet - send a message first");
+      return;
+    }
+    const parsed = goalAction(words);
+    if ("error" in parsed) {
+      this.h.notify(parsed.error);
+      return;
+    }
+    this.h.notify(await requestGoal(this.h, sessionId, parsed.action, parsed.text));
   }
 
   /**
@@ -877,7 +899,7 @@ export class SessionCommands {
     try {
       this.h.notify("asking the MCP servers...");
       const r = (await this.h.request({ type: "mcp_status", session: meta.id }, 60_000)) as { text: string };
-      const skillsDirs = [path.join(piAgentDir(), "skills"), ...readdirSync(piAgentDir(), { withFileTypes: true }).filter((e: Dirent) => e.isDirectory()).map((e: Dirent) => path.join(piAgentDir(), e.name, "skills"))];
+      const skillsDirs = piSkillsDirs(piAgentDir());
       this.h.infoPanel.show(["MCP servers", "", ...mcpListLines(r.text, skillsDirs), "", "/mcp reconnect <server> - tab completes the names"].join("\n"));
       this.h.notify("");
       this.h.tui.requestRender();
@@ -1191,10 +1213,10 @@ export class SessionCommands {
     }
   }
 
-  /** /mcp explore <server>: the agent introspects the server and writes a skill for it. Needs a live child (liveMeta); refuses with a notice if the server is not a configured mcp.yaml server or not connected, then an ordinary prompt. */
+  /** /mcp explore <server>: the agent introspects the server and writes a skill for it. Bare /mcp explore (ticket 330) re-explores every stale one at once. Needs a live child (liveMeta); a named server that is not a configured mcp.yaml server or not connected is refused with a notice, then an ordinary prompt. */
   private async mcpExplore(server: string | undefined): Promise<void> {
-    if (!server) {
-      this.h.notify("/mcp explore <server> (tab completes the names)");
+    if (server === undefined) {
+      await this.mcpExploreAll();
       return;
     }
     const meta = await this.liveMeta();
@@ -1218,6 +1240,53 @@ export class SessionCommands {
     }
     this.h.editor.setText("");
     await this.h.session.prompt(mcpExplorePrompt(server));
+  }
+
+  /** Bare /mcp explore (ticket 330): re-explore every configured, connected server whose skill is stale (no skill yet, no explore record, the server's tools changed after the explore that wrote it, or the record is at least MCP_SKILL_STALE_DAYS old) and that the owner has not switched off in mcp.yaml (`enabled: false`). Needs a live child (liveMeta), like the named form; sends the combined prompt through the ordinary prompt path. */
+  private async mcpExploreAll(): Promise<void> {
+    const meta = await this.liveMeta();
+    if (!meta) {
+      return;
+    }
+    let text: string;
+    try {
+      const r = (await this.h.request({ type: "mcp_status", session: meta.id }, 60_000)) as { text: string };
+      text = r.text;
+    } catch (err) {
+      this.fail("mcp", err);
+      return;
+    }
+    const configs = readConfigs([mcpConfigFile()]);
+    const skillsDirs = piSkillsDirs(piAgentDir());
+    const records = loadExploreRecords(MCP_EXPLORE_RECORDS_FILE);
+    const now = new Date();
+    const plan: string[] = [];
+    const names: string[] = [];
+    const skipped: string[] = [];
+    for (const name of configs.keys()) {
+      const entry = configs.get(name)?.entry;
+      if (entry?.enabled === false) {
+        continue; // a server the owner switched off is not this command's business, even if its skill is stale or it shows connected
+      }
+      const input: StalenessInput = { hasSkill: skillForServer(skillsDirs, name) !== undefined, record: records.explored[name], latest: records.latest[name], now };
+      const verdict = stalenessVerdict(input);
+      if (verdict.kind === "fresh") {
+        continue;
+      }
+      if (!mcpServerConnected(text, name)) {
+        skipped.push(`${name}: not connected - /mcp reconnect ${name}`);
+        continue;
+      }
+      names.push(name);
+      plan.push(`${name}: ${stalenessReason(verdict, input)}`);
+    }
+    if (names.length === 0) {
+      this.h.notify(["no MCP skill needs re-exploring", ...skipped].join("\n"));
+      return;
+    }
+    this.h.notify([...plan, ...skipped, `re-exploring ${names.length} server(s)...`].join("\n"));
+    this.h.editor.setText("");
+    await this.h.session.prompt(mcpExploreAllPrompt(names));
   }
 
   /** /mcp remove: take the server out of toriel's mcp.yaml and reload this session so it disconnects. */

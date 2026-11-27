@@ -6,14 +6,14 @@ import { delimiter, join } from "node:path";
 import { FILE_HISTORY_ENV } from "../pi/extensions/lib/file-history.ts";
 import { FRESHNESS_ENV } from "../pi/extensions/lib/freshness.ts";
 import { PLAN_DIR_ENV } from "../pi/extensions/lib/plan-mode.ts";
-import { MCP_DIRECT_ENV, MCP_FILE_ENV, MCP_SUMMARIES_ENV } from "../pi/extensions/lib/mcp-config.ts";
+import { MCP_DIRECT_ENV, MCP_FILE_ENV, MCP_RECORDS_ENV, MCP_SUMMARIES_ENV } from "../pi/extensions/lib/mcp-config.ts";
 import { SCOPE_ENV, SCOPE_MODE_ENV } from "../pi/extensions/lib/scope-root.ts";
 import { piAgentDir } from "./pi-dir.ts";
 import type { ScopeAssignment } from "./scope-root.ts";
 import { DEFAULT_SANDBOX_WRITABLE, type TorielSettings } from "./settings.ts";
 
 /** The daemon-owned variables that must never come from the daemon's own environment. */
-const OWNED_KEYS = [SCOPE_ENV, SCOPE_MODE_ENV, "TORIEL_SANDBOX", "TORIEL_SANDBOX_RW", "TORIEL_SHARED_DIR", "TORIEL_SANDBOX_TMP", MCP_FILE_ENV, MCP_DIRECT_ENV, MCP_SUMMARIES_ENV, FILE_HISTORY_ENV, PLAN_DIR_ENV, FRESHNESS_ENV];
+const OWNED_KEYS = [SCOPE_ENV, SCOPE_MODE_ENV, "TORIEL_SANDBOX", "TORIEL_SANDBOX_RW", "TORIEL_SHARED_DIR", "TORIEL_SANDBOX_TMP", MCP_FILE_ENV, MCP_DIRECT_ENV, MCP_SUMMARIES_ENV, MCP_RECORDS_ENV, FILE_HISTORY_ENV, PLAN_DIR_ENV, FRESHNESS_ENV];
 
 /**
  * Every variable the daemon sets on a pi child: the owned ones above, the identity ones `childEnv` adds, and the
@@ -35,6 +35,8 @@ export interface ChildExtras {
   mcpDirect?: readonly string[];
   /** The file of remembered MCP server summaries (ticket 303), with mcpFile: the toriel-mcp extension reads and updates it. */
   mcpSummaries?: string;
+  /** The file of /mcp explore records (ticket 308), with mcpFile: the toriel-mcp extension reads and updates it. */
+  mcpRecords?: string;
   /** Where sessions keep their file history (ticket 11): the toriel-filehistory extension writes a journal per session under it. */
   fileHistoryDir?: string;
   /** Where the per-session plan-mode markers are (ticket 229); the toriel-plan extension and the plan-mode bash wrapper read them. */
@@ -95,6 +97,9 @@ export function childEnv(s: EnvSession, sock: string, base: NodeJS.ProcessEnv = 
   }
   if (extras.mcpSummaries !== undefined) {
     env[MCP_SUMMARIES_ENV] = extras.mcpSummaries;
+  }
+  if (extras.mcpRecords !== undefined) {
+    env[MCP_RECORDS_ENV] = extras.mcpRecords;
   }
   if (extras.fileHistoryDir !== undefined) {
     env[FILE_HISTORY_ENV] = extras.fileHistoryDir;
