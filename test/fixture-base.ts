@@ -8,15 +8,23 @@ import { join } from "node:path";
 /** The directory fixture trees go under: /var/tmp when there is one (not under /tmp, which the sandbox hides). */
 export const FIXTURE_BASE = existsSync("/var/tmp") ? "/var/tmp" : tmpdir();
 
-/** Whether a directory can be created under `dir`; false on EROFS, EACCES and the like. */
-export function canMakeDirUnder(dir: string): boolean {
+/** The errno code when a directory cannot be created under `dir`, or false when it can. */
+export function mkdirFailureUnder(dir: string): string | false {
   try {
     rmSync(mkdtempSync(join(dir, "toriel-probe-")), { recursive: true, force: true });
-    return true;
-  } catch {
     return false;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    return typeof code === "string" ? code : "UNKNOWN";
   }
 }
 
-/** The skip reason for a test that builds fixtures under FIXTURE_BASE, or false when it can run. */
-export const FIXTURE_SKIP: string | false = canMakeDirUnder(FIXTURE_BASE) ? false : `this test builds sandbox fixtures under ${FIXTURE_BASE}, which is not writable here (inside a toriel sandbox it is read-only)`;
+const NOT_WRITABLE = `this test builds sandbox fixtures under ${FIXTURE_BASE}, which is not writable here`;
+const PROBE = mkdirFailureUnder(FIXTURE_BASE);
+/** The skip reason for a test that builds fixtures under FIXTURE_BASE, or false when it can run. EROFS is what a read-only
+ * mount (a toriel sandbox's /var/tmp, ticket 203) gives; any other failure is unexpected and names its own code. */
+export const FIXTURE_SKIP: string | false = PROBE === false
+  ? false
+  : PROBE === "EROFS"
+    ? `${NOT_WRITABLE} (inside a toriel sandbox it is read-only)`
+    : `${NOT_WRITABLE} (the probe failed with ${PROBE})`;
