@@ -139,12 +139,24 @@ export function newView(): SessionView {
 }
 
 /**
- * Attach a note to the tool call whose permission prompt it answers, so it reads under that call instead of floating as a row
- * of its own (ticket 205). The prompt is raised while pi prepares a call, after that call's start was reported and before any
- * later call's, so it belongs to the newest call that has not finished and has no note yet. False when there is none (the
- * view was rebuilt from history, or the call is gone): the caller shows the note as a row then.
+ * Attach a note to a tool call, so it reads under that call instead of floating as a row of its own. With `toolCallId` (a skill's
+ * load notice names its read call, ticket 317) the call is found by id whatever state it is in - it may be long done - and the
+ * text is appended to what the call already carries. Without one (a grant's or auto mode's answer, ticket 205) it belongs to the
+ * newest call that has not finished and has no note yet: the prompt is raised while pi prepares a call, after that call's start
+ * was reported and before any later call's. False when there is none (the view was rebuilt from history, or the call is gone):
+ * the caller shows the note as a row then.
  */
-export function attachCallNote(view: SessionView, text: string): boolean {
+export function attachCallNote(view: SessionView, text: string, toolCallId?: string): boolean {
+  if (toolCallId !== undefined) {
+    const call = view.tools.get(toolCallId);
+    if (!call) {
+      return false;
+    }
+    call.notes = [...(call.notes ?? []), text];
+    call.cachedLines = undefined;
+    view.callNotes = new Map(view.callNotes ?? []).set(toolCallId, call.notes);
+    return true;
+  }
   const latest = [...view.tools.values()].at(-1);
   if (!latest?.id || latest.done || latest.notes?.length) {
     return false;

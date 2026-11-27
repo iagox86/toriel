@@ -1693,3 +1693,20 @@ On openai-completions pi folds the system prompt, every later system change (pro
   3. pi records the inner calls on the result message (`nestedCalls`); toriel's transcript shows the `mcp_call` with its arguments. The `mcp_servers` section still says "load with tool_search", which would need replacing.
 
   **Go, as an opt-in setting first** (plain sessions only), measured over a week of real sessions against `tool_search` for success rate and cost, before it becomes the default. Spike files: the session scratchpad's `cachefix/mcp-call-ext.ts` and `arm.sh`.
+
+## Skill load notice: what the announcement waits for (ticket 317, built 2026-11-26)
+
+When the model reads a skill's file (a `read` of `.../skills/<name>/SKILL.md`) and the read succeeds, the daemon
+announces it once per skill per session: one durable notice `skill loaded(<name>)` carrying the read's toolCallId
+(protocol 20). A controller docks it under that call by id (the call may be long done, and the note is appended
+to what the call already carries) and flashes the same line for the session being viewed, so flash and note are
+one announcement; the chat bridge posts the one notice it receives. pi reports a call's start before its path is
+checked and before a permission gate has answered it, so `takeSkillLoad` (`src/daemon-children.ts`) only
+remembers the call in `pendingSkillReads` at the start and fires on a non-error end; a failed or denied read
+costs nothing. `/clear` resets the per-session set (`handleClear`), `skillNameFromPath` (`src/skill-notice.ts`)
+normalizes the path and checks the shape of the name.
+
+Parked:
+- pi's skill frontmatter `name` can differ from the skill's directory name; the announcement uses the directory name (pi only warns when a frontmatter name has bad characters, it does not tell anyone the mismatch).
+- Codemode and bash-style reads of skill files are not caught: only the read tool's own execution events are.
+- A subagent session announces within its own session only; parents and viewers of other sessions see nothing of a child's loads.

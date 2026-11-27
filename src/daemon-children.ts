@@ -27,11 +27,12 @@ import { log } from "./log.ts";
 import { getTiming } from "./timing.ts";
 
 const timing = getTiming("daemon");
-import { type AskRule, AUTO_ANSWERED_NOTICE, AUTO_DENIED_NOTICE, AUTO_DISMISSED_NOTICE, encodeLine, GRANT_ANSWERED_NOTICE, type UsageReport } from "./shared.ts";
+import { type AskRule, AUTO_ANSWERED_NOTICE, AUTO_DENIED_NOTICE, AUTO_DISMISSED_NOTICE, encodeLine, GRANT_ANSWERED_NOTICE, SKILL_LOADED_NOTICE, type UsageReport } from "./shared.ts";
 import { floorReason, isPermissionPrompt, promptSubject } from "./auto-mode.ts";
 import { type ChildConfig, loadSettings, resolveChildConfig, settingsMtime } from "./settings.ts";
 import { fmtDuration, parseDurationText } from "./when.ts";
 import { errText } from "./util.ts";
+import { skillNameFromPath } from "./skill-notice.ts";
 import { parseReport as parseTasksReport, STATUS_KEY as TASKS_KEY } from "../pi/extensions/lib/tasks.ts";
 import { STATUS_KEY as PLAN_KEY } from "../pi/extensions/lib/plan-mode.ts";
 
@@ -565,6 +566,49 @@ export class ChildManager {
     return true;
   }
 
+  /**
+   * A skill the agent read (ticket 317): the first successful read of `.../skills/<name>/SKILL.md` in the session announces it once -
+   * one durable notice carrying the read's toolCallId, which a controller docks under the read call and flashes for a viewed session.
+   * pi reports a tool call's start before its path is checked and before a permission gate has answered it, so the start only remembers
+   * the call in `pendingSkillReads` (its end removes that), and a non-error end is what announces and occupies the slot: a failed or
+   * denied read announces nothing and never burns it, and an end that does not say `isError: false` stays silent too. A call whose
+   * start was seen but that never ends leaves one stale pending entry (bounded: one per pending read). Not a read of a skill, an
+   * unparseable event, a re-read: a silent no-op, never a reason to fail the event it rides in.
+   */
+  private takeSkillLoad(s: DaemonSession, event: Record<string, unknown>): void {
+    if (event.type === "tool_execution_start") {
+      if (event.toolName !== "read" || typeof event.toolCallId !== "string") {
+        return;
+      }
+      const path = (event.args as { path?: unknown } | undefined)?.path;
+      const name = skillNameFromPath(path);
+      if (name === undefined || s.loadedSkills?.has(name)) {
+        return;
+      }
+      s.pendingSkillReads = s.pendingSkillReads ?? new Map();
+      s.pendingSkillReads.set(event.toolCallId, name);
+      return;
+    }
+    if (event.type !== "tool_execution_end") {
+      return;
+    }
+    const id = typeof event.toolCallId === "string" ? event.toolCallId : undefined;
+    const name = id === undefined ? undefined : s.pendingSkillReads?.get(id);
+    // every end event for the id is consumed, so a re-sent or late end cannot announce twice
+    if (id !== undefined) {
+      s.pendingSkillReads?.delete(id);
+    }
+    if (name === undefined || event.isError !== false) {
+      return;
+    }
+    s.loadedSkills = s.loadedSkills ?? new Set();
+    if (s.loadedSkills.has(name)) {
+      return;
+    }
+    s.loadedSkills.add(name);
+    this.hub.broadcast({ type: "notice", session: s.id, text: `${SKILL_LOADED_NOTICE}${name})`, durable: true, toolCallId: id });
+  }
+
   /** pi settles a dialog with a `timeout` by itself and says nothing, so the record is dropped then too. */
   private expireDialog(s: DaemonSession, dialog: Record<string, unknown>): void {
     const timeout = Number(dialog.timeout);
@@ -770,6 +814,7 @@ export class ChildManager {
       return;
     }
     this.hub.broadcast({ type: "event", session: s.id, event });
+    this.takeSkillLoad(s, event);
     // the append itself: the transcript, not an inference, says an inject landed
     const injected = injectedId(event);
     if (injected !== undefined) {
