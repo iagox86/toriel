@@ -76,6 +76,8 @@ export interface DaemonSession {
   runSince?: number;
   /** Plan mode (ticket 229), as the daemon last set it or the toriel-plan extension reported it; the marker file is the truth. */
   plan?: boolean;
+  /** The skills this session read (ticket 317): the load notice fires once per session and per skill; memory only, dies with the daemon. */
+  loadedSkills?: Set<string>;
   /** The write scope this session's child started with (undefined = unscoped), kept for the permission decision log and the feedback snapshot (ticket 239). */
   scope?: ScopeAssignment;
   /** The permission prompt now shown to a controller, with when it arrived and what the decision log will say about it once someone answers (ticket 239). */

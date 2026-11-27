@@ -248,6 +248,7 @@ async function slowPrompt(first) {
 
 let bashStop;
 let abortSettled = false;
+let readCalls = 0;
 
 async function handle(cmd) {
   if (!started) {
@@ -426,6 +427,18 @@ async function handle(cmd) {
         ok(cmd.id, "prompt", { disposition: "started" });
         const todos = cmd.message.trim() === "/tasks-clear" ? [] : [{ content: "Write it", status: "completed" }, { content: "Test it", status: "in_progress", activeForm: "Testing it" }, { content: "Ship it", status: "pending" }];
         return out({ type: "extension_ui_request", id: randomUUID(), method: "setStatus", statusKey: "toriel-tasks", statusText: JSON.stringify({ v: 1, todos }) });
+      }
+      if (cmd.message.startsWith("/skill-read ")) {
+        // the read call the model makes on a skill file: pi reports the call as events (ticket 317); the daemon announces the skill
+        ok(cmd.id, "prompt", { disposition: "started" });
+        streaming = true;
+        out({ type: "agent_start" });
+        const callId = `read-skill-${++readCalls}`;
+        out({ type: "tool_execution_start", toolCallId: callId, toolName: "read", args: { path: cmd.message.slice("/skill-read ".length) } });
+        out({ type: "tool_execution_end", toolCallId: callId, isError: false, result: { content: [{ type: "text", text: "# skill" }] } });
+        streaming = false;
+        out({ type: "agent_settled" });
+        return;
       }
       if (cmd.message.trim() === "/plan-report-on" || cmd.message.trim() === "/plan-report-off") {
         // what the toriel-plan extension reports when the agent enters or leaves plan mode itself

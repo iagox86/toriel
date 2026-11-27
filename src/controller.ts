@@ -58,7 +58,7 @@ import {
   sessionKey,
   type LocalSession,
 } from "./session-list.ts";
-import { AUTO_ANSWERED_NOTICE, AUTO_DENIED_NOTICE, type ClientCommand, type DaemonMessage, type DistributiveOmit, GRANT_ANSWERED_NOTICE, type SessionMeta } from "./shared.ts";
+import { AUTO_ANSWERED_NOTICE, AUTO_DENIED_NOTICE, SKILL_LOADED_NOTICE, type ClientCommand, type DaemonMessage, type DistributiveOmit, GRANT_ANSWERED_NOTICE, type SessionMeta } from "./shared.ts";
 import { drifted } from "./drift.ts";
 import { MOUSE_OFF, MOUSE_ON, mouseNotice, nextMouse, parseMouseArg } from "./mouse.ts";
 import { openUrl } from "./open-url.ts";
@@ -915,8 +915,8 @@ class Controller {
       }
       return;
     }
-    // a grant's answer reads under the tool call it allowed; only when there is no such call does it become a row of its own
-    if ((text.startsWith(GRANT_ANSWERED_NOTICE) || text.startsWith(AUTO_ANSWERED_NOTICE) || text.startsWith(AUTO_DENIED_NOTICE)) && attachCallNote(view, text)) {
+    // a grant's answer or auto mode's reads under the tool call it allowed; a skill's load reads under the read of its SKILL.md; only then does it become a row of its own
+    if ((text.startsWith(GRANT_ANSWERED_NOTICE) || text.startsWith(AUTO_ANSWERED_NOTICE) || text.startsWith(AUTO_DENIED_NOTICE) || text.startsWith(SKILL_LOADED_NOTICE)) && attachCallNote(view, text)) {
       if (key === this.viewing) {
         this.renderChrome();
       }

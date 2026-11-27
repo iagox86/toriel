@@ -27,11 +27,12 @@ import { log } from "./log.ts";
 import { getTiming } from "./timing.ts";
 
 const timing = getTiming("daemon");
-import { type AskRule, AUTO_ANSWERED_NOTICE, AUTO_DENIED_NOTICE, AUTO_DISMISSED_NOTICE, encodeLine, GRANT_ANSWERED_NOTICE, type UsageReport } from "./shared.ts";
+import { type AskRule, AUTO_ANSWERED_NOTICE, AUTO_DENIED_NOTICE, AUTO_DISMISSED_NOTICE, encodeLine, GRANT_ANSWERED_NOTICE, SKILL_LOADED_NOTICE, type UsageReport } from "./shared.ts";
 import { floorReason, isPermissionPrompt, promptSubject } from "./auto-mode.ts";
 import { type ChildConfig, loadSettings, resolveChildConfig, settingsMtime } from "./settings.ts";
 import { fmtDuration, parseDurationText } from "./when.ts";
 import { errText } from "./util.ts";
+import { skillNameFromPath } from "./skill-notice.ts";
 import { parseReport as parseTasksReport, STATUS_KEY as TASKS_KEY } from "../pi/extensions/lib/tasks.ts";
 import { STATUS_KEY as PLAN_KEY } from "../pi/extensions/lib/plan-mode.ts";
 
@@ -565,6 +566,31 @@ export class ChildManager {
     return true;
   }
 
+  /**
+   * A skill the agent read (ticket 317): the first read of `.../skills/<name>/SKILL.md` in the session announces it once - a
+   * flash and a durable note under the read call. A single notice is one or the other (the controller docks the durable one and
+   * flashes the transient one), so the daemon sends both. Not a read of a skill, a re-read, or an unparseable event: a silent no-op,
+   * never a reason to fail the event it rides in.
+   */
+  private takeSkillLoad(s: DaemonSession, event: Record<string, unknown>): void {
+    if (event.type !== "tool_execution_start" || event.toolName !== "read") {
+      return;
+    }
+    const path = (event.args as { path?: unknown } | undefined)?.path;
+    const name = skillNameFromPath(path);
+    if (name === undefined) {
+      return;
+    }
+    s.loadedSkills = s.loadedSkills ?? new Set();
+    if (s.loadedSkills.has(name)) {
+      return;
+    }
+    s.loadedSkills.add(name);
+    const text = `${SKILL_LOADED_NOTICE}${name})`;
+    this.hub.broadcast({ type: "notice", session: s.id, text });
+    this.hub.broadcast({ type: "notice", session: s.id, text, durable: true });
+  }
+
   /** pi settles a dialog with a `timeout` by itself and says nothing, so the record is dropped then too. */
   private expireDialog(s: DaemonSession, dialog: Record<string, unknown>): void {
     const timeout = Number(dialog.timeout);
@@ -770,6 +796,7 @@ export class ChildManager {
       return;
     }
     this.hub.broadcast({ type: "event", session: s.id, event });
+    this.takeSkillLoad(s, event);
     // the append itself: the transcript, not an inference, says an inject landed
     const injected = injectedId(event);
     if (injected !== undefined) {
