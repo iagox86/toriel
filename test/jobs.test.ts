@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { makeWrap, readSandbox } from "../pi/extensions/lib/sandbox.ts";
+import { FIXTURE_BASE, FIXTURE_SKIP } from "./fixture-base.ts";
 import extension, { describeJob, endNotice, formatDuration, type Job, JobRegistry, jobEnv, shellEnv, sleepOnlySeconds } from "../pi/extensions/toriel-jobs.ts";
 
 const until = async (cond: () => boolean, ms = 5000): Promise<void> => {
@@ -299,13 +300,13 @@ describe("the sandbox wrapper (board 190)", () => {
 
 const bwrapWorks = spawnSync("bwrap", ["--ro-bind", "/", "/", "true"], { stdio: "ignore" }).status === 0;
 
-describe("the registry with the real sandbox (board 190)", { skip: process.env.TORIEL_SANDBOX !== undefined ? "this test builds sandbox fixtures under /var/tmp and cannot run inside a sandbox" : bwrapWorks ? false : "bwrap is not usable here" }, () => {
+describe("the registry with the real sandbox (board 190)", { skip: FIXTURE_SKIP || (bwrapWorks ? false : "bwrap is not usable here") }, () => {
   let root: string;
   let outside: string;
   beforeEach(() => {
     // not under /tmp: the sandbox hides it
-    root = realpathSync(mkdtempSync(join("/var/tmp", "toriel-realwrap-")));
-    outside = realpathSync(mkdtempSync(join("/var/tmp", "toriel-realwrap-out-")));
+    root = realpathSync(mkdtempSync(join(FIXTURE_BASE, "toriel-realwrap-")));
+    outside = realpathSync(mkdtempSync(join(FIXTURE_BASE, "toriel-realwrap-out-")));
   });
   afterEach(() => {
     rmSync(root, { recursive: true, force: true });
