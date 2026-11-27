@@ -116,18 +116,57 @@ describe("daemon: subagents", () => {
     assert.ok(Date.now() - started < 3000);
   });
 
-  it("refuses a nested spawn, and a fourth concurrent subagent, with text the model can act on", async () => {
+  it("makes a fourth concurrent spawn wait for a free slot instead of refusing it, and still refuses a nested spawn (ticket 341)", async () => {
     harness = await startDaemon();
     const { c, uuid } = await parentSession(harness);
     for (const n of [1, 2, 3]) {
       await spawn(c, uuid, { task: `[hang] ${n}`, background: true });
     }
-    await assert.rejects(spawn(c, uuid), /3 subagents are already running/);
+    let fourth: Msg | undefined;
+    const waiting = spawn(c, uuid, { task: "[hang] 4", background: true }).then((r) => {
+      fourth = r;
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(fourth, undefined, "the fourth spawn waits while three run");
     const childId = Object.entries(lineage(harness)).find(([, e]) => e.kind === "subagent")?.[0] as string;
     await assert.rejects(spawn(c, childId), /may not start subagents/);
     await c.request({ type: "agents_op", from: uuid, action: "stop", ref: "#1" });
+    await waiting;
+    // tsc narrowed `fourth` to undefined at the assert above; the callback has set it since
+    assert.match((fourth as Msg | undefined)?.text ?? "", /^Started subagent #4 \(worker\) in the background/);
+    for (const ref of ["#2", "#3", "#4"]) {
+      await c.request({ type: "agents_op", from: uuid, action: "stop", ref });
+    }
+  });
+
+  it("serves waiting spawns first come first served, and drops one whose caller went away (ticket 341)", async () => {
+    harness = await startDaemon();
+    const { c, uuid } = await parentSession(harness);
+    for (const n of [1, 2, 3]) {
+      await spawn(c, uuid, { task: `[hang] ${n}`, background: true });
+    }
+    // a second client's call waits first, then goes away; the next in line must get the slot, and the gone one never starts
+    const gone = await harness.connect();
+    void spawn(gone, uuid, { task: "[hang] gone", description: "gone", background: true }).catch(() => undefined);
+    await new Promise((r) => setTimeout(r, 200));
+    const order: string[] = [];
+    const a = spawn(c, uuid, { task: "[hang] a", description: "a", background: true }).then(() => order.push("a"));
+    await new Promise((r) => setTimeout(r, 100));
+    const b = spawn(c, uuid, { task: "[hang] b", description: "b", background: true }).then(() => order.push("b"));
+    await new Promise((r) => setTimeout(r, 100));
+    gone.close();
+    await new Promise((r) => setTimeout(r, 200));
+    await c.request({ type: "agents_op", from: uuid, action: "stop", ref: "#1" });
+    await a;
+    assert.deepEqual(order, ["a"], "only one slot freed, and it went to the oldest caller still waiting");
     await c.request({ type: "agents_op", from: uuid, action: "stop", ref: "#2" });
-    await c.request({ type: "agents_op", from: uuid, action: "stop", ref: "#3" });
+    await b;
+    assert.deepEqual(order, ["a", "b"]);
+    const listed = await c.request({ type: "agents_op", from: uuid, action: "list" });
+    assert.doesNotMatch(listed.text, /gone/, "the spawn whose caller left never started");
+    for (const ref of ["#3", "#4", "#5"]) {
+      await c.request({ type: "agents_op", from: uuid, action: "stop", ref });
+    }
   });
 
   it("cuts a subagent off at its token budget and returns what it had", async () => {

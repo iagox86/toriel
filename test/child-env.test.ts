@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { bangEnv, childEnv, sandboxWritableRoots } from "../src/child-env.ts";
+import { SESSION_ENV, withoutSessionEnv } from "../scripts/test-env.ts";
+import { bangEnv, CHILD_ENV_KEYS, childEnv, sandboxWritableRoots } from "../src/child-env.ts";
 import { BACKGROUND_COMMAND as DAEMON_COMMAND } from "../src/daemon-handlers-ops.ts";
 import { BACKGROUND_COMMAND as EXTENSION_COMMAND } from "../pi/extensions/toriel-jobs.ts";
 
@@ -120,5 +121,29 @@ describe("the sandbox and shared-directory variables (board 190)", () => {
 describe("the background command name", () => {
   it("is the same in the daemon and in the extension", () => {
     assert.equal(DAEMON_COMMAND, EXTENSION_COMMAND);
+  });
+});
+
+describe("what a test run drops from a surrounding session (ticket 339)", () => {
+  it("lists every variable the daemon sets on a child, so a test inside a sandboxed, scoped session sees none of them", () => {
+    const full = childEnv({ sessionId: "abc", sessionFile: "/f" }, "/sock", {}, { root: "/w", mode: "deny" }, {
+      sharedDir: "/s",
+      tmpDir: "/t",
+      sandboxWritable: ["/c"],
+      mcpFile: "/m",
+      mcpDirect: ["git"],
+      mcpSummaries: "/ms",
+      fileHistoryDir: "/h",
+      planDir: "/p",
+      freshness: false,
+    });
+    const set = [...Object.keys(full), "TORIEL_CAN_SPAWN", "TORIEL_AGENT_TYPES"];
+    assert.deepEqual(
+      set.filter((k) => !CHILD_ENV_KEYS.includes(k)),
+      [],
+      "a key childEnv sets is missing from CHILD_ENV_KEYS",
+    );
+    assert.deepEqual(Object.keys(withoutSessionEnv({ ...full, PATH: "/bin", TORIEL_PROFILE: "x", TORIEL_TIMING: "1" })), ["PATH"]);
+    assert.ok(SESSION_ENV.includes("TORIEL_SANDBOX") && SESSION_ENV.includes("TORIEL_SCOPE_ROOT"));
   });
 });

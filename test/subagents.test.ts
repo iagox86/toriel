@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { AgentProfile } from "../src/agents.ts";
 import { subagentDepth } from "../src/lineage.ts";
-import { abnormalEnd, INJECT_TYPES, mayDelegate, childBudget, lastAssistantText, subagentResultText, messageTokens, DEFAULT_SUBAGENT_LIMITS, describeRecord, expiredSubagents, keepMsFrom, type SweepCandidate, limitBreach, parseHandle, refuseSpawn, resultText, SubagentBook } from "../src/subagents.ts";
+import { abnormalEnd, INJECT_TYPES, mayDelegate, childBudget, lastAssistantText, subagentResultText, messageTokens, DEFAULT_SUBAGENT_LIMITS, describeRecord, expiredSubagents, keepMsFrom, type SweepCandidate, limitBreach, parseHandle, refuseSpawn, resultText, slotFree, SubagentBook } from "../src/subagents.ts";
 import { isInjectType } from "../src/transcript.ts";
 
 const L = DEFAULT_SUBAGENT_LIMITS;
@@ -26,12 +26,18 @@ describe("refuseSpawn", () => {
     assert.match(refuseSpawn({ ...base, limits: { ...L, maxDepth: 9 }, parentDepth: 2 }) ?? "", /depth limit 2/);
   });
 
-  it("refuses the fourth concurrent subagent and the twenty-first for one parent", () => {
+  it("refuses a fourth concurrent subagent only to a subagent (a session the user started waits instead), and the twenty-first for one parent", () => {
     const book = new SubagentBook();
     for (let i = 0; i < 3; i++) {
       add(book, `q${i}`, i);
     }
-    assert.match(refuseSpawn({ limits: L, book, parent: "p", parentDepth: 0 }) ?? "", /3 subagents are already running/);
+    assert.equal(refuseSpawn({ limits: L, book, parent: "p", parentDepth: 0 }), undefined);
+    const nested = { limits: { ...L, maxDepth: 2 }, book: new SubagentBook(), parent: "p", parentProfile: profile({ canSpawn: true }), parentDepth: 1 };
+    add(nested.book, "q", 1);
+    add(nested.book, "q", 2);
+    assert.equal(refuseSpawn(nested), undefined);
+    assert.match(refuseSpawn({ ...nested, reserved: 1 }) ?? "", /3 subagents are already running .*retrying will not help/);
+    assert.ok(slotFree(2, 0, L) && !slotFree(2, 1, L));
     const many = new SubagentBook();
     for (let i = 0; i < 20; i++) {
       const rec = add(many, "p", i);

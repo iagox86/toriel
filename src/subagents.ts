@@ -140,6 +140,13 @@ export interface SpawnContext {
   parentProfile?: AgentProfile;
   /** Subagent links above the parent. */
   parentDepth: number;
+  /** Slots promised to spawns that are about to create their record (ticket 341): they count as running. */
+  reserved?: number;
+}
+
+/** Whether another subagent may start now: fewer running (or about to) than the concurrency limit. */
+export function slotFree(running: number, reserved: number, limits: SubagentLimits): boolean {
+  return running + reserved < limits.maxConcurrent;
 }
 
 /** Whether a session gets the toriel_agent tools: its profile (none = a session the user started) allows spawning and it has depth left. */
@@ -160,9 +167,11 @@ export function refuseSpawn(c: SpawnContext): string | undefined {
   if (spawned >= c.limits.maxSpawnsPerParent) {
     return `This session has already started ${spawned} subagents (limit ${c.limits.maxSpawnsPerParent}). Do the rest yourself or ask the user.`;
   }
-  const running = c.book.running().length;
-  if (running >= c.limits.maxConcurrent) {
-    return `${running} subagents are already running (limit ${c.limits.maxConcurrent}). Wait for one with toriel_agents {action: "wait"} or try again shortly.`;
+  // a session the user started waits for a free slot instead (ticket 341); a subagent cannot, since the slots may all be
+  // held by subagents waiting on children of their own, so it is refused at once and told not to retry
+  const running = c.book.running().length + (c.reserved ?? 0);
+  if (c.parentDepth > 0 && running >= c.limits.maxConcurrent) {
+    return `${running} subagents are already running (limit ${c.limits.maxConcurrent}), and a subagent cannot wait for a slot. Do the work yourself; retrying will not help.`;
   }
   return undefined;
 }
