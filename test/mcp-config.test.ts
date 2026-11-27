@@ -1,12 +1,14 @@
 // toriel's MCP config (tickets 209 and 216): reading and checking mcp.yaml, the edits /mcp add, /mcp remove and the doctor make to it,
-// the one-time move from pi's mcp.json, and the reachability probe a `whenUp` server depends on.
+// the one-time move from pi's mcp.json, the reachability probe a `whenUp` server depends on, and the /mcp explore records the daemon
+// and the toriel-mcp extension keep about each server's tools (ticket 308).
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { checkEntry, parseMcpYaml, piConfig, probeUrl, redactUrl, serverUrl } from "../pi/extensions/lib/mcp-config.ts";
+import { canonicalize, checkEntry, computeToolHashes, explorePromptServerNames, loadExploreRecords, mcpExploreAllFirstLine, type McpExploreRecords, mergeExploreRecords, parseMcpYaml, piConfig, probeUrl, redactUrl, saveExploreRecords, serverUrl, type ToolInfoLike } from "../pi/extensions/lib/mcp-config.ts";
+import { mcpExplorePrompt } from "../src/mcp-explore-prompt.ts";
 import { mcpYamlFile } from "../src/config-dir.ts";
 import { addMcpServer, importMcpJson, readMcpYaml, redactEntry, removeMcpServer, renderMcpYaml, setMcpServerKey } from "../src/mcp-config.ts";
 
@@ -226,5 +228,88 @@ describe("probeUrl", () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     assert.equal(await probeUrl(`http://127.0.0.1:${port}/mcp`), false, "a refused port is down");
     assert.equal(await probeUrl("not a url"), false);
+  });
+});
+
+describe("the /mcp explore records (ticket 308)", () => {
+  const tool = (name: string, server: string | undefined, parameters?: unknown, extra: Record<string, unknown> = {}): ToolInfoLike => ({ name, ...(server === undefined ? {} : { namespace: { aliases: [server] } }), parameters, ...extra });
+
+  it("hashes each server's tools over the sorted tool entries, and the same tools in another order hash the same", () => {
+    const read = tool("mcp__git__git_read", "git", { type: "object", properties: { file: { type: "string" }, rev: { type: "string" } } });
+    const write = tool("mcp__git__git_write", "git", { type: "object", properties: { file: { type: "string" } }, required: ["file"] });
+    const start = tool("mcp__gdb__gdb_start", "gdb", { type: "object" });
+    const one = computeToolHashes([read, write, start]);
+    const two = computeToolHashes([start, write, read]);
+    assert.deepEqual(one, two);
+    assert.deepEqual(Object.keys(one).sort(), ["gdb", "git"]);
+    assert.match(one.git, /^[0-9a-f]{16}$/);
+    assert.match(one.gdb, /^[0-9a-f]{16}$/);
+  });
+
+  it("hashes the canonical form: object key order, descriptions and exposure do not move the hash; a schema change or array order does", () => {
+    const read = tool("mcp__git__git_read", "git", { properties: { rev: { type: "string" }, file: { type: "string" } }, type: "object" });
+    const sorted = tool("mcp__git__git_read", "git", { type: "object", properties: { file: { type: "string" }, rev: { type: "string" } } });
+    assert.equal(computeToolHashes([read]).git, computeToolHashes([sorted]).git, "object key order does not matter");
+    const noisy = tool("mcp__git__git_read", "git", sorted.parameters, { description: "fresh words", exposure: "direct", promptGuidelines: ["x"], sourceInfo: { type: "mcp" } });
+    assert.equal(computeToolHashes([noisy]).git, computeToolHashes([sorted]).git, "descriptions and exposure are not part of the hash");
+    const changed = tool("mcp__git__git_read", "git", { type: "object", properties: { file: { type: "string" }, rev: { type: "string", more: true } } });
+    assert.notEqual(computeToolHashes([changed]).git, computeToolHashes([sorted]).git, "a parameter schema change moves the hash");
+    const q1 = tool("mcp__x__q", "x", { oneOf: [{ type: "a" }, { type: "b" }] });
+    const q2 = tool("mcp__x__q", "x", { oneOf: [{ type: "b" }, { type: "a" }] });
+    assert.notEqual(computeToolHashes([q1]).x, computeToolHashes([q2]).x, "array order matters");
+  });
+
+  it("ignores anything that is not an MCP tool of a named server, and hashes undefined parameters as null", () => {
+    assert.deepEqual(computeToolHashes([tool("read", "git"), tool("mcp__git__read", undefined, {})]), {});
+    assert.deepEqual(Object.keys(computeToolHashes([tool("mcp__git__read", "git", undefined)])).sort(), ["git"]);
+  });
+
+  it("canonicalizes by sorting object keys at every level, keeping array order, and passing primitives with undefined and null as null", () => {
+    assert.deepEqual(canonicalize({ b: 1, a: { d: 2, c: [3, 1] } }), { a: { c: [3, 1], d: 2 }, b: 1 });
+    assert.deepEqual(canonicalize([2, 1]), [2, 1]);
+    assert.equal(canonicalize(undefined), null);
+    assert.equal(canonicalize(null), null);
+    assert.equal(canonicalize("x"), "x");
+    assert.equal(canonicalize(0), 0);
+  });
+
+  it("reads the server names off both /mcp explore prompt shapes, and nothing else", () => {
+    assert.deepEqual(explorePromptServerNames(mcpExplorePrompt("freecad")), ["freecad"]);
+    assert.deepEqual(explorePromptServerNames('Write a skill for the MCP server "my server" so that future agents can use it.'), ["my server"]);
+    assert.deepEqual(explorePromptServerNames('Write a skill for the MCP server "unclosed'), []);
+    const all = mcpExploreAllFirstLine(["a", "b", "c"]);
+    assert.equal(all, "Write or update skills for the MCP servers: a, b, c");
+    assert.deepEqual(explorePromptServerNames(all), ["a", "b", "c"]);
+    assert.deepEqual(explorePromptServerNames(`${all}.`), ["a", "b", "c"], "one trailing . is stripped");
+    assert.deepEqual(explorePromptServerNames(`${all}\nThen write one skill per server.`), ["a", "b", "c"], "only the first line counts");
+    assert.deepEqual(explorePromptServerNames("Look at the MCP servers: a, b"), []);
+    assert.deepEqual(explorePromptServerNames(undefined), []);
+  });
+
+  it("reads a missing, unreadable or malformed records file as none, drops malformed entries, and saves a clean round-trip", () => {
+    const file = path.join(tmpDir(), "state", "mcp-explore-records.json");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    assert.deepEqual(loadExploreRecords(file), { explored: {}, latest: {} });
+    assert.deepEqual(loadExploreRecords(tmpDir()), { explored: {}, latest: {} }, "a file that cannot be read is none");
+    fs.writeFileSync(file, "{ nope");
+    assert.deepEqual(loadExploreRecords(file), { explored: {}, latest: {} });
+    fs.writeFileSync(file, "[1,2]");
+    assert.deepEqual(loadExploreRecords(file), { explored: {}, latest: {} });
+    fs.writeFileSync(file, '{"explored": {"git": {"at": "t1", "hash": "h1"}, "bad": 3}, "latest": {"git": "g", "bad": 5}}');
+    assert.deepEqual(loadExploreRecords(file), { explored: { git: { at: "t1", hash: "h1" } }, latest: { git: "g" } });
+    saveExploreRecords(file, { explored: { gdb: { at: "t2", hash: "h2" } }, latest: { git: "g1" } });
+    assert.deepEqual(loadExploreRecords(file), { explored: { gdb: { at: "t2", hash: "h2" } }, latest: { git: "g1" } });
+    assert.deepEqual(fs.readdirSync(path.dirname(file)), ["mcp-explore-records.json"], "no temp file is left behind");
+  });
+
+  it("merges records, the updates winning on a conflict, without changing the inputs", () => {
+    const current: McpExploreRecords = { explored: { git: { at: "t1", hash: "h1" } }, latest: { git: "h1" } };
+    assert.deepEqual(mergeExploreRecords(current, {}), current, "empty updates change nothing");
+    assert.deepEqual(mergeExploreRecords(current, { latest: { git: "h2", gdb: "z" } }), { explored: { git: { at: "t1", hash: "h1" } }, latest: { git: "h2", gdb: "z" } });
+    assert.deepEqual(
+      mergeExploreRecords(current, { explored: { git: { at: "t9", hash: "h9" }, gdb: { at: "t2", hash: "h2" } } }),
+      { explored: { git: { at: "t9", hash: "h9" }, gdb: { at: "t2", hash: "h2" } }, latest: { git: "h1" } },
+    );
+    assert.deepEqual(current, { explored: { git: { at: "t1", hash: "h1" } }, latest: { git: "h1" } });
   });
 });

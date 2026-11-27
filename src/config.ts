@@ -84,6 +84,8 @@ export const FILE_HISTORY_DIR = process.env.TORIEL_FILE_HISTORY_DIR ?? path.join
 export const PLAN_DIR = process.env.TORIEL_PLAN_DIR ?? path.join(STATE_DIR, "plan-mode");
 /** The one-line summary of each MCP server, remembered from an earlier session (ticket 303): the toriel-mcp extension registers servers with it so the system prompt's server list stays the same when they connect. */
 export const MCP_SUMMARIES_FILE = process.env.TORIEL_MCP_SUMMARIES_FILE ?? path.join(STATE_DIR, "mcp-summaries.json");
+/** When each MCP server's skill was last written by /mcp explore (with the server's tool hash then) and each server's last-seen tool hash (ticket 308): the two together tell whether a skill has gone stale. */
+export const MCP_EXPLORE_RECORDS_FILE = process.env.TORIEL_MCP_EXPLORE_RECORDS_FILE ?? path.join(STATE_DIR, "mcp-explore-records.json");
 export const LITELLM_CACHE_FILE = process.env.TORIEL_LITELLM_CACHE ?? path.join(STATE_DIR, "litellm-routes.json");
 
 /**

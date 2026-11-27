@@ -2,7 +2,10 @@
 // toriel-mcp extension registers them into pi with pi.registerMcpServer at session start. This is the pure half, shared by the
 // daemon (which edits the file for /mcp add and the doctor) and the extension (which reads it inside pi): one definition of what an
 // entry may hold and how it is read, so the two cannot drift.
+import { createHash } from "node:crypto";
+import * as fs from "node:fs";
 import * as net from "node:net";
+import * as path from "node:path";
 import { parse } from "yaml";
 
 /** The environment variable that tells a pi child where mcp.yaml is (a path, never the contents: an entry's env may hold a secret, and a child's environment is readable by the agent's own commands). */
@@ -226,9 +229,10 @@ export function summaryLine(instructions: string | undefined): string {
   return ((instructions ?? "").split("\n", 1)[0] ?? "").trim().slice(0, SUMMARY_MAX);
 }
 
-/** What the extension sees of a tool: its name and, for an MCP tool of a connected server, the server's namespace. */
+/** What the extension sees of a tool: its name, its parameters (the explore record hash takes it, ticket 308) and, for an MCP tool of a connected server, the server's namespace. */
 export interface ToolNamespaceInfo {
   name: string;
+  parameters?: unknown;
   namespace?: { aliases?: readonly string[]; instructions?: string };
 }
 
@@ -252,6 +256,137 @@ export function learnSummaries(known: Readonly<Record<string, string>>, tools: r
     }
   }
   return changed ? next : undefined;
+}
+
+/** The environment variable naming the file of /mcp explore records (ticket 308); the daemon sets it, the toriel-mcp extension stamps it at the end of each run. */
+export const MCP_RECORDS_ENV = "TORIEL_MCP_EXPLORE_RECORDS_FILE";
+
+/** What is remembered about /mcp explore (ticket 308), and from it whether a server's skill has gone stale: the skill's write time with the tool hash of that moment, against the last-seen tool hash. */
+export interface McpExploreRecords {
+  /** Server -> the /mcp explore run's end (ISO timestamp) and the server's tool hash at that moment. */
+  explored: Record<string, { at: string; hash: string }>;
+  /** Server -> the tool hash the most recent run that had the server connected saw. */
+  latest: Record<string, string>;
+}
+
+/** What of a tool the record hash takes: its name, its parameters, and the server it belongs to. Descriptions and exposure are left out, so they cannot move the hash. */
+export interface ToolInfoLike {
+  name: string;
+  parameters?: unknown;
+  namespace?: { aliases?: readonly string[] };
+}
+
+/** `value` with every object's keys sorted (arrays keep their order; primitives pass through, undefined and null as null), so equal parameter schemas always stringify the same. */
+export function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(canonicalize);
+  }
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(
+      Object.keys(value as Record<string, unknown>)
+        .sort()
+        .map((k) => [k, canonicalize((value as Record<string, unknown>)[k])]),
+    );
+  }
+  return value ?? null;
+}
+
+/** The tool hash of each server that had tools: sha256 hex over the JSON of the server's tools sorted by name, each as [name, canonicalize(parameters)], cut to 16 characters. A server with no MCP tool gets no entry. */
+export function computeToolHashes(tools: readonly ToolInfoLike[]): Record<string, string> {
+  const grouped = new Map<string, Array<{ name: string; parameters: unknown }>>();
+  for (const tool of tools) {
+    const server = tool.namespace?.aliases?.[0];
+    if (!server || !tool.name.startsWith("mcp__")) {
+      continue;
+    }
+    const list = grouped.get(server) ?? [];
+    list.push({ name: tool.name, parameters: tool.parameters });
+    grouped.set(server, list);
+  }
+  const hashes: Record<string, string> = {};
+  for (const [server, list] of grouped) {
+    list.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    hashes[server] = createHash("sha256")
+      .update(JSON.stringify(list.map((t) => [t.name, canonicalize(t.parameters)])))
+      .digest("hex")
+      .slice(0, 16);
+  }
+  return hashes;
+}
+
+/** The remembered explore records (ticket 308). A missing, unreadable or malformed file is none; a malformed entry is left out, the rest still load. */
+export function loadExploreRecords(file: string | undefined): McpExploreRecords {
+  if (!file) {
+    return { explored: {}, latest: {} };
+  }
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return { explored: {}, latest: {} };
+    }
+    const { explored, latest } = parsed as { explored?: unknown; latest?: unknown };
+    const stamps = (): Record<string, { at: string; hash: string }> => {
+      if (typeof explored !== "object" || explored === null || Array.isArray(explored)) {
+        return {};
+      }
+      return Object.fromEntries(
+        Object.entries(explored as Record<string, unknown>).flatMap(([server, stamp]): Array<[string, { at: string; hash: string }]> => {
+          const at = (typeof stamp === "object" && stamp !== null ? (stamp as { at?: unknown }).at : undefined);
+          const hash = (typeof stamp === "object" && stamp !== null ? (stamp as { hash?: unknown }).hash : undefined);
+          return typeof at === "string" && typeof hash === "string" ? [[server, { at, hash }]] : [];
+        }),
+      );
+    };
+    const seen = (): Record<string, string> =>
+      typeof latest === "object" && latest !== null && !Array.isArray(latest)
+        ? Object.fromEntries(Object.entries(latest as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === "string"))
+        : {};
+    return { explored: stamps(), latest: seen() };
+  } catch {
+    return { explored: {}, latest: {} };
+  }
+}
+
+/** Write the records atomically: several sessions may end a run at once, and a rename never leaves a half-written file. */
+export function saveExploreRecords(file: string, records: McpExploreRecords): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify(records, null, 2)}\n`);
+  fs.renameSync(tmp, file);
+}
+
+/** The records after `updates` land: on a conflict the update wins. Neither input is changed. */
+export function mergeExploreRecords(
+  current: McpExploreRecords,
+  updates: { explored?: Record<string, { at: string; hash: string }>; latest?: Record<string, string> },
+): McpExploreRecords {
+  return {
+    explored: { ...current.explored, ...(updates.explored ?? {}) },
+    latest: { ...current.latest, ...(updates.latest ?? {}) },
+  };
+}
+
+/** The first line of the prompt that asks for several servers at once: the /mcp explore command builds its combined prompt starting with it. */
+export function mcpExploreAllFirstLine(servers: readonly string[]): string {
+  return `Write or update skills for the MCP servers: ${servers.join(", ")}`;
+}
+
+const EXPLORE_ONE_PREFIX = 'Write a skill for the MCP server "';
+const EXPLORE_ALL_PREFIX = "Write or update skills for the MCP servers: ";
+
+/** The server names an /mcp explore prompt starts with: the one in the single-server prompt, or the list the combined prompt opens with. Names may hold anything but a double quote; callers validate them against the configured servers. */
+export function explorePromptServerNames(prompt: string | undefined): string[] {
+  const first = (prompt ?? "").split("\n", 1)[0] ?? "";
+  if (first.startsWith(EXPLORE_ONE_PREFIX)) {
+    const close = first.indexOf('"', EXPLORE_ONE_PREFIX.length);
+    return close === -1 ? [] : [first.slice(EXPLORE_ONE_PREFIX.length, close)];
+  }
+  if (first.startsWith(EXPLORE_ALL_PREFIX)) {
+    const names = first.slice(EXPLORE_ALL_PREFIX.length);
+    const bare = names.endsWith(".") ? names.slice(0, -1) : names;
+    return bare.split(", ").map((n) => n.trim());
+  }
+  return [];
 }
 
 /** Whether something accepts a TCP connection at the URL's host and port within `timeoutMs`. A refused or silent port is down; the check never throws. */

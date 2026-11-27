@@ -5,7 +5,8 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { learnSummaries, MCP_FILE_ENV, MCP_SUMMARIES_ENV, piConfig, summaryLine } from "../pi/extensions/lib/mcp-config.ts";
+import { computeToolHashes, learnSummaries, loadExploreRecords, mcpExploreAllFirstLine, MCP_FILE_ENV, MCP_RECORDS_ENV, MCP_SUMMARIES_ENV, piConfig, saveExploreRecords, summaryLine } from "../pi/extensions/lib/mcp-config.ts";
+import { mcpExplorePrompt } from "../src/mcp-explore-prompt.ts";
 import setup, { addToolSearchGuideline, describeOutcomes, loadServers, loadSummaries, reconcile, recordSummaries, saveSummaries, TOOL_SEARCH_GUIDELINE, UP_COMMAND } from "../pi/extensions/toriel-mcp.ts";
 
 async function listener(): Promise<{ port: number; close(): Promise<void> }> {
@@ -96,8 +97,8 @@ describe("reconcile", () => {
   });
 });
 
-  function load(file: string | undefined, summaries?: string, tools: Array<{ name: string; namespace?: { aliases?: string[]; instructions?: string } }> = []) {
-    const saved = { file: process.env[MCP_FILE_ENV], summaries: process.env[MCP_SUMMARIES_ENV] };
+  function load(file: string | undefined, summaries?: string, tools: Array<{ name: string; parameters?: unknown; namespace?: { aliases?: string[]; instructions?: string } }> = [], records?: string) {
+    const saved = { file: process.env[MCP_FILE_ENV], summaries: process.env[MCP_SUMMARIES_ENV], records: process.env[MCP_RECORDS_ENV] };
     const put = (key: string, value: string | undefined): void => {
       if (value === undefined) {
         delete process.env[key];
@@ -107,6 +108,7 @@ describe("reconcile", () => {
     };
     put(MCP_FILE_ENV, file);
     put(MCP_SUMMARIES_ENV, summaries);
+    put(MCP_RECORDS_ENV, records);
     const handlers: Array<(e: unknown, ctx: never) => unknown> = [];
     const events: string[] = [];
     const commands = new Map<string, (args: string, ctx: { ui: { notify(m: string, t?: string): void } }) => Promise<void> | void>();
@@ -129,6 +131,7 @@ describe("reconcile", () => {
     } finally {
       put(MCP_FILE_ENV, saved.file);
       put(MCP_SUMMARIES_ENV, saved.summaries);
+      put(MCP_RECORDS_ENV, saved.records);
     }
     return { handlers, events, commands, registered, configs };
   }
@@ -236,6 +239,56 @@ describe("remembered server summaries (ticket 303)", () => {
 
   it("does not listen for run ends when the daemon named no summaries file", () => {
     assert.deepEqual(load(yamlFile("servers: {}\n")).events, ["session_start", "before_agent_start"]);
+  });
+});
+
+describe("explore records (ticket 308)", () => {
+  const recordsFile = (): string => path.join(fs.mkdtempSync(path.join(os.tmpdir(), "toriel-mcprec-")), "state", "mcp-explore-records.json");
+  const rtool = (name: string, server: string, parameters?: unknown) => ({ name, namespace: { aliases: [server] }, parameters });
+
+  it("listens for run ends when the daemon named a records file, even without a summaries file", () => {
+    assert.deepEqual(load(yamlFile("servers: {}\n"), undefined, [], recordsFile()).events, ["session_start", "before_agent_start", "agent_end"]);
+  });
+
+  it("stamps the server an explore prompt named with the hash its tools hash to at the run's end, and refreshes latest on later runs", async () => {
+    const file = recordsFile();
+    const tools = [rtool("mcp__git__git_read", "git", { type: "object" }), rtool("mcp__gdb__gdb_start", "gdb")];
+    const x = load(yamlFile("servers:\n  git: { command: g }\n  gdb: { command: d }\n"), undefined, tools, file);
+    await x.handlers[1]?.({ messageType: "user", prompt: mcpExplorePrompt("git") }, {} as never);
+    await x.handlers[2]?.({}, {} as never);
+    const fresh = computeToolHashes(tools);
+    const records = loadExploreRecords(file);
+    assert.deepEqual(records.latest, fresh);
+    assert.deepEqual(Object.keys(records.explored), ["git"]);
+    assert.equal(records.explored.git?.hash, fresh.git);
+    assert.match(records.explored.git?.at ?? "/", /^\d{4}-\d{2}-\d{2}T/, "stamped with the run's end time");
+    await x.handlers[1]?.({ messageType: "user", prompt: "fix a bug in the parser" }, {} as never);
+    await x.handlers[2]?.({}, {} as never);
+    assert.deepEqual(loadExploreRecords(file).explored, records.explored, "a run the prompt did not open as explore leaves the stamp");
+    await x.handlers[1]?.({ messageType: "custom" }, {} as never);
+    await x.handlers[2]?.({}, {} as never);
+    assert.deepEqual(loadExploreRecords(file).explored, records.explored, "a run opened by a custom message is not an explore run");
+    assert.deepEqual(loadExploreRecords(file).latest, fresh);
+  });
+
+  it("keeps records of servers this run does not touch, and stamps no explored name that has no tools", async () => {
+    const file = recordsFile();
+    saveExploreRecords(file, { explored: { gdb: { at: "t0", hash: "old" } }, latest: { gdb: "old" } });
+    const tools = [rtool("mcp__git__git_read", "git", { type: "object" })];
+    const x = load(yamlFile("servers:\n  git: { command: g }\n"), undefined, tools, file);
+    await x.handlers[1]?.({ messageType: "user", prompt: mcpExploreAllFirstLine(["git", "gdb"]) }, {} as never);
+    await x.handlers[2]?.({}, {} as never);
+    const records = loadExploreRecords(file);
+    assert.deepEqual(records.latest, { gdb: "old", git: computeToolHashes(tools).git }, "latest takes the fresh hashes and keeps a server this run did not see");
+    assert.equal(records.explored.git?.hash, records.latest.git);
+    assert.deepEqual(records.explored.gdb, { at: "t0", hash: "old" }, "gdb has no tools this run: its stamp is kept, not refreshed");
+    assert.deepEqual(Object.keys(records.explored).sort(), ["gdb", "git"]);
+  });
+
+  it("never throws when the records file cannot be written", () => {
+    const blocked = path.join(yamlFile(""), "under-a-file", "s.json");
+    const x = load(yamlFile("servers:\n  git: { command: g }\n"), undefined, [rtool("mcp__git__git_read", "git")], blocked);
+    assert.doesNotThrow(() => x.handlers[2]?.({}, {} as never));
   });
 });
 

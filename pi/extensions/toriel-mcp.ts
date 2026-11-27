@@ -13,9 +13,13 @@
 // A server whose tools are not declared is registered with the summary an earlier session saw (ticket 303; the file in
 // TORIEL_MCP_SUMMARIES), so the system prompt's server list does not change when the server connects. The end of each run records
 // the connected servers' summaries for the next session.
+//
+// The end of each run also stamps /mcp explore records (ticket 308; the file in TORIEL_MCP_EXPLORE_RECORDS_FILE): the hash of every
+// connected server's tools as it is now, and, when the run was opened by an /mcp explore prompt, the servers it names stamped with
+// that hash and the time -- so a later reader can tell when a server's skill was last written and whether its tools changed since.
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { learnSummaries, MCP_DIRECT_ENV, MCP_FILE_ENV, MCP_SUMMARIES_ENV, type McpServerConfig, parseDirectServers, parseMcpYaml, piConfig, probeUrl, redactUrl, type ToolNamespaceInfo, toolServerName } from "./lib/mcp-config.ts";
+import { computeToolHashes, explorePromptServerNames, learnSummaries, loadExploreRecords, MCP_DIRECT_ENV, MCP_FILE_ENV, MCP_RECORDS_ENV, MCP_SUMMARIES_ENV, type McpServerConfig, mergeExploreRecords, parseDirectServers, parseMcpYaml, piConfig, probeUrl, redactUrl, saveExploreRecords, type ToolNamespaceInfo, toolServerName } from "./lib/mcp-config.ts";
 
 // Only the slice of pi's extension API this file uses (see toriel-usage.ts).
 interface Ctx {
@@ -138,6 +142,36 @@ export function recordSummaries(file: string, mcpFile: string, tools: readonly T
   }
 }
 
+/** The server names the run's opening prompt asks to explore (ticket 308), or undefined when the run was not opened by an /mcp explore prompt. Never throws. */
+export function explorePromptServers(event: unknown): string[] | undefined {
+  try {
+    if ((event as { messageType?: string } | undefined)?.messageType !== "user") {
+      return undefined;
+    }
+    const names = explorePromptServerNames((event as { prompt?: string } | undefined)?.prompt);
+    return names.length > 0 ? names : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Stamp the explore records at a run's end (ticket 308): every connected server's fresh tool hash as `latest`, and the servers the run's prompt asked to explore, stamped with the hash their tools hash to now and the time now, as `explored`. One read and one write. Never throws: a lost record only means the server looks stale again later. */
+export function recordExploreRecords(file: string, tools: readonly ToolNamespaceInfo[], names: readonly string[]): void {
+  try {
+    const hashes = computeToolHashes(tools);
+    const at = new Date().toISOString();
+    saveExploreRecords(
+      file,
+      mergeExploreRecords(loadExploreRecords(file), {
+        latest: hashes,
+        explored: Object.fromEntries(names.filter((n) => n in hashes).map((n) => [n, { at, hash: hashes[n] }])),
+      }),
+    );
+  } catch {
+    // see above
+  }
+}
+
 /** The words `/mcp-up` answers with, for the servers marked whenUp. */
 export function describeOutcomes(outcomes: Record<string, Outcome>, servers: Record<string, McpServerConfig>): string {
   const lines = Object.entries(outcomes).map(([name, outcome]) => {
@@ -161,6 +195,9 @@ export default function (pi: Pi): void {
     return;
   }
   const summariesFile = process.env[MCP_SUMMARIES_ENV];
+  const recordsFile = process.env[MCP_RECORDS_ENV];
+  // The servers the run's opening prompt asked to explore: set when a run starts, consumed and cleared at its end.
+  let pendingExplore: string[] | undefined;
   pi.on("session_start", async (_event, ctx) => {
     try {
       const { servers, problems } = loadServers(file);
@@ -174,10 +211,19 @@ export default function (pi: Pi): void {
   });
   pi.on("before_agent_start", (event) => {
     addToolSearchGuideline(event, pi.getActiveTools?.() ?? []);
+    if (recordsFile) {
+      pendingExplore = explorePromptServers(event);
+    }
     return undefined;
   });
   if (summariesFile) {
     pi.on("agent_end", () => recordSummaries(summariesFile, file, pi.getAllTools?.() ?? []));
+  }
+  if (recordsFile) {
+    pi.on("agent_end", () => {
+      recordExploreRecords(recordsFile, pi.getAllTools?.() ?? [], pendingExplore ?? []);
+      pendingExplore = undefined;
+    });
   }
   pi.registerCommand?.(UP_COMMAND, {
     description: "toriel: connect the mcp.yaml servers marked whenUp that are running now (name one to check only it)",

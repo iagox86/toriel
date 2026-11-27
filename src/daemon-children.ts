@@ -4,7 +4,7 @@ import { RpcClient } from "@earendil-works/pi-coding-agent";
 import { childEnv, sandboxWritableRoots } from "./child-env.ts";
 import { mcpYamlFile } from "./config-dir.ts";
 import { scopeForSession } from "./scope-root.ts";
-import { DIALOG_METHODS, FILE_HISTORY_DIR, MCP_SUMMARIES_FILE, PLAN_DIR, SANDBOX_TMP_DIR, SHARED_DIR, SOCK } from "./config.ts";
+import { DIALOG_METHODS, FILE_HISTORY_DIR, MCP_EXPLORE_RECORDS_FILE, MCP_SUMMARIES_FILE, PLAN_DIR, SANDBOX_TMP_DIR, SHARED_DIR, SOCK } from "./config.ts";
 import { answerablePrompt, exemptPaths, protectedPaths, touchesProtected } from "./daemon-permissions.ts";
 import { type GrantStore, ruleFor, withSuggestion } from "./permissions.ts";
 import { type BridgeTracker, INJECT_COMMAND, injectedId, mergedQueueTexts, parseBridgeReport } from "./daemon-bridge.ts";
@@ -152,7 +152,7 @@ export class ChildManager {
       cliPath: cfg.piCli,
       cwd: s.cwd,
       args,
-      env: { ...childEnv(s, SOCK, process.env, scope, { sharedDir: SHARED_DIR, tmpDir: SANDBOX_TMP_DIR, sandboxWritable: sandbox, mcpFile: profileHasMcp(s.agent) ? mcpYamlFile() : undefined, mcpDirect: mcpServersOf(s.agent?.tools ?? []), mcpSummaries: profileHasMcp(s.agent) ? MCP_SUMMARIES_FILE : undefined, fileHistoryDir: FILE_HISTORY_DIR, planDir: PLAN_DIR, freshness: settings.fileFreshness }), ...this.delegationEnv(s) },
+      env: { ...childEnv(s, SOCK, process.env, scope, { sharedDir: SHARED_DIR, tmpDir: SANDBOX_TMP_DIR, sandboxWritable: sandbox, mcpFile: profileHasMcp(s.agent) ? mcpYamlFile() : undefined, mcpDirect: mcpServersOf(s.agent?.tools ?? []), mcpSummaries: profileHasMcp(s.agent) ? MCP_SUMMARIES_FILE : undefined, mcpRecords: profileHasMcp(s.agent) ? MCP_EXPLORE_RECORDS_FILE : undefined, fileHistoryDir: FILE_HISTORY_DIR, planDir: PLAN_DIR, freshness: settings.fileFreshness }), ...this.delegationEnv(s) },
     });
     client.onEvent((event) => this.onEvent(s, event as Record<string, unknown>));
     this.launching.add(client);
