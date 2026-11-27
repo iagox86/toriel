@@ -35,6 +35,26 @@ describe("skillNameFromPath", () => {
     assert.equal(skillNameFromPath("skills/a/skills/b/SKILL.md"), "b");
   });
 
+  it("reads a doubled or dotted path the way the read tool could have been given it", () => {
+    assert.equal(skillNameFromPath("skills/foo//SKILL.md"), "foo");
+    assert.equal(skillNameFromPath("skills/foo/./SKILL.md"), "foo");
+  });
+
+  it("does not name a skill when the path climbs out of its skills directory", () => {
+    assert.equal(skillNameFromPath("skills/../SKILL.md"), undefined);
+    assert.equal(skillNameFromPath("skills/./SKILL.md"), undefined);
+  });
+
+  it("does not name a skill whose directory is not a plausible name", () => {
+    assert.equal(skillNameFromPath("skills/h4x$%/SKILL.md"), undefined);
+    assert.equal(skillNameFromPath("skills/.hidden/SKILL.md"), undefined);
+  });
+
+  it("does not name a skill for a Windows-shaped path (backslashes are name characters on POSIX)", () => {
+    assert.equal(skillNameFromPath("skills\\foo\\SKILL.md"), undefined);
+    assert.equal(skillNameFromPath("C:\\skills\\foo\\SKILL.md"), undefined);
+  });
+
   it("ignores values that are not paths", () => {
     assert.equal(skillNameFromPath(42), undefined);
     assert.equal(skillNameFromPath({ path: "pi/skills/messaging/SKILL.md" }), undefined);

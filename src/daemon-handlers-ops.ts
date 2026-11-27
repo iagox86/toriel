@@ -471,6 +471,10 @@ export async function handleClear(
     () => {
       result = clearFile(file, TRASH_DIR);
       log(`cleared ${file}: ${result.removed} entries -> ${result.trashedTo}`);
+      // the skill dedupe is per conversation, and this conversation is new: a re-read of a skill announces again (ticket 317);
+      // inside the mutation so a failed child restart cannot leave a cleared conversation with the old dedupe
+      s.loadedSkills = undefined;
+      s.pendingSkillReads = undefined;
     },
     { keepModel: true },
   );

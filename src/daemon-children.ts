@@ -567,18 +567,38 @@ export class ChildManager {
   }
 
   /**
-   * A skill the agent read (ticket 317): the first read of `.../skills/<name>/SKILL.md` in the session announces it once - a
-   * flash and a durable note under the read call. A single notice is one or the other (the controller docks the durable one and
-   * flashes the transient one), so the daemon sends both. Not a read of a skill, a re-read, or an unparseable event: a silent no-op,
-   * never a reason to fail the event it rides in.
+   * A skill the agent read (ticket 317): the first successful read of `.../skills/<name>/SKILL.md` in the session announces it once -
+   * one durable notice carrying the read's toolCallId, which a controller docks under the read call and flashes for a viewed session.
+   * pi reports a tool call's start before its path is checked and before a permission gate has answered it, so the start only remembers
+   * the call in `pendingSkillReads` (its end removes that), and a non-error end is what announces and occupies the slot: a failed or
+   * denied read announces nothing and never burns it, and an end that does not say `isError: false` stays silent too. A call whose
+   * start was seen but that never ends leaves one stale pending entry (bounded: one per pending read). Not a read of a skill, an
+   * unparseable event, a re-read: a silent no-op, never a reason to fail the event it rides in.
    */
   private takeSkillLoad(s: DaemonSession, event: Record<string, unknown>): void {
-    if (event.type !== "tool_execution_start" || event.toolName !== "read") {
+    if (event.type === "tool_execution_start") {
+      if (event.toolName !== "read" || typeof event.toolCallId !== "string") {
+        return;
+      }
+      const path = (event.args as { path?: unknown } | undefined)?.path;
+      const name = skillNameFromPath(path);
+      if (name === undefined || s.loadedSkills?.has(name)) {
+        return;
+      }
+      s.pendingSkillReads = s.pendingSkillReads ?? new Map();
+      s.pendingSkillReads.set(event.toolCallId, name);
       return;
     }
-    const path = (event.args as { path?: unknown } | undefined)?.path;
-    const name = skillNameFromPath(path);
-    if (name === undefined) {
+    if (event.type !== "tool_execution_end") {
+      return;
+    }
+    const id = typeof event.toolCallId === "string" ? event.toolCallId : undefined;
+    const name = id === undefined ? undefined : s.pendingSkillReads?.get(id);
+    // every end event for the id is consumed, so a re-sent or late end cannot announce twice
+    if (id !== undefined) {
+      s.pendingSkillReads?.delete(id);
+    }
+    if (name === undefined || event.isError !== false) {
       return;
     }
     s.loadedSkills = s.loadedSkills ?? new Set();
@@ -586,9 +606,7 @@ export class ChildManager {
       return;
     }
     s.loadedSkills.add(name);
-    const text = `${SKILL_LOADED_NOTICE}${name})`;
-    this.hub.broadcast({ type: "notice", session: s.id, text });
-    this.hub.broadcast({ type: "notice", session: s.id, text, durable: true });
+    this.hub.broadcast({ type: "notice", session: s.id, text: `${SKILL_LOADED_NOTICE}${name})`, durable: true, toolCallId: id });
   }
 
   /** pi settles a dialog with a `timeout` by itself and says nothing, so the record is dropped then too. */

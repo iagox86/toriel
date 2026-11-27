@@ -440,6 +440,18 @@ async function handle(cmd) {
         out({ type: "agent_settled" });
         return;
       }
+      if (cmd.message.startsWith("/skill-read-fail ")) {
+        // like /skill-read, but the read is denied: pi reports an error end (ticket 317)
+        ok(cmd.id, "prompt", { disposition: "started" });
+        streaming = true;
+        out({ type: "agent_start" });
+        const callId = `read-skill-${++readCalls}`;
+        out({ type: "tool_execution_start", toolCallId: callId, toolName: "read", args: { path: cmd.message.slice("/skill-read-fail ".length) } });
+        out({ type: "tool_execution_end", toolCallId: callId, isError: true, result: { content: [{ type: "text", text: "permission denied" }] } });
+        streaming = false;
+        out({ type: "agent_settled" });
+        return;
+      }
       if (cmd.message.trim() === "/plan-report-on" || cmd.message.trim() === "/plan-report-off") {
         // what the toriel-plan extension reports when the agent enters or leaves plan mode itself
         ok(cmd.id, "prompt", { disposition: "started" });
