@@ -83,7 +83,10 @@ starting it again reattaches to everything.
 ## Using it
 
 The switcher lists every pi session, live or not, in groups. Start typing to
-begin a new session, or use the keys below.
+begin a new session, or use the keys below. A new session (typed text,
+ctrl-n, /new, /init) joins the group of the highlighted row - a group
+header's group, or a session's group; on "(ungrouped)" or an ungrouped
+session it stays ungrouped.
 
 | Key | Where | Does |
 | --- | --- | --- |

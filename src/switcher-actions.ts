@@ -11,6 +11,7 @@ import type { Host } from "./host.ts";
 import { loadHandled } from "./handled-files.ts";
 import { loadSettings } from "./settings.ts";
 import { loadGroups, pruneStale, resolveGroup, saveGroups, type GroupsFile, withComment, withParked } from "./groups.ts";
+import { applySpawnGroup, groupForSpawn } from "./spawn-placement.ts";
 import {
   buildSessionList,
   isExternalRow,
@@ -238,11 +239,20 @@ export class SwitcherActions {
     this.h.rebuildChat();
   }
 
-  /** Spawn a session; `firstMessage` is prompted once it is entered. `restoreText` (default: `firstMessage`) is what a failed spawn puts back into the editor. */
+  /** Spawn a session; `firstMessage` is prompted once it is entered. `restoreText` (default: `firstMessage`) is what a failed spawn puts back into the editor. The new session joins the group of the highlighted row, if any (ticket 326). */
   async newSession(firstMessage?: string, name?: string, cwd = this.defaultCwd, agent?: string, model?: string, restoreText?: string): Promise<void> {
+    // Capture now: the highlight can move (keys, a list refresh) while the spawn is in flight.
+    const group = groupForSpawn(this.h.switcher.spawnAnchor());
     try {
-      const data = (await this.h.request({ type: "spawn", cwd, name: name ? this.h.uniqueSessionName(name) : name, agent, ...(model !== undefined ? { model } : {}) })) as { sessionId?: number };
+      const data = (await this.h.request({ type: "spawn", cwd, name: name ? this.h.uniqueSessionName(name) : name, agent, ...(model !== undefined ? { model } : {}) })) as { sessionId?: number; uuid?: string };
       if (typeof data?.sessionId === "number") {
+        if (group) {
+          if (data.uuid) {
+            this.placeNewSession(data.uuid, group);
+          } else {
+            this.h.notify(`new session not added to group "${group}": the daemon did not report its id`);
+          }
+        }
         const meta = this.h.sessions.get(data.sessionId);
         if (meta) {
           this.h.viewing = this.h.keyFor(meta);
@@ -262,6 +272,18 @@ export class SwitcherActions {
       }
       this.h.switcher.hint = `spawn failed: ${errText(err)}`;
       this.h.tui.requestRender();
+    }
+  }
+
+  /** Assign the captured group; disk and the cached groups stay in step, and the list picks it up on its next refresh. */
+  private placeNewSession(sessionId: string, title: string): void {
+    try {
+      const groups = loadGroups();
+      applySpawnGroup(groups, sessionId, title);
+      saveGroups(groups);
+      this.groups = groups;
+    } catch (err) {
+      this.h.notify(`could not add the new session to group "${title}": ${errText(err)}`);
     }
   }
 

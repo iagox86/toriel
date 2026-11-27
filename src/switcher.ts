@@ -6,6 +6,7 @@
 // controller's chat box (the editor): this component only renders and moves.
 import { spinnerFrame } from "./activity.ts";
 import { appendFileSync } from "node:fs";
+import type { SpawnRow } from "./spawn-placement.ts";
 import { Container, truncateToWidth, type Focusable } from "@earendil-works/pi-tui";
 import { fmtTokens, oneLine } from "./format.ts";
 import { fmtClockShort } from "./when.ts";
@@ -260,6 +261,18 @@ export class Switcher extends Container implements Focusable {
   current(): SwitcherSession | undefined {
     const row = this.rows[this.selRow];
     return row?.kind === "session" ? row.s : undefined;
+  }
+
+  /** The currently highlighted row as a spawn anchor (a header's title, a session's group), or nothing (ticket 326). */
+  spawnAnchor(): SpawnRow | undefined {
+    const row = this.rows[this.selRow];
+    if (!row) {
+      return undefined;
+    }
+    if (row.kind === "header") {
+      return { kind: "header", title: row.title };
+    }
+    return { kind: "session", group: row.s.group };
   }
 
   currentIsHeader(): boolean {
