@@ -57,6 +57,8 @@ export interface Host {
   cwdFor(key: string): string;
   /** Re-read a session's transcript from its file after the file changed under it (rewind, restore). */
   reloadView(key: string): void;
+  /** Put the goal rows (set/done/cleared, ticket 348) into a freshly built view of the session at `key`, and fetch them again. */
+  goalLines(key: string): void;
   syncHistory(force?: boolean): void;
   /** Ask pi for the viewed session's slash commands again (after a sleeping session was started). */
   refreshPiCommands(): void;

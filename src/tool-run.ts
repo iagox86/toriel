@@ -5,6 +5,7 @@ import type { ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { fillExpandKey } from "./components.ts";
+import { SKILL_LOADED_NOTICE } from "./shared.ts";
 import { attention, dim } from "./theme.ts";
 
 export interface ToolCall {
@@ -15,7 +16,7 @@ export interface ToolCall {
   failed: boolean;
   /** pi's id for the call; notes are kept by it so a history reload can put them back on the call. */
   id?: string;
-  /** What toriel did about this call (a grant answered its permission prompt), shown under it when the run is expanded. */
+  /** What toriel did about this call (a grant answered its permission prompt), shown under it when the run is expanded; a skill load also under the collapsed run (see inlineNote). */
   notes?: string[];
   /** Finished: its output no longer changes, so rendered lines can be reused. */
   done?: boolean;
@@ -45,6 +46,11 @@ export function summaryLine(calls: ToolCall[], hint = true): string {
   return dim(` > ${calls.length} ${noun}: ${toolNames(calls)}`) + fail + (hint ? dim("  ctrl-o to expand") : "");
 }
 
+/** A call note that is part of the conversation, not a detail of the call: shown under a collapsed run too (a skill load, ticket 347). */
+export function inlineNote(note: string): boolean {
+  return note.startsWith(SKILL_LOADED_NOTICE);
+}
+
 export class ToolRun implements Component {
   calls: ToolCall[] = [];
   expanded = false;
@@ -67,8 +73,9 @@ export class ToolRun implements Component {
         return lines;
       });
     }
-    // blank line above, so the summary doesn't hug the text before it
-    return ["", truncateToWidth(summaryLine(this.calls, this.showHint), width)];
+    // blank line above, so the summary doesn't hug the text before it; a skill load also reads in the collapsed flow (ticket 347), the other notes only when expanded
+    const inline = this.calls.flatMap((c) => (c.notes ?? []).filter(inlineNote)).map((n) => truncateToWidth(dim(` toriel: ${n}`), width));
+    return ["", truncateToWidth(summaryLine(this.calls, this.showHint), width), ...inline];
   }
 
   invalidate(): void {

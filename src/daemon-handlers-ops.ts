@@ -257,6 +257,10 @@ export function handleGoal(ctx: DaemonContext, cmd: Cmd<"goal">, res: Responder)
     case "get":
       record = ctx.goals.get(cmd.sessionId);
       break;
+    case "history":
+      // the events, not a record: what a transcript replay places among the messages (ticket 348)
+      res(true, undefined, ctx.goals.history(cmd.sessionId));
+      return;
   }
   if (changed) {
     ctx.hub.broadcastSessions();

@@ -298,6 +298,33 @@ describe("applyEvent", () => {
     assert.match(text, /skill loaded\(foo\)[\s\S]*skill loaded\(bar\)/, "appended in arrival order");
   });
 
+  it("finds skill loads on replay: once per skill, only for a successful read of a SKILL.md, merged with notes put back after a rebuild (ticket 347)", () => {
+    const tui = { requestRender() {} } as never;
+    const read = (id: string, path: string, isError = false) => [
+      { role: "assistant", content: [{ type: "toolCall", id, name: "read", arguments: { path } }] },
+      { role: "toolResult", toolCallId: id, toolName: "read", content: [{ type: "text", text: "# skill" }], isError },
+    ];
+    const items = itemsFromMessages(
+      [
+        ...read("r0", "/x/skills/foo/SKILL.md", true),
+        ...read("r1", "/x/skills/foo/SKILL.md"),
+        ...read("r2", "/x/skills/foo/SKILL.md"),
+        ...read("r3", "/x/skills/foo/README.md"),
+        ...read("r4", "/y/skills/bar/SKILL.md"),
+      ],
+      tui,
+      "/w",
+    );
+    const run = items.find((i) => i.kind === "tools")?.component as unknown as { calls: Array<{ id?: string; notes?: string[] }>; render(w: number): string[] };
+    assert.deepEqual(
+      run.calls.map((c) => [c.id, c.notes]),
+      [["r0", undefined], ["r1", ["skill loaded(foo)"]], ["r2", undefined], ["r3", undefined], ["r4", ["skill loaded(bar)"]]],
+    );
+    assert.match(run.render(120).join("\n").replace(/\x1b\[[0-9;]*m/g, ""), /tool calls: read x5[\s\S]*toriel: skill loaded\(foo\)\n toriel: skill loaded\(bar\)/, "in the collapsed flow");
+    reapplyCallNotes(items, new Map([["r1", ["allowed by permission grant #9: /p", "skill loaded(foo)"]]]));
+    assert.deepEqual(run.calls[1]?.notes, ["allowed by permission grant #9: /p", "skill loaded(foo)"], "the live notes, without a second skill line");
+  });
+
   it("shows a message from another session as 'from NAME' rather than as something the user typed", () => {
     const tui = { requestRender() {} } as never;
     const label = "[from Boss (0b1c2d3e-aaaa-4bbb-8ccc-111111111111)]: please check the schema";

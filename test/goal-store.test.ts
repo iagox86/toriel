@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { type CommandSpec, type CompletionSources, parseCommandLine } from "../src/cli.ts";
 import { SESSION_COMMANDS, SWITCHER_COMMANDS } from "../src/commands.ts";
-import { goalAction, GoalStore, goalNote } from "../src/goals.ts";
+import { GOAL_LOG_MAX, goalAction, GoalStore, goalNote } from "../src/goals.ts";
 
 const fileOf = (): { dir: string; file: string } => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "goals-"));
@@ -57,6 +57,55 @@ describe("GoalStore", () => {
     assert.deepEqual(a.get("s2"), { text: "new job", setAt: 7 });
     assert.equal(a.copy("s-missing", "s3"), false);
     assert.equal(a.get("s3"), undefined);
+  });
+
+  it("keeps a history of goal changes that outlives a clear and a restart, goes with the session, and is copied on fork (ticket 348)", () => {
+    const { dir, file } = fileOf();
+    stores.push(dir);
+    let now = 100;
+    const a = new GoalStore(file, () => now++);
+    a.load();
+    a.set("s1", "fix the build");
+    a.done("s1", "agent");
+    a.done("s1", "user");
+    a.clear("s1");
+    a.clear("s1");
+    const events = [
+      { kind: "set", text: "fix the build", at: 100 },
+      { kind: "done", text: "fix the build", at: 101, by: "agent" },
+      { kind: "cleared", text: "fix the build", at: 103 },
+    ];
+    assert.deepEqual(a.history("s1"), events, "a second done and a clear of nothing add no event");
+    assert.deepEqual(a.summary(), {}, "a cleared goal is not in the summary");
+    a.set("s2", "other");
+    assert.deepEqual(a.summary(), { s2: { text: "other", done: false, at: 104 } });
+
+    const b = new GoalStore(file);
+    b.load();
+    assert.deepEqual(b.history("s1"), events, "persisted");
+    assert.equal(b.copy("s1", "fork"), false, "no goal to copy");
+    assert.deepEqual(b.history("fork"), events, "but the history goes with the fork's transcript");
+    b.remove("s1");
+    assert.deepEqual(b.history("s1"), []);
+    const c = new GoalStore(file);
+    c.load();
+    assert.deepEqual(c.history("s1"), [], "a deleted session's history is gone from the file too");
+    assert.deepEqual(c.history("fork"), events);
+  });
+
+  it("keeps only the newest events of a session", () => {
+    const { dir, file } = fileOf();
+    stores.push(dir);
+    let now = 0;
+    const a = new GoalStore(file, () => now++);
+    a.load();
+    for (let i = 0; i < GOAL_LOG_MAX + 5; i++) {
+      a.set("s1", `goal ${i}`);
+    }
+    const log = a.history("s1");
+    assert.equal(log.length, GOAL_LOG_MAX);
+    assert.equal(log.at(-1)?.text, `goal ${GOAL_LOG_MAX + 4}`);
+    assert.equal(log[0]?.text, "goal 5");
   });
 
   it("starts empty from a missing or damaged file", () => {

@@ -48,7 +48,8 @@ import { rewindTargets } from "./rewind.ts";
 import { guardClicks } from "./click-guard.ts";
 import { autocompleteMaxVisible, hideThinkingBlock, wheelScrollLines } from "./pi-settings.ts";
 import { SessionActions } from "./session-actions.ts";
-import type { GoalSummary } from "./goals.ts";
+import type { GoalEvent, GoalSummary } from "./goals.ts";
+import { changedGoals, goalLineText, placeGoalLines } from "./goal-lines.ts";
 import { SwitcherActions } from "./switcher-actions.ts";
 import { killServer } from "./lifecycle.ts";
 import { compareDaemon, describeDaemon, type DaemonVerdict, type Hello } from "./version-check.ts";
@@ -155,6 +156,8 @@ class Controller {
   sessions = new Map<number, SessionMeta>();
   /** A goal summary per session UUID, from the daemon's session lists (ticket 258): rows without a live meta fall back to it. */
   goalSummaries: Record<string, GoalSummary> = {};
+  /** Each session's goal events by UUID, as last fetched (ticket 348): laid into a view at once when it is built, then fetched again. */
+  private goalLogs = new Map<string, GoalEvent[]>();
   /** Sessions from the filesystem (listAll), by session file path. */
   local = new Map<string, LocalSession>();
   /** Transcript state by canonical key (session file path, or daemon:N). */
@@ -414,10 +417,21 @@ class Controller {
 
   handleDaemonMessage(msg: DaemonMessage): void {
     switch (msg.type) {
-      case "sessions":
-        this.goalSummaries = msg.goals ?? {};
+      case "sessions": {
+        const goals = msg.goals ?? {};
+        // the first list after connecting is no news: every goal in it would look new
+        const announce = this.sessionsLoaded;
+        const changed = changedGoals(this.goalSummaries, goals);
+        this.goalSummaries = goals;
         this.onSessions(msg.sessions);
+        for (const uuid of changed) {
+          const key = this.keyForUuid(uuid);
+          if (key !== undefined && this.views.has(key)) {
+            void this.fetchGoalLog(uuid, announce);
+          }
+        }
         return;
+      }
       case "history":
         this.onHistory(msg.session, msg.messages);
         return;
@@ -529,6 +543,7 @@ class Controller {
       const items = itemsFromMessages(messages, this.tui, this.metaForPath(key)?.cwd ?? "");
       const fresh = viewFromHistory(old, items, this.staleViews.delete(key), messages.length);
       this.views.set(key, fresh);
+      this.goalLines(key);
       if (key === this.viewing) {
         this.rebuildChat();
       }
@@ -660,8 +675,72 @@ class Controller {
     return this.metaForPath(key)?.cwd ?? this.local.get(key)?.cwd ?? process.cwd();
   }
 
+  private uuidForKey(key: string): string | undefined {
+    return this.metaForPath(key)?.sessionId ?? this.local.get(key)?.id;
+  }
+
+  private keyForUuid(uuid: string): string | undefined {
+    const meta = [...this.sessions.values()].find((m) => m.sessionId === uuid);
+    return meta ? this.keyFor(meta) : [...this.local.values()].find((l) => l.id === uuid)?.path;
+  }
+
+  goalLines(key: string): void {
+    this.placeGoals(key);
+    const uuid = this.uuidForKey(key);
+    if (uuid !== undefined) {
+      void this.fetchGoalLog(uuid, false);
+    }
+  }
+
+  /** Lay the session's cached goal events into its view as rows; true when the items changed. */
+  private placeGoals(key: string): boolean {
+    const view = this.views.get(key);
+    const uuid = this.uuidForKey(key);
+    if (!view || uuid === undefined) {
+      return false;
+    }
+    const events = this.goalLogs.get(uuid) ?? [];
+    if (events.length === 0 && !view.items.some((i) => i.goalLine)) {
+      return false;
+    }
+    view.items = placeGoalLines(view.items, events, (e) => noteRow(goalLineText(e)));
+    return true;
+  }
+
+  /**
+   * Ask the daemon for a session's goal events and lay them into its view (ticket 348). With `announce` (a change the sessions
+   * list just showed), a goal the agent marked done also flashes on the viewed session; the user's own /goal already said what it did.
+   */
+  private async fetchGoalLog(uuid: string, announce: boolean): Promise<void> {
+    let events: GoalEvent[];
+    try {
+      const data = await this.request({ type: "goal", action: "history", sessionId: uuid }, 5000);
+      events = Array.isArray(data) ? (data as GoalEvent[]) : [];
+    } catch (err) {
+      const key = this.keyForUuid(uuid);
+      if (key !== undefined && key === this.viewing) {
+        this.notify(`goal lines: ${errText(err)}`);
+      }
+      return;
+    }
+    const before = this.goalLogs.get(uuid) ?? [];
+    this.goalLogs.set(uuid, events);
+    const key = this.keyForUuid(uuid);
+    if (key === undefined) {
+      return;
+    }
+    if (this.placeGoals(key) && key === this.viewing) {
+      this.rebuildChat();
+    }
+    const newest = events.at(-1);
+    if (announce && key === this.viewing && newest?.kind === "done" && newest.by === "agent" && !before.some((e) => e.kind === "done" && e.at === newest.at)) {
+      this.notify(goalLineText(newest));
+    }
+  }
+
   reloadView(key: string): void {
     this.views.set(key, { ...newView(), items: itemsFromFile(key, this.tui, this.cwdFor(key)) });
+    this.goalLines(key);
     this.summaries.delete(key);
     this.rebuildChat();
     this.syncHistory(true); // the dropped messages are no longer history
@@ -943,6 +1022,7 @@ class Controller {
 
   /** Mount new items immediately on the viewed session; rebuildChat() mounts the rest. */
   addItem(view: SessionView, key: string, item: Item): void {
+    item.at ??= Date.now();
     this.applyDisplay(item);
     view.items.push(item);
     if (item.kind === "tools") {

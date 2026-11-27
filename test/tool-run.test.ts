@@ -35,6 +35,17 @@ describe("tool run", () => {
     assert.doesNotMatch(run.render(120)[1] as string, /ctrl-o/);
   });
 
+  it("shows a skill load under the collapsed run, but keeps the other notes for the expanded view (ticket 347)", () => {
+    const run = new ToolRun();
+    const read = call("read");
+    read.notes = ["allowed by permission grant #9: /p", "skill loaded(gdb-mcp)"];
+    run.calls.push(read, call("bash"));
+    const out = run.render(120).map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""));
+    assert.equal(out.length, 3);
+    assert.match(out[1] as string, /2 tool calls: read, bash/);
+    assert.equal(out[2], " toriel: skill loaded(gdb-mcp)");
+  });
+
   it("expands to every call's full block", () => {
     const run = new ToolRun();
     run.calls.push(call("a", false, ["a1", "a2"]), call("b", false, ["b1"]));
