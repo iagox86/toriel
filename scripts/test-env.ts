@@ -34,8 +34,30 @@ export function allTestFiles(root: string = REPO_ROOT): string[] {
     .map((f) => path.join("test", f));
 }
 
-/** node --test flags that take a value as the next token; the `=value` form rides on its dash and needs no looking ahead. */
-const VALUE_FLAGS = ["--test-name-pattern", "--test-skip-pattern", "--test-reporter", "--test-reporter-destination", "--test-shard", "--test-concurrency", "--test-timeout"];
+/**
+ * Value-taking flags whose next token must not count as a test file: the runner's own (pattern, reporter, shard, concurrency,
+ * timeout) plus ones whose values can carry a path - a module to preload (`--import`, `-r`/`--require`), a coverage rule
+ * (`--test-coverage-include/exclude`), a setup or state file (`--test-global-setup`, `--test-rerun-failures`) or an env file
+ * (`--env-file`, `--env-file-if-exists`). The `=value` form rides on its dash and needs no looking ahead.
+ */
+const VALUE_FLAGS = [
+  "--test-name-pattern",
+  "--test-skip-pattern",
+  "--test-reporter",
+  "--test-reporter-destination",
+  "--test-shard",
+  "--test-concurrency",
+  "--test-timeout",
+  "--import",
+  "-r",
+  "--require",
+  "--test-coverage-include",
+  "--test-coverage-exclude",
+  "--test-global-setup",
+  "--test-rerun-failures",
+  "--env-file",
+  "--env-file-if-exists",
+];
 
 /**
  * Whether a `npm test` argument names a test file: not a flag, not the token after a value-taking one (space-separated

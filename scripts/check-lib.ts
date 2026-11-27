@@ -91,8 +91,24 @@ function sameOwner(a: LockOwner | undefined, b: LockOwner | undefined): boolean 
   return a !== undefined && b !== undefined && a.pid === b.pid && a.startedAt === b.startedAt;
 }
 
+/**
+ * Publish a marker file atomically: write the payload to a unique temp file beside the target, hard-link it to the target and
+ * remove the temp. link fails with EEXIST when the target exists (the exclusivity a wx-create gave), and a reader only ever
+ * sees the file fully written or absent - never the empty window between a create and its content write, which readOwner
+ * reports as undefined and would judge stale.
+ */
+function publishOwner(file: string, owner: LockOwner): void {
+  const tmp = `${file}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
+  fs.writeFileSync(tmp, JSON.stringify(owner));
+  try {
+    fs.linkSync(tmp, file);
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
+}
+
 function writeOwner(file: string, root: string, deps: LockDeps): void {
-  fs.writeFileSync(file, JSON.stringify({ pid: process.pid, root, startedAt: deps.now() } satisfies LockOwner), { flag: "wx" });
+  publishOwner(file, { pid: process.pid, root, startedAt: deps.now() } satisfies LockOwner);
 }
 
 /** Unlink the file only while it still names this pid: a file taken over by another run in the meantime is not ours to remove. */
@@ -103,11 +119,11 @@ function releaseOwner(file: string): void {
 }
 
 /**
- * Try to win the takeover token: exclusivity belongs to whichever process holds its own wx-created token file, so only the
+ * Try to win the takeover token: exclusivity belongs to whichever process link-publishes its own token file, so only the
  * token decides who may create or take over the lock (a rename race cannot hand the lock to two racers). A token owned by a
  * live, fresh process means a takeover is under way, so wait. A stale token (its holder died, or it is older than an hour,
  * leaving a crashed takeover behind) is renamed to a sidecar that is unlinked immediately - nothing stale accumulates - and
- * the wx-create is retried: its next winner, however late, is the exclusivity claim.
+ * the publish is retried: its next winner, however late, is the exclusivity claim.
  */
 function claimToken(tokenFile: string, root: string, deps: LockDeps): boolean {
   for (;;) {
@@ -132,7 +148,7 @@ function claimToken(tokenFile: string, root: string, deps: LockDeps): boolean {
       if (!isErrno(err, "ENOENT")) {
         throw err;
       }
-      // the token already vanished (another taker cleared it): retry the wx-create
+      // the token already vanished (another taker cleared it): retry the publish
     }
   }
 }
@@ -142,7 +158,8 @@ function claimToken(tokenFile: string, root: string, deps: LockDeps): boolean {
  * is created or taken over only while this process holds its own token, and only when a fresh re-read of the lock shows it
  * gone or still the exact dead owner judged outside the token - so a lock a racer judged stale cannot silently gain a new
  * owner while it tries to take it. A runner killed while holding the lock leaves it stale (dead pid); the same rules take
- * that over. The token is released whatever path the takeover took, and only while it still names this pid.
+ * that over. The token is released whatever path the takeover took, on a wait too (never held across a poll), and only while
+ * it still names this pid.
  */
 export async function acquireLock(dir: string, root: string, deps: LockDeps = realDeps): Promise<() => void> {
   fs.mkdirSync(dir, { recursive: true });
@@ -168,37 +185,44 @@ export async function acquireLock(dir: string, root: string, deps: LockDeps = re
       await deps.wait(POLL_MS);
       continue;
     }
-    // exclusivity: until the token is released, only this process may create, remove or replace the lock
+    // exclusivity: until the token is released, only this process may create, remove or replace the lock. A poll wait never
+    // happens here: a round that is not ours is flagged and waited out after the token is released.
+    let retry: { owner?: LockOwner } | undefined;
     try {
       const fresh = readOwner(lockFile);
       if (fresh !== undefined && !(sameOwner(judged, fresh) && lockIsStale(fresh, deps.alive, deps.now()))) {
         // present and not the exact dead owner judged: it changed or it is alive and young, never touch it
-        note(fresh);
-        await deps.wait(POLL_MS);
-        continue;
-      }
-      if (fresh !== undefined) {
-        try {
-          fs.unlinkSync(lockFile);
-        } catch (err) {
-          if (!isErrno(err, "ENOENT")) {
-            throw err;
+        retry = { owner: fresh };
+      } else {
+        if (fresh !== undefined) {
+          try {
+            fs.unlinkSync(lockFile);
+          } catch (err) {
+            if (!isErrno(err, "ENOENT")) {
+              throw err;
+            }
           }
         }
-      }
-      try {
-        writeOwner(lockFile, root, deps);
-      } catch (err) {
-        // cannot normally happen under exclusivity: fall back to polling instead of trusting the impossible
-        if (isErrno(err, "EEXIST")) {
-          continue;
+        try {
+          writeOwner(lockFile, root, deps);
+        } catch (err) {
+          // cannot normally happen under exclusivity: fall back to polling instead of trusting the impossible
+          if (!isErrno(err, "EEXIST")) {
+            throw err;
+          }
+          retry = {};
         }
-        throw err;
       }
-      return () => releaseOwner(lockFile);
     } finally {
       releaseOwner(tokenFile);
     }
+    if (retry === undefined) {
+      return () => releaseOwner(lockFile);
+    }
+    if (retry.owner !== undefined) {
+      note(retry.owner);
+    }
+    await deps.wait(POLL_MS);
   }
 }
 

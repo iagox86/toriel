@@ -78,6 +78,12 @@ describe("npm test's file arguments", () => {
     assert.equal(isTestFileArg("foo.ts", "--test-timeout"), false);
   });
 
+  it("does not count the value of a flag whose value can look like a file (loader, coverage, setup, env) either", () => {
+    for (const flag of ["--import", "-r", "--require", "--test-coverage-include", "--test-coverage-exclude", "--test-global-setup", "--test-rerun-failures", "--env-file", "--env-file-if-exists"]) {
+      assert.equal(isTestFileArg("foo.ts", flag), false, flag);
+    }
+  });
+
   it("resolves a file argument from INIT_CWD when it exists there, and from the repo root otherwise", (t) => {
     assert.equal(fileArgFrom({ INIT_CWD: "/x" }, "/y"), "/x");
     assert.equal(fileArgFrom({}, "/y"), "/y");
@@ -157,7 +163,7 @@ describe("the lock takeover", () => {
     const owner = { pid: 424242, root: "/live", startedAt: FRESH - 1000 };
     seedOwner(dir, LOCK_NAME, owner);
     const told: string[] = [];
-    await assert.rejects(acquireLock(dir, "/new", testDeps({ alive: () => true, now: () => FRESH, tell: (m) => told.push(m) })));
+    await assert.rejects(acquireLock(dir, "/new", testDeps({ alive: () => true, now: () => FRESH, tell: (m) => told.push(m) })), /still polling/);
     assert.deepEqual(readOwner(path.join(dir, LOCK_NAME)), owner);
     assert.deepEqual(fs.readdirSync(dir), [LOCK_NAME]);
     assert.deepEqual(told, ["waiting for another test run to finish (pid 424242, /live)"]);
@@ -169,15 +175,54 @@ describe("the lock takeover", () => {
     const tokenOwner = { pid: process.pid, root: "/taker", startedAt: FRESH };
     seedOwner(dir, LOCK_NAME, lockOwner);
     seedOwner(dir, TOKEN_NAME, tokenOwner);
-    await assert.rejects(acquireLock(dir, "/new", testDeps({ alive: (p) => p === process.pid, now: () => FRESH })));
+    await assert.rejects(acquireLock(dir, "/new", testDeps({ alive: (p) => p === process.pid, now: () => FRESH })), /still polling/);
     assert.deepEqual(readOwner(path.join(dir, LOCK_NAME)), lockOwner);
     assert.deepEqual(readOwner(path.join(dir, TOKEN_NAME)), tokenOwner);
     assert.deepEqual(fs.readdirSync(dir).sort(), [LOCK_NAME, TOKEN_NAME]);
   });
 
+  it("leaves the lock alone when it changed between the stale judgment and the token-held re-read, and keeps waiting", async (t) => {
+    const dir = tempDir(t);
+    const judged = { pid: await deadPid(), root: "/dead", startedAt: FRESH };
+    const newOwner = { pid: 424244, root: "/racer", startedAt: FRESH };
+    const lock = path.join(dir, LOCK_NAME);
+    seedOwner(dir, LOCK_NAME, judged);
+    let aliveCalls = 0;
+    await assert.rejects(
+      acquireLock(
+        dir,
+        "/new",
+        testDeps({
+          alive: (pid) => {
+            aliveCalls += 1;
+            if (aliveCalls === 1) {
+              // a racer took over in the window between the outside judgment and the token-held re-read
+              fs.writeFileSync(lock, JSON.stringify(newOwner));
+            }
+            return pid === newOwner.pid;
+          },
+          now: () => FRESH,
+        }),
+      ),
+      /still polling/,
+    );
+    assert.deepEqual(readOwner(lock), newOwner);
+    assert.deepEqual(fs.readdirSync(dir), [LOCK_NAME]);
+  });
+
   it("clears a token whose holder is dead and then takes the lock", async (t) => {
     const dir = tempDir(t);
     seedOwner(dir, TOKEN_NAME, { pid: await deadPid(), root: "/crashed", startedAt: FRESH });
+    const release = await acquireLock(dir, "/new", testDeps({ now: () => FRESH }));
+    assert.deepEqual(readOwner(path.join(dir, LOCK_NAME)), { pid: process.pid, root: "/new", startedAt: FRESH });
+    assert.deepEqual(fs.readdirSync(dir), [LOCK_NAME]);
+    release();
+    assert.equal(fs.existsSync(path.join(dir, LOCK_NAME)), false);
+  });
+
+  it("takes over a lock whose owner is alive but older than the stale age", async (t) => {
+    const dir = tempDir(t);
+    seedOwner(dir, LOCK_NAME, { pid: process.pid, root: "/old", startedAt: FRESH - LOCK_STALE_MS - 1 });
     const release = await acquireLock(dir, "/new", testDeps({ now: () => FRESH }));
     assert.deepEqual(readOwner(path.join(dir, LOCK_NAME)), { pid: process.pid, root: "/new", startedAt: FRESH });
     assert.deepEqual(fs.readdirSync(dir), [LOCK_NAME]);
