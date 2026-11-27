@@ -18,8 +18,23 @@ export interface GoalRecord {
   doneBy?: "user" | "agent";
 }
 
+/** One change to a session's goal, kept after the goal itself is gone, so a replayed transcript can still say it happened (ticket 348). */
+export interface GoalEvent {
+  kind: "set" | "done" | "cleared";
+  /** The goal's text at the time. */
+  text: string;
+  /** When it happened (ms since epoch). */
+  at: number;
+  /** Who marked it done (done only). */
+  by?: "user" | "agent";
+}
+
+/** Events kept per session; older ones drop off (a transcript line about a goal from long ago is not worth an unbounded file). */
+export const GOAL_LOG_MAX = 50;
+
 interface GoalsFile {
   goals: Record<string, GoalRecord>;
+  log?: Record<string, GoalEvent[]>;
 }
 
 export type GoalAction = "set" | "done" | "clear" | "get";
@@ -45,10 +60,12 @@ export function goalAction(words: string): { action: GoalAction; text: string } 
   return { action: "set", text };
 }
 
-/** One goal as the sessions broadcast carries it: enough for the switcher rows (text and done), no timestamps (ticket 258). */
+/** One goal as the sessions broadcast carries it: enough for the switcher rows (text and done), plus when it last changed (ticket 258). */
 export interface GoalSummary {
   text: string;
   done: boolean;
+  /** When the goal was last set or marked done: a changed stamp is a goal change even when text and done are the same (ticket 348). */
+  at: number;
 }
 
 /** What /goal says once the daemon has answered: for clear, the record it removed (null when the session had none), else the record after the change (null when none results). */
@@ -70,6 +87,7 @@ export function goalNote(action: GoalAction, rec: GoalRecord | null): string {
 
 export class GoalStore {
   private goals = new Map<string, GoalRecord>();
+  private log = new Map<string, GoalEvent[]>();
   private readonly file: string;
   private readonly now: () => number;
 
@@ -81,6 +99,20 @@ export class GoalStore {
   load(): void {
     const data = readJsonOr<Partial<GoalsFile>>(this.file, {});
     this.goals = new Map(Object.entries(data.goals ?? {}).filter(([, g]) => typeof g?.text === "string" && typeof g?.setAt === "number"));
+    this.log = new Map(
+      Object.entries(data.log ?? {})
+        .map(([id, events]): [string, GoalEvent[]] => [id, Array.isArray(events) ? events.filter((e) => typeof e?.text === "string" && typeof e?.at === "number" && ["set", "done", "cleared"].includes(e?.kind)) : []])
+        .filter(([, events]) => events.length > 0),
+    );
+  }
+
+  /** The session's goal changes, oldest first (ticket 348): kept after a clear, gone with the session. */
+  history(sessionId: string): GoalEvent[] {
+    return [...(this.log.get(sessionId) ?? [])];
+  }
+
+  private record(sessionId: string, event: GoalEvent): void {
+    this.log.set(sessionId, [...(this.log.get(sessionId) ?? []), event].slice(-GOAL_LOG_MAX));
   }
 
   get(sessionId: string | undefined): GoalRecord | undefined {
@@ -91,6 +123,7 @@ export class GoalStore {
   set(sessionId: string, text: string): GoalRecord {
     const record: GoalRecord = { text, setAt: this.now() };
     this.goals.set(sessionId, record);
+    this.record(sessionId, { kind: "set", text, at: record.setAt });
     this.save();
     return record;
   }
@@ -101,50 +134,63 @@ export class GoalStore {
     if (!record) {
       return undefined;
     }
+    const wasDone = record.done === true;
     record.done = true;
     record.doneAt = this.now();
     record.doneBy = by;
+    if (!wasDone) {
+      this.record(sessionId, { kind: "done", text: record.text, at: record.doneAt, by });
+    }
     this.save();
     return record;
   }
 
-  /** Forget the goal; returns the one it had, or undefined when there was none. */
+  /** Forget the goal (its history stays); returns the one it had, or undefined when there was none. */
   clear(sessionId: string): GoalRecord | undefined {
     const record = this.goals.get(sessionId);
-    if (this.goals.delete(sessionId)) {
+    if (record && this.goals.delete(sessionId)) {
+      this.record(sessionId, { kind: "cleared", text: record.text, at: this.now() });
       this.save();
     }
     return record;
   }
 
-  /** The session is gone: drop its goal (named for the lifecycle callers, the same forget as /goal clear). */
+  /** The session is gone: drop its goal and its history. */
   remove(sessionId: string): void {
-    this.clear(sessionId);
+    const had = this.goals.delete(sessionId);
+    if (this.log.delete(sessionId) || had) {
+      this.save();
+    }
   }
 
   /** Every goal, by session UUID, as a summary: what the sessions broadcast carries, so rows without a live meta (after a daemon restart) still show the goal. */
   summary(): Record<string, GoalSummary> {
     const out: Record<string, GoalSummary> = {};
     for (const [id, record] of this.goals) {
-      out[id] = { text: record.text, done: record.done === true };
+      out[id] = { text: record.text, done: record.done === true, at: record.doneAt ?? record.setAt };
     }
     return out;
   }
 
-  /** Give `to` its own copy of `from`'s goal, done state included (a /fork copy keeps the job it was made from). */
+  /** Give `to` its own copy of `from`'s goal, done state and history included (a /fork copy keeps the job it was made from, and its transcript the lines about it). */
   copy(from: string, to: string): boolean {
     const record = this.goals.get(from);
-    if (!record) {
-      return false;
+    const log = this.log.get(from);
+    if (log) {
+      this.log.set(to, [...log]);
     }
-    this.goals.set(to, { ...record });
-    this.save();
-    return true;
+    if (record) {
+      this.goals.set(to, { ...record });
+    }
+    if (record || log) {
+      this.save();
+    }
+    return record !== undefined;
   }
 
   private save(): void {
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    writeJsonAtomic(this.file, { goals: Object.fromEntries(this.goals) } satisfies GoalsFile);
+    writeJsonAtomic(this.file, { goals: Object.fromEntries(this.goals), log: Object.fromEntries(this.log) } satisfies GoalsFile);
   }
 }
 

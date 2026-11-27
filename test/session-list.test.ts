@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { GroupsFile } from "../src/groups.ts";
+import type { GoalSummary } from "../src/goals.ts";
 import {
   appendUnranked,
   archiveSession,
@@ -48,7 +49,7 @@ function meta(over: Partial<SessionMeta> = {}): SessionMeta {
   };
 }
 
-function build(opts: { daemon?: SessionMeta[]; files?: LocalSession[]; groups?: GroupsFile; summaries?: Map<string, string>; goals?: Record<string, { text: string; done: boolean }> }) {
+function build(opts: { daemon?: SessionMeta[]; files?: LocalSession[]; groups?: GroupsFile; summaries?: Map<string, string>; goals?: Record<string, GoalSummary> }) {
   return buildSessionList({
     daemon: opts.daemon ?? [],
     local: new Map((opts.files ?? []).map((l) => [l.path, l])),
@@ -107,12 +108,12 @@ describe("buildSessionList", () => {
     // asleep since a daemon restart: only the file and the sessions map are left, so the row reads there
     const asleep = build({
       files: [local("/a.jsonl")],
-      goals: { "uuid-/a.jsonl": { text: "outlive the restart", done: false } },
+      goals: { "uuid-/a.jsonl": { text: "outlive the restart", done: false, at: 1 } },
     })[0];
     assert.equal(asleep.state, "inactive");
     assert.equal(asleep.goal, "outlive the restart");
     assert.equal(asleep.goalDone, undefined);
-    const doneRow = build({ files: [local("/a.jsonl")], goals: { "uuid-/a.jsonl": { text: "outlive the restart", done: true } } })[0];
+    const doneRow = build({ files: [local("/a.jsonl")], goals: { "uuid-/a.jsonl": { text: "outlive the restart", done: true, at: 1 } } })[0];
     assert.equal(doneRow.goalDone, true);
   });
 

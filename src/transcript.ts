@@ -19,10 +19,16 @@ import { displayScheduled } from "./schedule-label.ts";
 import { type ImageBlock, imageBlocks, messageText, oneLineFlat } from "./format.ts";
 import { mdTheme } from "./pi-theme.ts";
 import { attention, dim } from "./theme.ts";
+import { SKILL_LOADED_NOTICE } from "./shared.ts";
+import { skillNameFromPath } from "./skill-notice.ts";
 
 interface ItemBase {
   /** Shown faint: the model no longer has it (before a compaction). */
   dimmed?: boolean;
+  /** When it happened (ms since epoch): its message's time on replay, its arrival live. Goal rows are placed by it (goal-lines.ts). */
+  at?: number;
+  /** A goal row placeGoalLines put here, so a later placement can take it out again. */
+  goalLine?: boolean;
 }
 export interface UserItem extends ItemBase {
   kind: "user";
@@ -177,7 +183,8 @@ export function reapplyCallNotes(items: Item[], callNotes: Map<string, string[]>
       for (const call of item.component.calls) {
         const notes = call.id ? callNotes.get(call.id) : undefined;
         if (notes) {
-          call.notes = [...notes];
+          // merged, not replaced: a rebuilt call may already carry a note the replay derived (a skill load, ticket 347)
+          call.notes = [...new Set([...notes, ...(call.notes ?? [])])];
           call.cachedLines = undefined;
         }
       }
@@ -514,6 +521,7 @@ export function itemsFromMessages(messages: unknown[], tui: TuiAltScreen, cwd: s
   const items: Item[] = [];
   // toolCall blocks from assistant messages, matched to toolResults on replay
   const argsById = new Map<string, { name?: string; args: unknown }>();
+  const skillsSeen = new Set<string>();
   for (const raw of messages) {
     const startLen = items.length;
     const m = raw as {
@@ -565,6 +573,13 @@ export function itemsFromMessages(messages: unknown[], tui: TuiAltScreen, cwd: s
         const result = { content: (m.content ?? []) as never, details: m.details, isError: failed };
         component.updateResult((binaryReadDisplay(m.toolName, call?.args, result, cwd) ?? result) as never, false);
         const toolCall: ToolCall = { name: m.toolName, args: call?.args, component, failed, done: true, id: m.toolCallId };
+        // the daemon's skill-load notice is live only, so a replay finds the loads itself: same rule (a successful read of a
+        // skill's SKILL.md), same once-per-conversation dedupe (/clear empties the file), ticket 347
+        const skill = m.toolName === "read" && !failed ? skillNameFromPath((call?.args as { path?: unknown } | undefined)?.path) : undefined;
+        if (skill !== undefined && !skillsSeen.has(skill)) {
+          skillsSeen.add(skill);
+          toolCall.notes = [`${SKILL_LOADED_NOTICE}${skill})`];
+        }
         const last = lastToolRun(items);
         // a run is dimmed as a whole, so a call joins it only when it is on the same side of the compaction
         if (last && Boolean(last.dimmed) === Boolean(m.outOfContext)) {
@@ -582,6 +597,11 @@ export function itemsFromMessages(messages: unknown[], tui: TuiAltScreen, cwd: s
     if (m.outOfContext) {
       for (let i = startLen; i < items.length; i++) {
         (items[i] as Item).dimmed = true;
+      }
+    }
+    if (typeof m.timestamp === "number") {
+      for (let i = startLen; i < items.length; i++) {
+        (items[i] as Item).at = m.timestamp;
       }
     }
   }

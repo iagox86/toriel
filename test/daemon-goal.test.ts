@@ -107,7 +107,7 @@ describe("daemon: goal (ticket 258)", () => {
     assert.equal(got.setAt, set.setAt, "the store reloads");
     c2.send({ type: "list" });
     const list = await c2.waitFor((m) => m.type === "sessions" && m.goals && m.goals[uuid]);
-    assert.deepEqual(list.goals[uuid], { text: "outlive the restart", done: true }, "the session list carries the goal for a session with no live meta");
+    assert.deepEqual(list.goals[uuid], { text: "outlive the restart", done: true, at: got.doneAt }, "the session list carries the goal for a session with no live meta");
     // the old state dir can only be removed once daemon 2 is done with it: its goals.load() runs after the socket binds, so an early rmSync once raced the read away
     fs.rmSync(first.dir, { recursive: true, force: true });
   });
@@ -272,5 +272,72 @@ describe("the /goal switcher command (ticket 258)", () => {
     const { sw, actions } = setup();
     await actions.runCommand("/goal ship it", { key: "/s/a.jsonl", name: "a" } as never);
     assert.equal(sw.hint, "goal: session has no id yet");
+  });
+});
+
+describe("goal history and clear-on-open (tickets 348, 350)", () => {
+  it("answers a session's goal events, kept after the goal is cleared, and the summary stamps each change", async () => {
+    harness = await startDaemon();
+    const { c, uuid } = await liveSession(harness);
+    assert.deepEqual(await c.request({ type: "goal", action: "history", sessionId: uuid }), []);
+    const set = await c.request({ type: "goal", action: "set", sessionId: uuid, text: "ship it" });
+    await c.waitFor((m) => m.type === "sessions" && m.goals?.[uuid]?.at === set.setAt);
+    const done = await c.request({ type: "goal", action: "done", sessionId: uuid, by: "agent" });
+    await c.waitFor((m) => m.type === "sessions" && m.goals?.[uuid]?.at === done.doneAt && m.goals[uuid].done === true);
+    await c.request({ type: "goal", action: "clear", sessionId: uuid });
+    const log = await c.request({ type: "goal", action: "history", sessionId: uuid });
+    assert.deepEqual(
+      log.map((e: Msg) => [e.kind, e.text, e.by]),
+      [
+        ["set", "ship it", undefined],
+        ["done", "ship it", "agent"],
+        ["cleared", "ship it", undefined],
+      ],
+    );
+    assert.equal(log[0].at, set.setAt);
+  });
+
+  /** A switcher over one sleeping session row; `asked` records what the daemon was asked. */
+  const opener = (goalDone: boolean) => {
+    const asked: Msg[] = [];
+    const host = {
+      tui: { requestRender() {}, setLayoutRoot() {}, terminal: { rows: 30 } },
+      editor: { getText: () => "", setText() {} },
+      switcher: new Switcher(),
+      sessions: new Map(),
+      local: new Map(),
+      views: new Map(),
+      summaries: new Map(),
+      goalSummaries: {},
+      viewing: null as string | null,
+      send() {},
+      notify() {},
+      request: async (cmd: Msg) => {
+        asked.push(cmd);
+        return null;
+      },
+      rebuildChat() {},
+      renderChrome() {},
+      goalLines() {},
+      metaForPath: () => undefined,
+    };
+    const actions = new SwitcherActions(host as never);
+    const row = { key: "/nowhere/s.jsonl", sessionId: "uuid-1", name: "s", state: "inactive", goal: "ship it", goalDone } as never;
+    return { actions, row, asked, host };
+  };
+
+  it("opening a session from the switcher clears its finished goal, as the user", async () => {
+    const { actions, row, asked, host } = opener(true);
+    await actions.enter(row);
+    assert.equal(host.viewing, "/nowhere/s.jsonl");
+    await until(() => asked.length > 0);
+    assert.deepEqual(asked, [{ type: "goal", action: "clear", sessionId: "uuid-1" }]);
+  });
+
+  it("opening a session whose goal is still open leaves the goal alone", async () => {
+    const { actions, row, asked } = opener(false);
+    await actions.enter(row);
+    await new Promise((r) => setTimeout(r, 20));
+    assert.deepEqual(asked, []);
   });
 });
