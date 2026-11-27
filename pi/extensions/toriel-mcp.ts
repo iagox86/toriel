@@ -242,9 +242,9 @@ export default function (pi: Pi): void {
       return undefined;
     });
     pi.on("agent_settled", (event) => {
-      // an explore skill is stamped only for a run that completed its every turn: an aborted run skips before_settle
-      // (it goes agent_end -> agent_settled) and a run continued past its first boundary counts only by its last
-      // boundary - either way what the tools looked like is recorded, whatever ended the run
+      // an explore skill is stamped only for a run whose last settle boundary said completed: an aborted run
+      // skips before_settle (it goes agent_end -> agent_settled) and a run continued past its first boundary
+      // counts only by its last boundary - either way what the tools looked like is recorded, whatever ended the run
       const ok = (event as { aborted?: boolean }).aborted !== true && lastOutcome === "completed";
       stamp(ok ? (pendingExplore ?? []) : []);
       lastOutcome = undefined;
