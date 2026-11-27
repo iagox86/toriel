@@ -429,10 +429,10 @@ export class Switcher extends Container implements Focusable {
     return lines.slice(0, height).map((line) => paintLine(line, width));
   }
 
-  /** Indent and fold arrow in front of a name: children hang under their parent, parents show whether they are open. */
+  /** Indent and fold arrow in front of a name: children hang one indent step past their parent's fold arrow (so the fold triangle and the branch mark never share a column, at any depth); parents show whether they are open. */
   private treePrefix(s: SwitcherSession): string {
     const depth = s.depth ?? 0;
-    const branch = depth > 0 ? `${"  ".repeat(depth - 1)}\u2514 ` : "";
+    const branch = depth > 0 ? `${"  ".repeat(2 * depth - 1)}\u2514 ` : "";
     const hasKids = (s.descendants ?? 0) > 0;
     const folded = hasKids && !this.filterNote && s.sessionId !== undefined && this.collapsed.has(s.sessionId);
     return branch + (hasKids ? (folded ? "\u25b8 " : "\u25be ") : "");
