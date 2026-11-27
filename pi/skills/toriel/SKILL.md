@@ -27,7 +27,7 @@ The conversation
 - `/deny-after <10m|off|default|status>` - the user's switch for unattended sessions: a permission prompt nobody answers within that time is denied for them, and you are told the action was refused. Off unless they set it. Do not retry a denied action in another form to get around it; say what you needed and stop.
 - `/plan` - plan mode: you can only look (no writes or edits, commands run read-only) until the user approves your plan. `/plan off` ends it.
 - `/tasks` - show your task list (the one you keep with `todo_write`).
-- `/btw` - a side question whose answer pops up and never reaches you. `/why` - a short explanation of your last thinking block. `/performance` - analyze this session's transcript for bloat. `/feedback` - record a note about a harness problem.
+- `/btw` - a side question whose answer pops up and never reaches you. `/why` - a short explanation of your last thinking block. `/performance` - analyze this session's transcript for bloat. `/feedback` - record a note about a harness problem. `/info` - a copy/pasteable markdown card of this session (session file, ids, model, context, settings, MCP names) to hand to another agent fixing this session; it never wakes a sleeping session.
 
 Timed work (you can also do this yourself with the schedule tools, see the `scheduling` skill)
 - `/in`, `/at`, `/every`, `/loop`, `/cron` - send a prompt to this session later or repeatedly. `/watch <path>` - when a file or directory changes. `/schedules` lists them; `/cancel`, `/pause`, `/resume`, `/fire` manage them.

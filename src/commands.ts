@@ -266,6 +266,11 @@ export const SESSION_COMMANDS = [
     },
   },
   {
+    name: "info",
+    description: "print this session as a copy/pasteable markdown card: file, ids, model, context, settings, MCP server names",
+    help: "Shows what toriel knows about this session as a markdown block you can hand to another agent working on it: the session file's path, toriel's session id, the pi session UUID, the name and first message, model, provider, thinking level, context usage, directory, agent profile, plan and auto mode, permission grants, and the MCP server names (names only - never their tokens or headers). It only reads the daemon's session list and mcp.yaml, so a sleeping session stays asleep; the card says the values are the last known state and may be stale. In the panel: c copies it, s saves it to a file under ~/.local/share/toriel/info/.\n\nExample:\n  /info",
+  },
+  {
     name: "mouse",
     description: "show or set toriel's mouse handling: on, off or toggle (off: the terminal does select, copy and middle-click paste)",
     help: "With no argument says whether toriel has the mouse. Off hands the mouse back to the terminal: native select, copy and middle-click paste (also over ssh, where toriel cannot read your clipboard), at the cost of toriel's clicks (switcher rows, double-click on blocks), its own selection highlight and, in some terminals, wheel scrolling. On restores it. Not remembered across restarts. For one click only, hold shift instead.\n\nExamples:\n  /mouse\n  /mouse off\n  /mouse on\n  /mouse toggle",
