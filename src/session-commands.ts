@@ -19,6 +19,7 @@ import { gatewayKind, probeLitellmAsync } from "./litellm-models.ts";
 import { addProvider, apiKeyValue, checkProviderId, DEFAULT_API, fetchModels, listProviders, MAX_MODELS, type NewModel, type ProviderOptions, type ProviderRow, removeProvider, resolveForProbe, setProviderKey } from "./providers.ts";
 import { readHeader } from "./session-file.ts";
 import { mayWake } from "./wake-on-type.ts";
+import { goalAction, requestGoal } from "./goals.ts";
 import { forkName, placeFork } from "./fork-placement.ts";
 import { loadGroups, saveGroups, withComment, withParked } from "./groups.ts";
 import type { Host } from "./host.ts";
@@ -163,6 +164,7 @@ export class SessionCommands {
       fire: (c) => operateSchedule(this.h, "fire", c, this.viewedMeta()?.id),
       permissions: (c) => runPermissions(this.h, c, this.viewedMeta()?.id),
       doctor: (c) => runDoctorCommand(this.h, c),
+      goal: (c) => this.goal(c.args.join(" ")),
     };
   }
 
@@ -192,6 +194,24 @@ export class SessionCommands {
   private viewedSessionId(): string | undefined {
     const key = this.h.viewing;
     return this.viewedMeta()?.sessionId ?? (key ? this.h.local.get(key)?.id : undefined);
+  }
+
+  /**
+   * /goal (ticket 258): set, show, mark done or clear this session's goal. Daemon state only (keyed by the session's UUID), so it never
+   * wakes a sleeping session - it needs just its saved id, which a session with no message does not have.
+   */
+  private async goal(words: string): Promise<void> {
+    const sessionId = this.viewedSessionId();
+    if (!sessionId) {
+      this.h.notify("no goal yet - send a message first");
+      return;
+    }
+    const parsed = goalAction(words);
+    if ("error" in parsed) {
+      this.h.notify(parsed.error);
+      return;
+    }
+    this.h.notify(await requestGoal(this.h, sessionId, parsed.action, parsed.text));
   }
 
   /**

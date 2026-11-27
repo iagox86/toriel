@@ -1710,3 +1710,8 @@ Parked:
 - pi's skill frontmatter `name` can differ from the skill's directory name; the announcement uses the directory name (pi only warns when a frontmatter name has bad characters, it does not tell anyone the mismatch).
 - Codemode and bash-style reads of skill files are not caught: only the read tool's own execution events are.
 - A subagent session announces within its own session only; parents and viewers of other sessions see nothing of a child's loads.
+
+## Per-session goals (ticket 258; built 2026-11-26)
+
+One goal text per session UUID (goals.json, `GOALS_FILE`): set, marked done or cleared with `/goal` and the daemon's `goal` command, flagged on the switcher row (` goal: <text>`, dimmed once done, a done row's green check), copied by /fork, deleted with the session. The user-done note reaches only the controllers' transcript views, not the pi child's context.
+- Parked: delivering that note into the pi child's context (plausibly via a session bridge message), so a running agent hears it directly instead of picking the goal state up at its next session start.

@@ -1,13 +1,27 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { spinnerFrame } from "../src/activity.ts";
+import { WAITING_NOTE } from "../src/session-tree.ts";
 import { type SwitcherSession, Switcher } from "../src/switcher.ts";
 import { attention } from "../src/theme.ts";
-import { WAITING_NOTE } from "../src/session-tree.ts";
 
 const session = (key: string, group: string | undefined, state: SwitcherSession["state"] = "idle"): SwitcherSession =>
   ({ key, name: key, group, state, age: "1h", ageMs: 3600_000 }) as SwitcherSession;
 
 const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
+
+const FRAMES = new Set(Array.from({ length: 10 }, (_, i) => spinnerFrame(i * 100)));
+
+/** The marker character of the row for `key` in a single-session switcher (selected by default, so it is undimmed). */
+function markerOf(s: SwitcherSession): string {
+  const sw = new Switcher();
+  sw.sessions = [s];
+  sw.refresh();
+  // pick the session row, not a title line that happens to contain the name: rows indent the name at least two spaces
+  const row = sw.render(120).map(strip).filter((l) => new RegExp(`\\s{2,}${s.name}(\\s|$)`).test(l)).at(-1);
+  assert.ok(row, `no row for ${s.name}`);
+  return row[0];
+}
 
 function build(collapsed: string[]): Switcher {
   const sw = new Switcher();
@@ -139,6 +153,39 @@ describe("switcher spawn anchor (ticket 326)", () => {
     const sw = build(["Work"]);
     sw.selectedKey = "b";
     sw.refresh(); // the hidden session's header stands in
-    assert.deepEqual(sw.spawnAnchor(), { kind: "header", title: "Work" });
+    assert.deepEqual(sw.spawnAnchor(), { kind: "header", title: "Work" });  });
+});
+
+describe("switcher marker precedence (ticket 258)", () => {
+  it("a done goal's check outranks the streaming spinner and the dead, compacting and inactive markers", () => {
+    for (const state of ["streaming", "dead", "compacting", "inactive"] as const) {
+      assert.equal(markerOf({ ...session(`d-${state}`, undefined, state), goal: "ship it", goalDone: true }), "\u2713", state);
+    }
+  });
+
+  it("waiting on permission (!) outranks the done check, which beats the state markers, and a streaming row shows a spinner", () => {
+    assert.equal(markerOf({ ...session("w", undefined), note: WAITING_NOTE, goal: "ship it", goalDone: true }), "!");
+    assert.equal(markerOf({ ...session("f-x", undefined), subagentFail: true, goal: "ship it", goalDone: true }), "x", "the subagent's x outranks the done check");
+    assert.equal(markerOf(session("d", undefined, "dead")), "x");
+    assert.equal(markerOf(session("i", undefined, "inactive")), "-");
+    const frame = markerOf(session("s", undefined, "streaming"));
+    assert.ok(FRAMES.has(frame), `a streaming row spins (got ${JSON.stringify(frame)})`);
+  });
+});
+
+describe("switcher row alignment (ticket 258)", () => {
+  it("a done goal's dim codes are not counted as columns: the age column lines up with a plain row", () => {
+    const sw = new Switcher();
+    sw.sessions = [
+      { ...session("done-one", undefined), goal: "a longer goal than fourteen chars", goalDone: true },
+      session("plain-one", undefined),
+    ];
+    sw.refresh();
+    const rows = sw.render(140).map(strip);
+    const doneRow = rows.find((l) => l.includes(" goal: "));
+    const plainRow = rows.find((l) => !l.includes(" goal: ") && l.includes("plain-one"));
+    assert.ok(doneRow, "the done row renders");
+    assert.ok(plainRow, "the plain row renders");
+    assert.equal(doneRow.lastIndexOf("1h"), plainRow.lastIndexOf("1h"), "the age column starts at the same offset in both rows");
   });
 });
