@@ -5,6 +5,7 @@
 // null = explicit ungroup (tombstone so fork-inheritance and ungroups stick).
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { dataRoot } from "./data-dir.ts";
 import { writeJsonAtomic } from "./util.ts";
 
 export interface GroupsFile {
@@ -28,8 +29,7 @@ export interface GroupsFile {
 }
 
 export function groupsFile(): string {
-  const dataDir = process.env.XDG_DATA_HOME ?? path.join(process.env.HOME ?? "", ".local", "share");
-  return path.join(dataDir, "toriel", "session-groups.json");
+  return path.join(dataRoot(), "toriel", "session-groups.json");
 }
 
 export function loadGroups(): GroupsFile {

@@ -6,6 +6,7 @@
 // secret (mcp.yaml entries can hold tokens) can reach the card.
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { torielDataDir } from "./data-dir.ts";
 import { fmtTokens, oneLineFlat } from "./format.ts";
 import type { SessionMeta } from "./shared.ts";
 
@@ -100,8 +101,7 @@ function grantsText(grants: number | undefined, saved: number | undefined): stri
 
 /** Where /info cards are saved: one markdown file per card. */
 export function infoDir(env: NodeJS.ProcessEnv = process.env): string {
-  const data = env.XDG_DATA_HOME ?? path.join(env.HOME ?? "", ".local", "share");
-  return path.join(data, "toriel", "info");
+  return torielDataDir("info", env);
 }
 
 export function saveInfo(text: string, dir = infoDir(), now = new Date()): string {

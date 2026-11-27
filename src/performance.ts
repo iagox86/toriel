@@ -5,6 +5,7 @@
 // else (pi's auth and models files included).
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { torielDataDir } from "./data-dir.ts";
 import { saveBtw, sideRun } from "./btw.ts";
 import { profileTranscript, renderProfilerStats } from "./performance-profiler.ts";
 
@@ -137,8 +138,7 @@ export async function runPerformance(opts: PerformanceOptions): Promise<{ answer
 
 /** Where /performance reports are saved: one markdown file per report, like /btw's answers. */
 export function performanceDir(env: NodeJS.ProcessEnv = process.env): string {
-  const data = env.XDG_DATA_HOME ?? path.join(env.HOME ?? "", ".local", "share");
-  return path.join(data, "toriel", "performance");
+  return torielDataDir("performance", env);
 }
 
 /** /performance reports save exactly like /btw answers, in their own dir with their own filename prefix. */

@@ -4,6 +4,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { dataRoot } from "./data-dir.ts";
 import { rotateLog } from "./util.ts";
 
 /**
@@ -53,7 +54,8 @@ function sockPath(): string {
   return `${process.env.XDG_RUNTIME_DIR}/toriel.sock`;
 }
 export const SOCK = sockPath();
-export const DATA_DIR = PROFILE_DIR ? path.join(PROFILE_DIR, "data") : (process.env.XDG_DATA_HOME ?? path.join(process.env.HOME ?? "", ".local", "share"));
+// profileRoot() above has already checked the profile name and XDG_RUNTIME_DIR; dataRoot() applies the same rule without side effects
+export const DATA_DIR = dataRoot();
 /** Daemon lock and pidfile: per state directory, so only one daemon runs against it whatever the socket is called. */
 export const PID_FILE = path.join(DATA_DIR, "toriel", "daemon.pid");
 export const TRASH_DIR = process.env.TORIEL_TRASH ?? path.join(DATA_DIR, "toriel", "trash");

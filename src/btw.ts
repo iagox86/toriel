@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { torielDataDir } from "./data-dir.ts";
 
 export const BTW_TIMEOUT_MS = 180_000;
 
@@ -130,8 +131,7 @@ function run(args: string[], opts: { cwd?: string; timeoutMs?: number }): Promis
 
 /** Where /btw answers are saved: one markdown file per answer. */
 export function btwDir(env: NodeJS.ProcessEnv = process.env): string {
-  const data = env.XDG_DATA_HOME ?? path.join(env.HOME ?? "", ".local", "share");
-  return path.join(data, "toriel", "btw");
+  return torielDataDir("btw", env);
 }
 
 export function saveBtw(question: string, answer: string, dir = btwDir(), now = new Date(), prefix = "btw"): string {
