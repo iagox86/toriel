@@ -1,10 +1,10 @@
 // Starting, stopping and listening to the pi child processes behind sessions.
 import * as fs from "node:fs";
 import { RpcClient } from "@earendil-works/pi-coding-agent";
-import { childEnv, sandboxWritableRoots } from "./child-env.ts";
+import { type ChildExtras, childEnv, sandboxWritableRoots } from "./child-env.ts";
 import { mcpYamlFile } from "./config-dir.ts";
 import { scopeForSession } from "./scope-root.ts";
-import { DIALOG_METHODS, FILE_HISTORY_DIR, MCP_SUMMARIES_FILE, PLAN_DIR, SANDBOX_TMP_DIR, SHARED_DIR, SOCK } from "./config.ts";
+import { DIALOG_METHODS, FILE_HISTORY_DIR, MCP_EXPLORE_RECORDS_FILE, MCP_SUMMARIES_FILE, PLAN_DIR, SANDBOX_TMP_DIR, SHARED_DIR, SOCK } from "./config.ts";
 import { answerablePrompt, exemptPaths, protectedPaths, touchesProtected } from "./daemon-permissions.ts";
 import { type GrantStore, ruleFor, withSuggestion } from "./permissions.ts";
 import { type BridgeTracker, INJECT_COMMAND, injectedId, mergedQueueTexts, parseBridgeReport } from "./daemon-bridge.ts";
@@ -40,6 +40,23 @@ export interface SlashCommand {
   name: string;
   description?: string;
   source: string;
+}
+
+/**
+ * The MCP variables for a session's child, by what its profile allows: mcp.yaml and the remembered summaries
+ * only when the profile has MCP support, and the explore records only for a session without an agent profile
+ * -- a profile's --tools allowlist makes pi.getAllTools() there report only the allowlisted subset, and that
+ * child would stamp the subset as the last tool sighting, so every such subagent run would ring "tools
+ * changed" (ticket 308).
+ */
+export function mcpChildEnvOf(agent: AgentProfile | undefined): Pick<ChildExtras, "mcpFile" | "mcpDirect" | "mcpSummaries" | "mcpRecords"> {
+  const hasMcp = profileHasMcp(agent);
+  return {
+    mcpFile: hasMcp ? mcpYamlFile() : undefined,
+    mcpDirect: mcpServersOf(agent?.tools ?? []),
+    mcpSummaries: hasMcp ? MCP_SUMMARIES_FILE : undefined,
+    mcpRecords: agent === undefined ? MCP_EXPLORE_RECORDS_FILE : undefined,
+  };
 }
 
 export interface StartOptions {
@@ -152,7 +169,7 @@ export class ChildManager {
       cliPath: cfg.piCli,
       cwd: s.cwd,
       args,
-      env: { ...childEnv(s, SOCK, process.env, scope, { sharedDir: SHARED_DIR, tmpDir: SANDBOX_TMP_DIR, sandboxWritable: sandbox, mcpFile: profileHasMcp(s.agent) ? mcpYamlFile() : undefined, mcpDirect: mcpServersOf(s.agent?.tools ?? []), mcpSummaries: profileHasMcp(s.agent) ? MCP_SUMMARIES_FILE : undefined, fileHistoryDir: FILE_HISTORY_DIR, planDir: PLAN_DIR, freshness: settings.fileFreshness }), ...this.delegationEnv(s) },
+      env: { ...childEnv(s, SOCK, process.env, scope, { sharedDir: SHARED_DIR, tmpDir: SANDBOX_TMP_DIR, sandboxWritable: sandbox, ...mcpChildEnvOf(s.agent), fileHistoryDir: FILE_HISTORY_DIR, planDir: PLAN_DIR, freshness: settings.fileFreshness }), ...this.delegationEnv(s) },
     });
     client.onEvent((event) => this.onEvent(s, event as Record<string, unknown>));
     this.launching.add(client);

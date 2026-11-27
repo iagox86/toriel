@@ -1,6 +1,7 @@
 // pi's /mcp command prints its status as plain text; this reads it back into
 // records toriel can list and complete from.
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { mcpYamlFile } from "./config-dir.ts";
 
 export interface McpServer {
@@ -180,6 +181,25 @@ export function withHeaders(entry: McpEntry, headers: Record<string, string>): M
 /** Where the MCP servers are configured: toriel's mcp.yaml (ticket 216). */
 export function mcpConfigFile(): string {
   return mcpYamlFile();
+}
+
+/**
+ * The skills dirs pi has: the agent dir's own skills/ plus any
+ * extension-provided skills root (<dir>/skills for every subdirectory of the
+ * agent dir). The dirs skillForServer searches; a missing dir means no skills.
+ */
+export function piSkillsDirs(agentDir: string): string[] {
+  const dirs = [path.join(agentDir, "skills")];
+  try {
+    for (const e of fs.readdirSync(agentDir, { withFileTypes: true })) {
+      if (e.isDirectory()) {
+        dirs.push(path.join(agentDir, e.name, "skills"));
+      }
+    }
+  } catch {
+    // no agent dir: only the own skills/ dir, which skillForServer treats as absent
+  }
+  return dirs;
 }
 
 /**
