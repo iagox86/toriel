@@ -63,6 +63,38 @@ describe("command flags", () => {
     assert.ok(help.kind === "help" && /-m, --model <model>/.test(help.text) && /\/new -m /.test(help.text));
   });
 
+  it("takes /new's trailing text as the new session's first message (ticket 319)", () => {
+    const r = parseCommandLine(SWITCHER_COMMANDS, "/new -n work finish the import");
+    assert.equal(r.kind, "run");
+    if (r.kind === "run") {
+      assert.deepEqual(r.call.args, ["finish", "the", "import"]);
+      assert.deepEqual(r.call.opts, { name: "work" });
+    }
+    const quoted = parseCommandLine(SWITCHER_COMMANDS, '/new "This should be the prompt"');
+    assert.equal(quoted.kind, "run");
+    if (quoted.kind === "run") {
+      assert.deepEqual(quoted.call.args, ["This should be the prompt"]);
+    }
+    const dashy = parseCommandLine(SWITCHER_COMMANDS, "/new -- -v is a flag");
+    assert.equal(dashy.kind, "run");
+    if (dashy.kind === "run") {
+      assert.deepEqual(dashy.call.args, ["-v", "is", "a", "flag"]);
+    }
+    const anywhere = parseCommandLine(SWITCHER_COMMANDS, "/new finish it -n work");
+    assert.equal(anywhere.kind, "run");
+    if (anywhere.kind === "run") {
+      assert.deepEqual(anywhere.call.args, ["finish", "it"]);
+      assert.deepEqual(anywhere.call.opts, { name: "work" });
+    }
+    const bare = parseCommandLine(SWITCHER_COMMANDS, "/new");
+    assert.equal(bare.kind, "run");
+    if (bare.kind === "run") {
+      assert.deepEqual(bare.call.args, []);
+    }
+    const help = parseCommandLine(SWITCHER_COMMANDS, "/new -h");
+    assert.ok(help.kind === "help" && /first message for the new session/.test(help.text));
+  });
+
   it("completes /new's model after -m, and its agent after -a", async () => {
     const spec = SWITCHER_COMMANDS.find((c) => c.name === "new") as CommandSpec;
     const src = {

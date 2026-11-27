@@ -75,14 +75,15 @@ const doctorSpec = {
 export const SWITCHER_COMMANDS = [
   {
     name: "new",
-    description: "start a new session",
-    help: "Starts an empty session and opens it. It runs in the directory toriel was started from (or the one /cd set) unless -C says otherwise.\n\nExamples:\n  /new\n  /new -n \"Mealie import\" -C ~/projects/mealie\n  /new -a explore          (a read-only agent profile; see /agents)\n  /new -m litellm/z-ai/glm-5.3-flash   (start on that model; same ids as /model, which also takes words)",
+    description: "start a new session (with a prompt: it is sent as the first message)",
+    help: "Starts a session and opens it. With a prompt the new session starts working on it at once: the trailing text is sent as its first message. It runs in the directory toriel was started from (or the one /cd set) unless -C says otherwise.\n\nExamples:\n  /new\n  /new -n \"Mealie import\" -C ~/projects/mealie\n  /new -a explore          (a read-only agent profile; see /agents)\n  /new -m litellm/z-ai/glm-5.3-flash   (start on that model; same ids as /model, which also takes words)\n  /new -n \"Fix the import\" finish the mealie import\n  /new -- -v is a flag, not an option   (put -- before a prompt that contains a word starting with -)",
     build: (cmd) => {
       cmd
         .option("-n, --name <name>", "name for the new session")
         .option("-m, --model <model>", "start it on this model, provider/id (tab completes after -m; replaces an agent profile's model)")
         .option("-C, --cwd <dir>", "working directory for the new session (default: where toriel was started, or the /cd directory)")
-        .option("-a, --agent <name>", "start it as an agent profile (see /agents; tab completes the name after -a)");
+        .option("-a, --agent <name>", "start it as an agent profile (see /agents; tab completes the name after -a)")
+        .argument("[prompt...]", "first message for the new session; put -- before one that contains a word starting with -");
     },
     // flags are not completed in general; these two values are worth it
     complete: async (typed, src) => {
