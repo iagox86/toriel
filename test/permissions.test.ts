@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { answerablePrompt, exemptPaths, protectedPaths, touchesProtected } from "../src/daemon-permissions.ts";
-import { MCP_SUMMARIES_FILE } from "../src/config.ts";
+import { MCP_EXPLORE_RECORDS_FILE, MCP_SUMMARIES_FILE } from "../src/config.ts";
 import { cappedReason, GrantStore, isCappedSurface } from "../src/permissions.ts";
 
 const HOUR = 3_600_000;
@@ -375,6 +375,12 @@ describe("touchesProtected: every spelling of a protected file", () => {
     assert.ok(protectedPaths().includes(MCP_SUMMARIES_FILE));
     assert.equal(touchesProtected(`write ${MCP_SUMMARIES_FILE}`), true, "the absolute spelling");
     assert.equal(touchesProtected(`cat ${path.dirname(MCP_SUMMARIES_FILE)}/../toriel/mcp-summaries.json`), true, "a .. run does not get around it");
+  });
+
+  it("protects the mcp explore-records file: a faked sighting makes a stale skill look fresh (ticket 308)", () => {
+    assert.ok(protectedPaths().includes(MCP_EXPLORE_RECORDS_FILE));
+    assert.equal(touchesProtected(`write ${MCP_EXPLORE_RECORDS_FILE}`), true, "the absolute spelling");
+    assert.equal(touchesProtected(`cat ${path.dirname(MCP_EXPLORE_RECORDS_FILE)}/../toriel/mcp-explore-records.json`), true, "a .. run does not get around it");
   });
 
   it("protects the chat bridge's token file wherever the setting puts it, and nothing else of that directory", () => {
