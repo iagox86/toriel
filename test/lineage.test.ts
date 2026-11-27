@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { detachFromParent, lineageArgs, loadLineage, recordFork, recordSubagent } from "../src/lineage.ts";
+import { detachFromParent, forkIds, lineageArgs, loadLineage, recordFork, recordSubagent } from "../src/lineage.ts";
 
 const tmp = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), "toriel-lineage-")), "lineage.json");
 const ref = (id: string, name = id) => ({ id, name, file: `/s/${id}.jsonl` });
@@ -37,6 +37,14 @@ describe("lineage", () => {
   it("says nothing for a session with no lineage", () => {
     assert.deepEqual(lineageArgs("nobody", tmp()), []);
     assert.deepEqual(lineageArgs(undefined, tmp()), []);
+  });
+
+  it("names the copies, not the agent-started sessions, for the usage counts to skip", () => {
+    const file = tmp();
+    recordFork(ref("p"), ref("c1"), file);
+    recordSubagent(ref("p"), ref("c2"), file);
+    assert.deepEqual([...forkIds(loadLineage(file))], ["c1"]);
+    assert.deepEqual([...forkIds({})], []);
   });
 
   it("detaches a fork from its parent in both directions and stops telling it who its parent was", () => {

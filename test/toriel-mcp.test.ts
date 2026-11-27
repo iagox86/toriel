@@ -194,7 +194,14 @@ describe("remembered server summaries (ticket 303)", () => {
     const tools = [tool("read", "git", "not an MCP tool"), tool("mcp__git__git_read", "git", "Git tools.\nUse repo:"), tool("mcp__mine__x", "mine", "Server text."), tool("mcp__gone__x", "gone", "Not in mcp.yaml."), tool("mcp__git__git_write", "git")];
     assert.deepEqual(learnSummaries({}, tools, servers), { git: "Git tools." });
     assert.equal(learnSummaries({ git: "Git tools." }, tools, servers), undefined, "unchanged: the file is not rewritten");
-    assert.deepEqual(learnSummaries({ git: "Old.", other: "Kept." }, tools, servers), { git: "Git tools.", other: "Kept." });
+    assert.deepEqual(learnSummaries({ git: "Old.", other: "Kept." }, tools, servers), { git: "Git tools." }, "a name mcp.yaml no longer has is dropped");
+  });
+
+  it("removes the summary of a connected server whose instructions are now empty", () => {
+    const servers = { git: { command: "g" } };
+    const tools = [tool("mcp__git__git_read", "git", "")];
+    assert.deepEqual(learnSummaries({ git: "Git tools.", other: "Gone." }, tools, { git: { command: "g" }, other: { command: "o" } }), { other: "Gone." });
+    assert.deepEqual(learnSummaries({ git: "Git tools." }, tools, servers), {}, "emptied: the file is rewritten without the gone summary");
   });
 
   it("reads a missing or malformed file as no summaries, and writes it atomically", () => {
@@ -210,6 +217,13 @@ describe("remembered server summaries (ticket 303)", () => {
     assert.deepEqual(loadSummaries(file), { git: "ok" });
     fs.writeFileSync(file, "{not json");
     assert.deepEqual(loadSummaries(file), {});
+  });
+
+  it("lines every loaded value again and drops empty ones, as if it had just been learned", () => {
+    const file = tmp();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ git: "  Git tools.\nUse repo: git.example.com  ", long: "x".repeat(400), empty: "   \n  ", gone: "", kept: 3 }));
+    assert.deepEqual(loadSummaries(file), { git: "Git tools.", long: "x".repeat(250) });
   });
 
   it("records after a run without throwing, even when the file cannot be written", () => {

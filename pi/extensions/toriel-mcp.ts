@@ -15,7 +15,7 @@
 // the connected servers' summaries for the next session.
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { learnSummaries, MCP_DIRECT_ENV, MCP_FILE_ENV, MCP_SUMMARIES_ENV, type McpServerConfig, parseDirectServers, parseMcpYaml, piConfig, probeUrl, redactUrl, type ToolNamespaceInfo, toolServerName } from "./lib/mcp-config.ts";
+import { learnSummaries, MCP_DIRECT_ENV, MCP_FILE_ENV, MCP_SUMMARIES_ENV, type McpServerConfig, parseDirectServers, parseMcpYaml, piConfig, probeUrl, redactUrl, summaryLine, type ToolNamespaceInfo, toolServerName } from "./lib/mcp-config.ts";
 
 // Only the slice of pi's extension API this file uses (see toriel-usage.ts).
 interface Ctx {
@@ -102,7 +102,7 @@ export async function reconcile(
   return Object.fromEntries(outcomes);
 }
 
-/** The remembered summaries (ticket 303). A missing, unreadable or malformed file is none, so the worst case is the old behavior. */
+/** The remembered summaries (ticket 303). Every value is lined again on load (first line, trimmed, capped) and empty ones dropped, so a stale or hand-edited value cannot carry newlines or oversize text into the system prompt. A missing, unreadable or malformed file is none, so the worst case is the old behavior. */
 export function loadSummaries(file: string | undefined): Record<string, string> {
   if (!file) {
     return {};
@@ -112,7 +112,12 @@ export function loadSummaries(file: string | undefined): Record<string, string> 
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
       return {};
     }
-    return Object.fromEntries(Object.entries(parsed).filter((e): e is [string, string] => typeof e[1] === "string"));
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .filter((e): e is [string, string] => typeof e[1] === "string")
+        .map(([name, text]) => [name, summaryLine(text)])
+        .filter((e) => e[1].length > 0),
+    );
   } catch {
     return {};
   }

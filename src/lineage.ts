@@ -92,6 +92,20 @@ export function recordSubagent(parent: SessionRef, child: SessionRef, file = LIN
   saveLineage(data, file);
 }
 
+/**
+ * The UUIDs of copied sessions (`/fork`, `/adopt`): lineage entries with a parent that are not agent-started subagents. A copy's file
+ * repeats its parent's calls, so usage counts skip it the way they skip agent-profile sessions (ticket 304).
+ */
+export function forkIds(lineage: Lineage): Set<string> {
+  const ids = new Set<string>();
+  for (const [id, entry] of Object.entries(lineage)) {
+    if (entry.parent && entry.kind !== "subagent") {
+      ids.add(id);
+    }
+  }
+  return ids;
+}
+
 /** Number of subagent links above `uuid` (0 = a session the user started or forked). */
 export function subagentDepth(uuid: string | undefined, parents: ReadonlyMap<string, string>): number {
   let depth = 0;

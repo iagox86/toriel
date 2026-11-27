@@ -1561,6 +1561,7 @@ What was built, in two steps. First ticket 209's `mcpWhenUp` setting plus an ext
 - **Migration** is one `toriel doctor --fix` (finding `mcp-json`): missing servers are added to `mcp.yaml`, the old file is renamed to a backup. A real `mcp.json` with nine servers (stdio and URL, headers, env, exposure, timeouts) imports with nothing dropped.
 - **Protected path.** `mcp.yaml` joins the grants file and pi's agent dir in `protectedPaths`: an entry is a command the next session runs, so an ask about it always reaches the user and auto mode never answers it.
 - **Limits, stated.** One decision per session start (plus `/mcp-up`); a session started while an app was down has no tools of its `whenUp` server until `/mcp-up`; URL servers only for `whenUp`; pi's own `/mcp` panel changes to a registered server last for the session only; a project's `.pi/mcp.json` no longer applies.
+- **Parked.** A server whose tools never appear in `getAllTools` (resources-only, or no tools) is never learned and never cleaned from the summaries file: it is only ever touched through a tool's namespace.
 
 ## Sending a queued message now (ticket 222, investigated 2026-11-15)
 

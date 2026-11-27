@@ -345,7 +345,7 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
       const why =
         exposure === "direct"
           ? `${used} of the last ${sessions} sessions (${USAGE_WINDOW_DAYS} days) called its tools; loading them with tool_search re-sends the whole conversation uncached each time, while declared tools cost only cached tokens per call`
-          : `only ${used} of the last ${sessions} sessions (${USAGE_WINDOW_DAYS} days) called its tools, yet every call of every session declares them; tool_search finds them when a session needs them`;
+          : `only ${used} of the ${sessions} sessions that declared its tools (${USAGE_WINDOW_DAYS} days) called them, while all of them declare them; tool_search finds them when a session needs them`;
       out.push({
         id: "mcp-exposure",
         level: "recommended",
