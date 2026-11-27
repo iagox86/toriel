@@ -82,6 +82,7 @@ export const RESOURCES: readonly Resource[] = [
   { kind: "extension", path: "extensions/toriel-plan.ts", why: "plan mode (/plan, enter_plan_mode and exit_plan_mode) does nothing: nothing is blocked while it is on and the agent cannot ask for it", tools: ["enter_plan_mode", "exit_plan_mode"] },
   { kind: "extension", path: "extensions/toriel-qa.ts", why: "ask_user_question labels keep their own numbering and the dialog numbers the rows again, so the numbering shows doubled" },
   { kind: "extension", path: "extensions/toriel-tasks.ts", why: "agents have no todo_write tool, and the task list is not shown above the editor", tools: ["todo_write"] },
+  { kind: "extension", path: "extensions/toriel-goal.ts", why: "agents cannot mark the session's goal done (toriel_goal), and the goal is not reminded to them while they work", tools: ["toriel_goal"] },
   { kind: "extension", path: "extensions/toriel-mcp.ts", why: "no MCP server of toriel's mcp.yaml is registered into pi (agents have no MCP tools), and /mcp-up is missing" },
   { kind: "extension", path: "extensions/toriel-cache-warn.ts", why: "no warning before a prompt hits an expired prompt cache" },
   { kind: "skill", path: "skills/messaging", why: "agents are not told how to use toriel_message" },
@@ -96,7 +97,7 @@ export const RESOURCES: readonly Resource[] = [
  * started on a profile that lists its tools still gets them (as bare names added to the profile's list: pi refuses to mix them with
  * `+name`). A subagent gets them only when its profile names them, as in Claude Code, where plan mode is the main session's.
  */
-export const SESSION_TOOLS: readonly string[] = ["todo_write", "enter_plan_mode", "exit_plan_mode"];
+export const SESSION_TOOLS: readonly string[] = ["todo_write", "enter_plan_mode", "exit_plan_mode", "toriel_goal"];
 
 /** `--tools` modifiers that add toriel's tools to whatever loadout a session has or restores. */
 export const TORIEL_TOOLS: readonly string[] = RESOURCES.flatMap((r) => (r.tools ?? []).map((t) => `+${t}`));

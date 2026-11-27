@@ -87,7 +87,7 @@ describe("daemon: subagents", () => {
     assert.deepEqual(sub.sort(), ["read,grep", "read,todo_write"], "no plan tools and no task list unless the profile names them");
     const driven = await c.request({ type: "spawn", cwd: harness.dir, agent: "lister" });
     await c.waitFor((m) => m.type === "history" && m.session === driven.sessionId);
-    assert.ok(toolsLists(harness).includes("read,grep,todo_write,enter_plan_mode,exit_plan_mode"), toolsLists(harness).join(" | "));
+    assert.ok(toolsLists(harness).includes("read,grep,todo_write,enter_plan_mode,exit_plan_mode,toriel_goal"), toolsLists(harness).join(" | "));
   });
 
   it("runs a foreground subagent to its final text, nests it under the parent and parks its session", async () => {
