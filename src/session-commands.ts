@@ -229,7 +229,7 @@ export class SessionCommands {
     }
   }
 
-  /** Mark the viewed session parked (top-level: also filed under Archive), stop its process unless it is busy, and return to the switcher. */
+  /** Mark the viewed session parked (top-level: also filed under Archive), stop its process unless it is busy, and return to the switcher. Does not wake a sleeping session. */
   private async park(): Promise<void> {
     const key = this.h.viewing;
     const meta = this.viewedMeta();
@@ -241,7 +241,8 @@ export class SessionCommands {
     const groups = loadGroups();
     groups.parked = withParked(groups, sessionId, true);
     // File a top-level session under Archive as well; a child stays hidden under its parent.
-    const ordered = this.h.switcher.sessions;
+    // orderedAll is the complete arranged list: hidden (filter, external) rows count too.
+    const ordered = this.h.switcher.orderedAll;
     const row = ordered.find((x) => x.sessionId === sessionId);
     let archived = false;
     if (row && (row.depth ?? 0) === 0) {
@@ -254,9 +255,10 @@ export class SessionCommands {
     }
     let note = archived ? "parked and archived" : "parked";
     if (meta?.active) {
-      if (meta.streaming || meta.pendingDialog) {
+      // A dead child is not running anything (a prompt respawns it): nothing to stop.
+      if (meta.streaming || meta.compacting || meta.pendingDialog) {
         note = `${note} (still running: it is working or waiting on you)`;
-      } else {
+      } else if (!meta.dead) {
         try {
           await this.h.request({ type: "deactivate", session: meta.id });
           note = archived ? "parked, archived and stopped" : "parked and stopped";

@@ -182,6 +182,31 @@ export interface MutationResult {
 }
 
 /**
+ * Children that follow each top-level session, by row adjacency. A depth-0 row
+ * without an id (a live session pi has not written yet) ends the tree it
+ * appears to close: its followers stay nobody's instead of the parent before
+ * it, so a move or archive that takes the previous parent cannot sweep them.
+ */
+function belowByRow(rows: readonly SwitcherSession[]): Map<string, string[]> {
+  const below = new Map<string, string[]>();
+  let owner: string | undefined;
+  for (const x of rows) {
+    if (x.sessionId === undefined) {
+      if ((x.depth ?? 0) === 0) {
+        owner = undefined;
+      }
+      continue;
+    }
+    if ((x.depth ?? 0) === 0) {
+      owner = x.sessionId;
+    } else if (owner !== undefined) {
+      below.set(owner, [...(below.get(owner) ?? []), x.sessionId]);
+    }
+  }
+  return below;
+}
+
+/**
  * shift+up/down on a session row: swap within its section, or cross into the
  * adjacent section (reassigning its group). Mutates `groups.order` and
  * `groups.assignments`; `sessions` is the displayed list.
@@ -195,18 +220,7 @@ export function moveSession(groups: GroupsFile, sessions: SwitcherSession[], s: 
     return { changed: false, hint: "move the parent instead - children stay under it" };
   }
   // A parent moves with everything below it: only top-level sessions are placed, descendants follow.
-  const below = new Map<string, string[]>();
-  let owner: string | undefined;
-  for (const x of sessions) {
-    if (x.sessionId === undefined) {
-      continue;
-    }
-    if ((x.depth ?? 0) === 0) {
-      owner = x.sessionId;
-    } else if (owner !== undefined) {
-      below.set(owner, [...(below.get(owner) ?? []), x.sessionId]);
-    }
-  }
+  const below = belowByRow(sessions);
   // Section structure INCLUDING empty groups: [ungrouped, ...groups]. Moves
   // are section-relative, so an empty group is a valid target (the moved
   // session becomes its only member).
@@ -255,8 +269,10 @@ export function moveSession(groups: GroupsFile, sessions: SwitcherSession[], s: 
  * /park on a top-level session: file it (with everything below it) at the
  * bottom of the Archive group, creating the group if missing. Mutates
  * `groups.groups`, `groups.assignments` and `groups.order`; `ordered` is the
- * switcher's ordered list (hidden-but-ordered rows included). The park marker
- * itself is the caller's job (withParked).
+ * switcher's complete arranged list (hidden-but-ordered rows included). The
+ * subtree is cut from the stored order and re-appended at the end, so entries
+ * that no row carries (filter-hidden, trashed) keep their places. The park
+ * marker itself is the caller's job (withParked).
  */
 export function archiveSession(groups: GroupsFile, ordered: readonly SwitcherSession[], s: SwitcherSession): MutationResult {
   const uuid = s.sessionId;
@@ -267,49 +283,18 @@ export function archiveSession(groups: GroupsFile, ordered: readonly SwitcherSes
     return { changed: false, hint: "children stay under the parent" };
   }
   // A parent moves with everything below it: only top-level sessions are placed, descendants follow.
-  const below = new Map<string, string[]>();
-  let owner: string | undefined;
-  for (const x of ordered) {
-    if (x.sessionId === undefined) {
-      continue;
-    }
-    if ((x.depth ?? 0) === 0) {
-      owner = x.sessionId;
-    } else if (owner !== undefined) {
-      below.set(owner, [...(below.get(owner) ?? []), x.sessionId]);
-    }
-  }
-  // Section structure INCLUDING empty groups: [ungrouped, ...groups].
-  const sections: Array<{ group: string | null; uuids: string[] }> = [{ group: null, uuids: [] }];
-  for (const g of groups.groups) {
-    sections.push({ group: g, uuids: [] });
-  }
-  const sectionIndex = (g: string | null) => (g === null ? 0 : 1 + groups.groups.indexOf(g));
-  for (const x of ordered) {
-    if (x.sessionId !== undefined && (x.depth ?? 0) === 0) {
-      sections[sectionIndex(x.group ?? null)].uuids.push(x.sessionId);
-    }
-  }
-  const source = sections[sectionIndex(s.group ?? null)];
-  const pos = source.uuids.indexOf(uuid);
-  if (pos === -1) {
-    return { changed: false };
-  }
-  source.uuids.splice(pos, 1);
+  const below = belowByRow(ordered);
+  const subtree = [uuid, ...(below.get(uuid) ?? [])];
+  const subtreeSet = new Set(subtree);
+  // sortSessions ranks compare within a section, so the subtree at the very end
+  // of the flat order lands last inside Archive's section; rebuild nothing else.
+  const flat = groups.order ?? ordered.flatMap((x) => (x.sessionId !== undefined ? [x.sessionId] : []));
+  groups.order = [...flat.filter((id) => !subtreeSet.has(id)), ...subtree];
   const group = resolveGroup(groups, ARCHIVE_GROUP);
-  // resolveGroup either found the group (its section is already in `sections`,
-  // built from the same list) or appended it: that section goes last.
-  const existing = sections[1 + groups.groups.indexOf(group)];
-  const target = existing ?? { group, uuids: [] as string[] };
-  if (!existing) {
-    sections.push(target);
-  }
-  target.uuids.push(uuid);
   groups.assignments[uuid] = group;
   for (const kid of below.get(uuid) ?? []) {
     groups.assignments[kid] = group;
   }
-  groups.order = sections.flatMap((sec) => sec.uuids.flatMap((id) => [id, ...(below.get(id) ?? [])]));
   return { changed: true };
 }
 
