@@ -238,8 +238,11 @@ export interface ToolNamespaceInfo {
  * show nothing for it: the decision is made per server after the whole tool list, since only some of a server's tools carry the
  * instructions), and a name mcp.yaml no longer has is dropped, so the file never outlives the config. Returns undefined when nothing
  * changed, so the file is written only when it has to be.
+ *
+ * `skipPrune` leaves the not-in-mcp.yaml pruning out: when the file's load reported problems it saw only part of the entries (or none,
+ * so every name looks gone), and pruning then would wipe summaries the file still holds, changing the next session's server list.
  */
-export function learnSummaries(known: Readonly<Record<string, string>>, tools: readonly ToolNamespaceInfo[], servers: Readonly<Record<string, McpServerConfig>>): Record<string, string> | undefined {
+export function learnSummaries(known: Readonly<Record<string, string>>, tools: readonly ToolNamespaceInfo[], servers: Readonly<Record<string, McpServerConfig>>, opts: { skipPrune?: boolean } = {}): Record<string, string> | undefined {
   const seen = new Set<string>();
   const learned = new Map<string, string>();
   for (const tool of tools) {
@@ -267,10 +270,12 @@ export function learnSummaries(known: Readonly<Record<string, string>>, tools: r
       changed = true;
     }
   }
-  for (const server of Object.keys(next)) {
-    if (!(server in servers)) {
-      delete next[server];
-      changed = true;
+  if (!opts.skipPrune) {
+    for (const server of Object.keys(next)) {
+      if (!(server in servers)) {
+        delete next[server];
+        changed = true;
+      }
     }
   }
   return changed ? next : undefined;

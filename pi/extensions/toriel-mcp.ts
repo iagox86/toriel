@@ -131,10 +131,11 @@ export function saveSummaries(file: string, summaries: Record<string, string>): 
   fs.renameSync(tmp, file);
 }
 
-/** Record the summaries of the servers connected now, when they differ from the file's. Never throws: a lost summary only means the next session's server list changes once. */
+/** Record the summaries of the servers connected now, when they differ from the file's. Never throws: a lost summary only means the next session's server list changes once. A load that reported problems saw only part of mcp.yaml (or none of it), so the summaries its pruning would drop are kept: a broken edit must not wipe the file. */
 export function recordSummaries(file: string, mcpFile: string, tools: readonly ToolNamespaceInfo[]): void {
   try {
-    const next = learnSummaries(loadSummaries(file), tools, loadServers(mcpFile).servers);
+    const { servers, problems } = loadServers(mcpFile);
+    const next = learnSummaries(loadSummaries(file), tools, servers, { skipPrune: problems.length > 0 });
     if (next) {
       saveSummaries(file, next);
     }

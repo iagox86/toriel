@@ -56,11 +56,18 @@ export function detachFromParent(uuid: string, file = LINEAGE_FILE): SessionRef 
   if (!parent) {
     return undefined;
   }
-  const { parent: _gone, kind: _kind, ...rest } = data[uuid] as LineageEntry;
-  if (Object.keys(rest).length > 0) {
-    data[uuid] = rest;
+  const { parent: _gone, ...rest } = data[uuid] as LineageEntry;
+  if (rest.kind === "subagent") {
+    // a subagent's file is started fresh, not copied, so the usage scan skips it through the agents state: keep today's shape, where the parent and the kind go and an entry with nothing else goes with them
+    const { kind: _kind, ...kept } = rest;
+    if (Object.keys(kept).length > 0) {
+      data[uuid] = kept;
+    } else {
+      delete data[uuid];
+    }
   } else {
-    delete data[uuid];
+    // a fork copy's file still repeats its parent's calls, so usage counts keep skipping it after a detach too (ticket 304): the kind stays (or is stamped) as the marker
+    data[uuid] = { ...rest, kind: "fork" };
   }
   const up = data[parent.id];
   if (up) {
@@ -93,13 +100,14 @@ export function recordSubagent(parent: SessionRef, child: SessionRef, file = LIN
 }
 
 /**
- * The UUIDs of copied sessions (`/fork`, `/adopt`): lineage entries with a parent that are not agent-started subagents. A copy's file
- * repeats its parent's calls, so usage counts skip it the way they skip agent-profile sessions (ticket 304).
+ * The UUIDs of copied sessions (`/fork`, `/adopt`): ones with a parent that are not agent-started subagents, and every one stamped
+ * `kind: "fork"` - the mark `/detach` leaves, since a detached copy's file still repeats its parent's calls, so usage counts skip it
+ * the way they skip agent-profile sessions (ticket 304).
  */
 export function forkIds(lineage: Lineage): Set<string> {
   const ids = new Set<string>();
   for (const [id, entry] of Object.entries(lineage)) {
-    if (entry.parent && entry.kind !== "subagent") {
+    if (entry.kind === "fork" || (entry.parent && entry.kind !== "subagent")) {
       ids.add(id);
     }
   }

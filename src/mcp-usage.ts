@@ -26,7 +26,7 @@ export interface McpUsage {
   sessions: number;
   /** Per server, in tool-name form (`claude_code`), the sessions that called at least one of its tools. */
   byServer: Record<string, number>;
-  /** Per server, in tool-name form, the sessions whose system message declared its tools (pi folds every declaration into the leading system message): the honest denominator for the deferred advice, since only these pay the declaration. */
+  /** Per server, in tool-name form, the sessions whose system messages declared its tools. In the session file the leading system message carries the tools declared at the first call (a direct server's among them) and a later delta system message each tool_search load or mid-session connect; pi folds the declarations into one leading system message only in the request, not in the file. The honest denominator for the deferred advice, since only these pay the declaration. */
   declared: Record<string, number>;
 }
 
@@ -35,7 +35,7 @@ export function serverOfTool(name: string): string | undefined {
   return /^mcp__(.+?)__./.exec(name)?.[1];
 }
 
-/** The servers whose tools one session file's assistant messages called, which its system message declared, and whether it made a model call at all. */
+/** The servers whose tools one session file's assistant messages called, which its system messages declared, and whether it made a model call at all. */
 export function sessionUsage(text: string): { called: boolean; servers: Set<string>; declared: Set<string> } {
   const servers = new Set<string>();
   const declared = new Set<string>();
@@ -55,7 +55,11 @@ export function sessionUsage(text: string): { called: boolean; servers: Set<stri
       continue;
     }
     if (entry.message?.role === "system") {
-      // a system entry names the tools pi declared into the prompt (tool_search loads among them): loading is not calling, so this only says which servers the session carried
+      // Every system entry's toolsAdded names what pi declared into the model's tool list: the leading system message (the file's
+      // top) carries the tools the first call carried, a direct server's among them, and a later delta carries a tool_search load's
+      // or a mid-session connect's - both real declarations. A server named in the rendered sections is not declared: the
+      // mcp_servers section lists only the servers whose tools pi has NOT declared, suffixed with how they are reached
+      // ("(codemode)", "(tool_search)"), and pi leaves a direct server out of it entirely.
       for (const part of Array.isArray(entry.message.toolsAdded) ? entry.message.toolsAdded : []) {
         const name = (part as { name?: unknown }).name;
         const server = typeof name === "string" ? serverOfTool(name) : undefined;

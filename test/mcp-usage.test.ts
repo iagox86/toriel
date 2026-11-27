@@ -9,6 +9,37 @@ import { exposureAdvice, MAX_FILE_BYTES, MIN_SESSIONS, scanMcpUsage, serverOfToo
 const assistant = (...tools: string[]): string => JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "x" }, ...tools.map((name) => ({ type: "toolCall", id: "c", name, arguments: {} }))] } });
 // a system entry that loaded tools: loading is not calling, so it must not count
 const loaded = (...tools: string[]): string => JSON.stringify({ type: "message", message: { role: "system", content: "", toolsAdded: tools.map((name) => ({ name })) } });
+// The leading system message of a real plain session (recorded 2026-11-26, descriptions shortened): the sections render the prompt,
+// and toolsAdded carries the tools declared into the first call - the built-ins plus the tools of the `direct` servers. The
+// mcp_servers section lists only the servers whose tools are NOT declared, suffixed with how they are reached.
+const leadingSystem = (): string =>
+  JSON.stringify({
+    type: "message",
+    id: "38e1760a",
+    parentId: "82f7ac18",
+    timestamp: 1764007947648,
+    message: {
+      role: "system",
+      content: "",
+      sections: {
+        preamble: "You are a coding assistant running inside pi, a coding agent harness. Help users inspect files, run commands, and modify code.",
+        tools: "<tools>\n- read: Read file contents\n- bash: Execute bash commands (ls, grep, find, etc.)\n- edit: Make precise file edits with exact text replacement\n- write: Create or overwrite files\n- codemode: Run JavaScript that calls other tools\n</tools>",
+        rules: "<rules>\n- Use bash for file operations like ls, rg, find\n</rules>",
+        cwd: "/var/home/ron/projects/toriel",
+        mcp_servers:
+          "<mcp_servers>\nMCP servers whose tools are not declared to you. Call the tools of `codemode` servers from codemode scripts.\n- mcp__freecad (codemode)\n- mcp__github (codemode)\n- mcp__mealie (codemode)\n- mcp__vikunja (codemode): Rich-text fields (task and project descriptions, comments) are HTML by default.\n</mcp_servers>",
+      },
+      toolsAdded: [
+        { name: "read", description: "Read the contents of a file" },
+        { name: "bash", description: "Execute bash commands" },
+        { name: "codemode", description: "Run JavaScript that calls other tools" },
+        { name: "mcp__git__git_read", description: "Read the contents of a file" },
+        { name: "mcp__git__git_write", description: "Write a file" },
+        { name: "mcp__ghidra__list_instances", description: "List Ghidra instances" },
+        { name: "list_mcp_resources", description: "List MCP resources" },
+      ],
+    },
+  });
 
 describe("which servers a session called", () => {
   it("names the server of an MCP tool, including one with underscores, and nothing for other tools", () => {
@@ -26,6 +57,15 @@ describe("which servers a session called", () => {
     assert.deepEqual([...u.declared], ["github"], "the tools the system entry declared are seen, but not as calls");
     assert.equal(sessionUsage(loaded("mcp__git__git_read")).called, false, "a session that never called the model does not count");
     assert.deepEqual([...sessionUsage(assistant("read")).declared], []);
+  });
+
+  it("reads the declarations from the leading system message's toolsAdded, which a later load delta joins; section mentions declare nothing", () => {
+    const text = [leadingSystem(), loaded("mcp__github__get_commit"), assistant("mcp__git__git_read")].join("\n");
+    const u = sessionUsage(text);
+    assert.equal(u.called, true);
+    assert.deepEqual([...u.declared].sort(), ["ghidra", "git", "github"], "the direct servers the first call carried, plus the later tool_search load");
+    assert.equal(u.declared.has("freecad"), false, "the mcp_servers section names only the not-declared servers; a mention there declares nothing");
+    assert.equal(sessionUsage(leadingSystem()).declared.has("ghidra"), true, "the leading message alone declares, no later entry needed");
   });
 });
 

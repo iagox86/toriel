@@ -47,16 +47,25 @@ describe("lineage", () => {
     assert.deepEqual([...forkIds({})], []);
   });
 
-  it("detaches a fork from its parent in both directions and stops telling it who its parent was", () => {
+  it("detaches a fork from its parent in both directions, stamps it fork for the usage counts, and stops telling it who its parent was", () => {
     const file = tmp();
     recordFork(ref("p", "Parent"), ref("c1", "One"), file);
     recordFork(ref("p", "Parent"), ref("c2", "Two"), file);
     assert.equal(detachFromParent("c1", file)?.name, "Parent");
     const after = loadLineage(file);
-    assert.equal(after.c1, undefined);
+    assert.deepEqual(after.c1, { kind: "fork" }, "the kind stays as the marker that this file began as a copy");
     assert.deepEqual(after.p?.forks?.map((f) => f.id), ["c2"]);
     assert.equal(after.c2?.parent?.id, "p");
     assert.deepEqual(lineageArgs("c1", file), []);
+    assert.deepEqual([...forkIds(after)].sort(), ["c1", "c2"], "the detached one too: its file still repeats its parent's old calls");
+  });
+
+  it("detaches a subagent without stamping it fork, so the usage counts do not skip its file", () => {
+    const file = tmp();
+    recordSubagent(ref("p"), ref("w"), file);
+    assert.equal(detachFromParent("w", file)?.id, "p");
+    assert.equal(loadLineage(file).w, undefined, "a subagent's file is started fresh, not copied: the link goes whole, no marker");
+    assert.deepEqual([...forkIds(loadLineage(file))], []);
   });
 
   it("keeps the rest of an entry that is also a parent, and does nothing for a session without one", () => {
