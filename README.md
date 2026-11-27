@@ -184,6 +184,7 @@ sessions recorded before the rename still display their injected messages.
 ## Development
 
 ```fish
+npm run check       # typecheck, lint and all tests, with a summary
 npm test            # unit and daemon tests (no network, no model; uses a fake pi)
 npm run typecheck   # tsc --noEmit
 npm run lint        # biome

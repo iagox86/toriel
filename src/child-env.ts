@@ -15,6 +15,13 @@ import { DEFAULT_SANDBOX_WRITABLE, type TorielSettings } from "./settings.ts";
 /** The daemon-owned variables that must never come from the daemon's own environment. */
 const OWNED_KEYS = [SCOPE_ENV, SCOPE_MODE_ENV, "TORIEL_SANDBOX", "TORIEL_SANDBOX_RW", "TORIEL_SHARED_DIR", "TORIEL_SANDBOX_TMP", MCP_FILE_ENV, MCP_DIRECT_ENV, MCP_SUMMARIES_ENV, MCP_RECORDS_ENV, FILE_HISTORY_ENV, PLAN_DIR_ENV, FRESHNESS_ENV];
 
+/**
+ * Every variable the daemon sets on a pi child: the owned ones above, the identity ones `childEnv` adds, and the
+ * delegation pair from `delegationEnv` in daemon-children.ts. The test runner drops all of them, so tests run inside a
+ * toriel session behave as in a plain shell (ticket 339); test/child-env.test.ts fails when `childEnv` sets one not listed.
+ */
+export const CHILD_ENV_KEYS: readonly string[] = [...OWNED_KEYS, "TORIEL_CHILD", "TORIEL_SOCK", "TORIEL_SESSION_ID", "TORIEL_CAN_SPAWN", "TORIEL_AGENT_TYPES"];
+
 /** What a child gets beyond its scope: the shared directory, and (only when set) the sandbox switch with its extra writable roots. */
 export interface ChildExtras {
   sharedDir?: string;

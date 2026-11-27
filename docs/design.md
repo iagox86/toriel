@@ -606,8 +606,13 @@ Near-term (post-budget-reset), rough order = dependency + value:
    could follow, as further `mcp__<server>__*` profiles). `research-code` was dropped (explore covers it). Spawn decisions: records live in
    daemon memory only (a restart loses handles and spawn counts and ends
    running subagents; lineage and files stay); limits are the constants in
-   `subagents.ts`, not settings yet; the foreground call is one long request
-   on the daemon socket (cancel = connection drop), not polling; `maxDepth`
+   `subagents.ts`, not settings yet; a spawn from a session the user started
+   waits for a free slot instead of meeting the concurrency cap, first come
+   first served and woken as subagents end (ticket 341), while a spawn from a
+   subagent is still refused outright when every slot is taken - its parent
+   holds one of those slots, so waiting could deadlock; the foreground call is
+   one long request on the daemon socket (cancel = connection drop), not
+   polling; `maxDepth`
    gates tool registration, so the hard cap 2 is only reachable by raising it;
    tokens come from the child's `message_end` usage (fresh input + output + cache writes, not cache reads), not provider quota windows. Findings that matter: `--tools` does not remove
    extension tools (use --no-extensions); pi cannot select MCP servers per run

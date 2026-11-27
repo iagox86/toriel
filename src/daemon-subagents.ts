@@ -30,6 +30,7 @@ import {
   messageTokens,
   parseHandle,
   refuseSpawn,
+  slotFree,
   resultText,
   SubagentBook,
   type SubagentLimits,
@@ -58,6 +59,10 @@ export class SubagentManager {
   private readonly early = new Set<number>();
   /** The outcome a stop asked for, by handle: it wins over the settle the abort causes. */
   private readonly forced = new Map<number, { state: SubagentState; note: string }>();
+  /** Spawns from top-level sessions waiting for a free slot, first come first served (ticket 341). */
+  private readonly waiting: Array<{ go: () => void }> = [];
+  /** Slots handed to spawns that have not created their record yet: they count as running. */
+  private reserved = 0;
 
   /** How long a finished subagent stays in the switcher. */
   readonly keepMs: number;
@@ -267,25 +272,87 @@ export class SubagentManager {
     rec.note = forced?.note ?? abnormal?.note ?? note ?? rec.note;
     rec.endedAt = Date.now();
     this.forced.delete(rec.handle);
+    // the slot is free from here on: hand it to the next waiting spawn now, before the awaits below, so a spawn (or a
+    // depth>0 refusal check) arriving in that gap cannot take it ahead of the queue (first come first served, ticket 341)
+    this.wakeWaiters();
     const ctx = this.ctx();
     const child = ctx.registry.get(rec.session);
     try {
       if (child?.child) {
-        rec.result = subagentResultText((await child.child.getMessages()) as Array<{ role?: string; content?: unknown }>);
+        try {
+          rec.result = subagentResultText((await child.child.getMessages()) as Array<{ role?: string; content?: unknown }>);
+        } catch (err) {
+          log(`subagent #${rec.handle}: could not read its last answer: ${errText(err)}`);
+        }
       }
-    } catch (err) {
-      log(`subagent #${rec.handle}: could not read its last answer: ${errText(err)}`);
+      this.settling.delete(rec.session);
+      if (child?.child) {
+        await ctx.children.deactivate(child);
+      }
+    } finally {
+      // even when the awaited part throws, the waiting spawns and the foreground call must not hang on this record
+      log(`subagent #${rec.handle} (${rec.agent}) ${rec.state}${rec.note ? `: ${rec.note}` : ""}`);
+      this.wakeWaiters();
+      ctx.hub.broadcastSessions();
+      for (const wake of this.ending.get(rec.handle) ?? []) {
+        wake();
+      }
+      this.ending.delete(rec.handle);
     }
-    this.settling.delete(rec.session);
-    if (child?.child) {
-      await ctx.children.deactivate(child);
+  }
+
+  /** How many spawns are waiting for a slot. */
+  waitingCount(): number {
+    return this.waiting.length;
+  }
+
+  /**
+   * Resolve when a spawn may start, holding a slot for it until `releaseSlot` (once its record exists, or it gave up): at once when
+   * a slot is free and nobody is ahead, otherwise in arrival order as subagents end (ticket 341). Rejects when `signal` aborts first
+   * (the caller went away).
+   */
+  private waitForSlot(signal: AbortSignal | undefined, label: string): Promise<void> {
+    const cancelled = (): Error => new Error("cancelled while waiting for a free subagent slot");
+    // an already-given-up caller takes no slot, fast path included
+    if (signal?.aborted) {
+      return Promise.reject(cancelled());
     }
-    log(`subagent #${rec.handle} (${rec.agent}) ${rec.state}${rec.note ? `: ${rec.note}` : ""}`);
-    ctx.hub.broadcastSessions();
-    for (const wake of this.ending.get(rec.handle) ?? []) {
-      wake();
+    if (this.waiting.length === 0 && slotFree(this.book.running().length, this.reserved, this.limits)) {
+      this.reserved++;
+      return Promise.resolve();
     }
-    this.ending.delete(rec.handle);
+    return new Promise<void>((resolve, reject) => {
+      const entry = {
+        go: (): void => {
+          signal?.removeEventListener("abort", onAbort);
+          this.reserved++;
+          resolve();
+        },
+      };
+      const onAbort = (): void => {
+        const i = this.waiting.indexOf(entry);
+        if (i >= 0) {
+          this.waiting.splice(i, 1);
+        }
+        reject(cancelled());
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      this.waiting.push(entry);
+      log(`subagent spawn (${label}) waits for a free slot: ${this.book.running().length} running, limit ${this.limits.maxConcurrent}, ${this.waiting.length} waiting`);
+    });
+  }
+
+  /** Give back a slot `waitForSlot` held, and hand it on. */
+  private releaseSlot(): void {
+    this.reserved--;
+    this.wakeWaiters();
+  }
+
+  /** Hand free slots to the waiting spawns, oldest first. */
+  private wakeWaiters(): void {
+    while (this.waiting.length > 0 && slotFree(this.book.running().length, this.reserved, this.limits)) {
+      this.waiting.shift()?.go();
+    }
   }
 
   /** Throws when `wanted` is not a model pi knows; if pi cannot be asked, the start goes ahead and pi's own error applies. */
@@ -307,7 +374,7 @@ export class SubagentManager {
   }
 
   /** Create, launch and prompt a subagent for `parent`; the record is returned running (or already failed). */
-  async start(parent: DaemonSession, cmd: Cmd<"agent_spawn">): Promise<SubagentRecord> {
+  async start(parent: DaemonSession, cmd: Cmd<"agent_spawn">, signal?: AbortSignal): Promise<SubagentRecord> {
     const ctx = this.ctx();
     const parentUuid = parent.sessionId as string;
     // an explicit model replaces the profile's, so the profile's tier is not resolved (and not reported as unset) then
@@ -325,19 +392,14 @@ export class SubagentManager {
     // fail now, with the valid names, rather than after the subagent's process has started and died on it;
     // before the limit check below, which must stay synchronous with creating the record
     await this.checkModel(parent, cmd.context === "fork" ? undefined : (cmd.model ?? base.model));
-    const refusal = refuseSpawn({
-      limits: this.limits,
-      book: this.book,
-      parent: parentUuid,
-      parentProfile: parent.agent,
-      parentDepth: subagentDepth(parentUuid, parentMap(loadLineage())),
-    });
-    if (refusal) {
-      throw new Error(refusal);
-    }
-    const parentRec = this.book.byChild(parentUuid);
-    const parentLeft = parentRec ? Math.max(0, parentRec.budget - parentRec.tokens) : undefined;
-    const budget = childBudget(base.budget, this.limits, parentLeft);
+    const parentDepth = subagentDepth(parentUuid, parentMap(loadLineage()));
+    const refuse = (): void => {
+      const refusal = refuseSpawn({ limits: this.limits, book: this.book, parent: parentUuid, parentProfile: parent.agent, parentDepth, reserved: this.reserved });
+      if (refusal) {
+        throw new Error(refusal);
+      }
+    };
+    refuse();
     const parentName = parent.sessionName ?? `session ${parentUuid.slice(0, 8)}`;
     const profile: AgentProfile = {
       ...base,
@@ -358,20 +420,46 @@ export class SubagentManager {
         throw new Error(check.error);
       }
     }
-    // everything above is synchronous with the record below, so parallel calls cannot both slip past a limit
-    const child = ctx.registry.create(cmd.cwd ?? parent.cwd);
-    // claimed here, synchronously with the record: the book needs the final name, and parallel calls must not share one
-    const name = ctx.naming.claim(child, `${base.name}: ${cmd.description}`.slice(0, 60), { source: "subagent" }) as string;
-    const rec = this.book.add({
-      parent: parentUuid,
-      session: child.id,
-      childName: name,
-      agent: base.name,
-      description: cmd.description,
-      background: cmd.background === true,
-      budget,
-      maxTurns: base.maxTurns,
-    });
+    // a session the user started waits its turn when every slot is taken (ticket 341); a subagent was refused above instead,
+    // since waiting could deadlock with its own parent holding a slot
+    const held = parentDepth === 0;
+    if (held) {
+      await this.waitForSlot(signal, `${base.name}: ${cmd.description}`);
+    }
+    let child: DaemonSession;
+    let name: string;
+    let rec: SubagentRecord;
+    try {
+      // the caller may have gone away while its spawn held the slot: give the slot back and never start for it
+      if (held && signal?.aborted) {
+        throw new Error("cancelled while waiting for a free subagent slot");
+      }
+      // from here on synchronous with the record below, so parallel calls cannot both slip past a limit
+      if (held) {
+        refuse(); // the per-parent count may have moved while it waited
+      }
+      const parentRec = this.book.byChild(parentUuid);
+      const parentLeft = parentRec ? Math.max(0, parentRec.budget - parentRec.tokens) : undefined;
+      const budget = childBudget(base.budget, this.limits, parentLeft);
+      child = ctx.registry.create(cmd.cwd ?? parent.cwd);
+      // claimed here, synchronously with the record: the book needs the final name, and parallel calls must not share one
+      name = ctx.naming.claim(child, `${base.name}: ${cmd.description}`.slice(0, 60), { source: "subagent" }) as string;
+      rec = this.book.add({
+        parent: parentUuid,
+        session: child.id,
+        childName: name,
+        agent: base.name,
+        description: cmd.description,
+        background: cmd.background === true,
+        budget,
+        maxTurns: base.maxTurns,
+      });
+    } finally {
+      // the record (if any) now counts as running, so the held slot goes back
+      if (held) {
+        this.releaseSlot();
+      }
+    }
     log(`subagent #${rec.handle} (${base.name}) started for ${parentName}: ${cmd.description}`);
     try {
       await ctx.children.start(child, { agent: profile, subagent: true, name, forkPath: cmd.context === "fork" ? parent.sessionFile : undefined });
@@ -460,11 +548,17 @@ export async function handleAgentSpawn(ctx: DaemonContext, cmd: Cmd<"agent_spawn
   if (!cmd.background) {
     socket.once("close", cancel);
   }
+  // a spawn waiting for a free slot (ticket 341), foreground or background, stops waiting when its caller goes away
+  const waitAbort = new AbortController();
+  const stopWaiting = (): void => waitAbort.abort();
+  socket.once("close", stopWaiting);
   try {
-    rec = await ctx.subagents.start(parent, cmd);
+    rec = await ctx.subagents.start(parent, cmd, waitAbort.signal);
   } catch (err) {
     socket.off("close", cancel);
     throw err;
+  } finally {
+    socket.off("close", stopWaiting);
   }
   if (cmd.background) {
     void ctx.subagents.whenEnded(rec).then(() => ctx.subagents.deliver(rec as SubagentRecord));
