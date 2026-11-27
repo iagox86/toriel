@@ -111,7 +111,7 @@ describe("session commands on a group heading", () => {
   it("flags the commands that act on the highlighted session", () => {
     assert.deepEqual(
       flagged.map((c) => c.name).sort(),
-      ["adopt", "comment", "delete", "detach", "group", "park", "rename", "stop", "ungroup"],
+      ["adopt", "comment", "delete", "detach", "goal", "group", "park", "rename", "stop", "ungroup"],
     );
   });
 
@@ -186,6 +186,16 @@ describe("/cd in the switcher", () => {
     assert.equal(requests[1]?.cwd, "/tmp");
   });
 
+  it("sends /new's trailing text as the new session's first message (ticket 319)", async () => {
+    const { actions, host, requests } = spawning();
+    await actions.runCommand("/new -n import finish the mealie import", undefined);
+    assert.equal(requests[0]?.type, "spawn");
+    assert.equal(requests[0]?.name, "import");
+    assert.equal(requests[0]?.cwd, process.cwd());
+    assert.equal((host as { pendingPrompt?: string | null }).pendingPrompt, "finish the mealie import");
+    assert.equal((host as { pendingEnterId?: number }).pendingEnterId, 5);
+  });
+
   it("sends /new -m's model (and agent) with the spawn request (ticket 247)", async () => {
     const { actions, requests } = spawning();
     await actions.runCommand("/new -m fake/fake-big", undefined);
@@ -195,6 +205,20 @@ describe("/cd in the switcher", () => {
     assert.equal(requests[1]?.model, undefined);
     await actions.runCommand('/new -m ""', undefined);
     assert.equal(requests[2]?.model, "", "an empty -m reaches the daemon, whose error names it");
+  });
+
+  it("puts the whole /new line back in the editor when the spawn fails", async () => {
+    const { sw, host, actions } = setup(async () => {
+      throw new Error("boom");
+    });
+    let text = "";
+    host.editor = { getText: () => text, setText: (t?: string) => { if (t !== undefined) { text = t; } } };
+    await actions.runCommand(`/new -n "Mealie import" -C ${dir} -a explore -m fake/fake-big finish it`, undefined);
+    assert.match(sw.hint, /spawn failed: boom/);
+    assert.equal(text, `/new -n "Mealie import" -m fake/fake-big -C ${dir} -a explore finish it`, "re-entered, it re-issues the same spawn");
+    text = "";
+    await actions.runCommand('/new -n "\'Tis" finish it', undefined);
+    assert.equal(text, `/new -n "'Tis" finish it`, "a value that cannot go bare is re-quoted to re-parse");
   });
 
   it("starts a typed first message there too", async () => {

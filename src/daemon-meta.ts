@@ -4,13 +4,15 @@ import { autoOn, type DaemonSession, type SessionRegistry } from "./daemon-sessi
 import type { GrantStore } from "./permissions.ts";
 import type { Presence } from "./presence.ts";
 import type { PublishedStore } from "./published.ts";
+import type { GoalStore } from "./goals.ts";
 import { scheduleStripLines } from "./schedule-format.ts";
 import type { Scheduler } from "./scheduler.ts";
 import type { SubagentBook } from "./subagents.ts";
 import type { SessionMeta, UsageReport } from "./shared.ts";
 
-function metaFor(s: DaemonSession, socket: net.Socket, presence: Presence, usage: ReadonlyMap<string, UsageReport>, scheduler?: Scheduler, grants?: GrantStore, subagents?: SubagentBook, watchProblem?: (id: number) => string | undefined, published?: PublishedStore): SessionMeta {
+function metaFor(s: DaemonSession, socket: net.Socket, presence: Presence, usage: ReadonlyMap<string, UsageReport>, scheduler?: Scheduler, grants?: GrantStore, subagents?: SubagentBook, watchProblem?: (id: number) => string | undefined, published?: PublishedStore, goals?: GoalStore): SessionMeta {
   const isPublished = published?.has(s.sessionId) === true;
+  const goal = s.sessionId ? goals?.get(s.sessionId) : undefined;
   const granted = s.sessionId && grants ? grants.active(s.sessionId).length : 0;
   const saved = s.sessionId && grants ? grants.dormantCount(s.sessionId) : 0;
   const sub = subagents?.bySession(s.id);
@@ -40,6 +42,8 @@ function metaFor(s: DaemonSession, socket: net.Socket, presence: Presence, usage
     chatProblem: isPublished ? published?.problem : undefined,
     chatChannel: isPublished && s.sessionId ? published?.channels[s.sessionId] : undefined,
     chatServer: isPublished ? published?.server : undefined,
+    goal: goal?.text,
+    goalDone: goal?.done === true ? true : undefined,
     settingsMtime: s.child ? s.settingsMtime : undefined,
     settingsProblem: s.child ? s.settingsProblem : undefined,
     sessionBridge: s.child ? s.sessionBridge : undefined,
@@ -59,7 +63,7 @@ function metaFor(s: DaemonSession, socket: net.Socket, presence: Presence, usage
     grants: granted > 0 ? granted : undefined,
     nextGrantExpiry: s.sessionId && grants ? grants.soonestExpiry(s.sessionId) : undefined,
     grantsSaved: saved > 0 ? saved : undefined,
-    subagent: sub ? { state: sub.state, delivered: sub.deliveredAt !== undefined, parent: sub.parent, tokens: sub.tokens, budget: sub.budget, turns: sub.turns, maxTurns: sub.maxTurns } : undefined,
+    subagent: sub ? { state: sub.state, delivered: sub.deliveredAt !== undefined, parent: sub.parent, tokens: sub.tokens, budget: sub.budget, turns: sub.turns, maxTurns: sub.maxTurns, note: sub.note || undefined } : undefined,
   };
 }
 
@@ -74,8 +78,9 @@ export function sessionMetas(
   subagents?: SubagentBook,
   watchProblem?: (id: number) => string | undefined,
   published?: PublishedStore,
+  goals?: GoalStore,
 ): SessionMeta[] {
-  const metas = registry.all().map((s) => metaFor(s, socket, presence, usage, scheduler, grants, subagents, watchProblem, published));
+  const metas = registry.all().map((s) => metaFor(s, socket, presence, usage, scheduler, grants, subagents, watchProblem, published, goals));
   const tracked = new Set(metas.map((m) => m.sessionFile).filter((f): f is string => !!f));
   return [...metas, ...presence.pseudoMetas(tracked)];
 }

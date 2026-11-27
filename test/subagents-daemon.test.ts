@@ -87,7 +87,7 @@ describe("daemon: subagents", () => {
     assert.deepEqual(sub.sort(), ["read,grep", "read,todo_write"], "no plan tools and no task list unless the profile names them");
     const driven = await c.request({ type: "spawn", cwd: harness.dir, agent: "lister" });
     await c.waitFor((m) => m.type === "history" && m.session === driven.sessionId);
-    assert.ok(toolsLists(harness).includes("read,grep,todo_write,enter_plan_mode,exit_plan_mode"), toolsLists(harness).join(" | "));
+    assert.ok(toolsLists(harness).includes("read,grep,todo_write,enter_plan_mode,exit_plan_mode,toriel_goal"), toolsLists(harness).join(" | "));
   });
 
   it("runs a foreground subagent to its final text, nests it under the parent and parks its session", async () => {
@@ -116,18 +116,57 @@ describe("daemon: subagents", () => {
     assert.ok(Date.now() - started < 3000);
   });
 
-  it("refuses a nested spawn, and a fourth concurrent subagent, with text the model can act on", async () => {
+  it("makes a fourth concurrent spawn wait for a free slot instead of refusing it, and still refuses a nested spawn (ticket 341)", async () => {
     harness = await startDaemon();
     const { c, uuid } = await parentSession(harness);
     for (const n of [1, 2, 3]) {
       await spawn(c, uuid, { task: `[hang] ${n}`, background: true });
     }
-    await assert.rejects(spawn(c, uuid), /3 subagents are already running/);
+    let fourth: Msg | undefined;
+    const waiting = spawn(c, uuid, { task: "[hang] 4", background: true }).then((r) => {
+      fourth = r;
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(fourth, undefined, "the fourth spawn waits while three run");
     const childId = Object.entries(lineage(harness)).find(([, e]) => e.kind === "subagent")?.[0] as string;
     await assert.rejects(spawn(c, childId), /may not start subagents/);
     await c.request({ type: "agents_op", from: uuid, action: "stop", ref: "#1" });
+    await waiting;
+    // tsc narrowed `fourth` to undefined at the assert above; the callback has set it since
+    assert.match((fourth as Msg | undefined)?.text ?? "", /^Started subagent #4 \(worker\) in the background/);
+    for (const ref of ["#2", "#3", "#4"]) {
+      await c.request({ type: "agents_op", from: uuid, action: "stop", ref });
+    }
+  });
+
+  it("serves waiting spawns first come first served, and drops one whose caller went away (ticket 341)", async () => {
+    harness = await startDaemon();
+    const { c, uuid } = await parentSession(harness);
+    for (const n of [1, 2, 3]) {
+      await spawn(c, uuid, { task: `[hang] ${n}`, background: true });
+    }
+    // a second client's call waits first, then goes away; the next in line must get the slot, and the gone one never starts
+    const gone = await harness.connect();
+    void spawn(gone, uuid, { task: "[hang] gone", description: "gone", background: true }).catch(() => undefined);
+    await new Promise((r) => setTimeout(r, 200));
+    const order: string[] = [];
+    const a = spawn(c, uuid, { task: "[hang] a", description: "a", background: true }).then(() => order.push("a"));
+    await new Promise((r) => setTimeout(r, 100));
+    const b = spawn(c, uuid, { task: "[hang] b", description: "b", background: true }).then(() => order.push("b"));
+    await new Promise((r) => setTimeout(r, 100));
+    gone.close();
+    await new Promise((r) => setTimeout(r, 200));
+    await c.request({ type: "agents_op", from: uuid, action: "stop", ref: "#1" });
+    await a;
+    assert.deepEqual(order, ["a"], "only one slot freed, and it went to the oldest caller still waiting");
     await c.request({ type: "agents_op", from: uuid, action: "stop", ref: "#2" });
-    await c.request({ type: "agents_op", from: uuid, action: "stop", ref: "#3" });
+    await b;
+    assert.deepEqual(order, ["a", "b"]);
+    const listed = await c.request({ type: "agents_op", from: uuid, action: "list" });
+    assert.doesNotMatch(listed.text, /gone/, "the spawn whose caller left never started");
+    for (const ref of ["#3", "#4", "#5"]) {
+      await c.request({ type: "agents_op", from: uuid, action: "stop", ref });
+    }
   });
 
   it("cuts a subagent off at its token budget and returns what it had", async () => {
@@ -137,6 +176,9 @@ describe("daemon: subagents", () => {
     assert.equal(r.state, "limit");
     assert.match(r.text, /over its budget of 25/);
     assert.match(r.text, /Partial result:\nstep \d/);
+    const named = () => c.sessions().find((x) => x.sessionName?.startsWith("tiny: look"));
+    await until(() => !!named()?.subagent?.note);
+    assert.match(named()?.subagent?.note ?? "", /over its budget of 25/, "the record's note reaches the session meta");
   });
 
   it("cuts a subagent off at its maxTurns", async () => {
@@ -464,6 +506,20 @@ describe("daemon: subagents", () => {
     assert.match(r.text, /failed: ended with an error: provider exploded/);
     assert.match(r.text, /Partial result:\nstep 2/);
     assert.match((await c.request({ type: "agents_op", from: uuid, action: "status", ref: "#1" })).text, /\[failed, 2 turn\(s\)/);
+  });
+
+  it("masks the credential in a failed subagent's error text before it reaches the parent or the session meta", async () => {
+    harness = await startDaemon();
+    const { c, uuid } = await parentSession(harness);
+    const r = await spawn(c, uuid, { task: "[secret-error] dig" });
+    assert.equal(r.state, "failed");
+    assert.doesNotMatch(r.text, /ghp_[A-Za-z0-9]{20,}/);
+    assert.match(r.text, /failed: ended with an error: provider exploded: gh\*\*\* rejected the request/);
+    const named = () => c.sessions().find((x) => x.sessionName?.startsWith("worker: look"));
+    await until(() => !!named()?.subagent?.note);
+    const note = named()?.subagent?.note ?? "";
+    assert.doesNotMatch(note, /ghp_[A-Za-z0-9]{20,}/, "the session meta never shows the raw token");
+    assert.match(note, /gh\*\*\*/, "the record's masked failure reaches the session meta");
   });
 
   it("stops every pi process when the daemon shuts down: live sessions, a background subagent and one still starting", async () => {

@@ -61,6 +61,36 @@ const permissionsSpec = (scope: "session" | "all") =>
     complete: (typed: string) => permissionCompletions(typed),
   }) satisfies CommandSpec;
 
+/** /goal is the same command in a session and in the switcher; only its scope differs (this session, or the highlighted one). */
+const goalSpec = (scope: "session" | "switcher") =>
+  ({
+    name: "goal",
+    description: scope === "session" ? "set, show, mark done or clear this session's goal" : "set, show, mark done or clear the highlighted session's goal",
+    needsSession: scope === "switcher",
+    help: `A goal is one short line saying what a session is working towards: the switcher row flags it (dimmed once it is done), and the agent can read or mark it through toriel's goal command from pi. It is kept across restarts, deleted with the session, and a fork copies it.
+
+Actions (typed after /goal; done, clear and get act as the action only as the one whole word):
+  <text>       set it (replaces an earlier goal)
+  set <text>   the same, for a goal that starts with an action word ("set done" sets the word)
+  done         mark it done as the user (an agent picks up the goal state at its next session start)
+  clear        forget it
+  get          show it (the default; plain /goal does this too)
+
+Anything else is the goal text, so "done with refactor" or "clear the cache before deploy" set that as one, word for word.
+
+Examples:
+  /goal fix the flaky build
+  /goal
+  /goal set done                (a goal whose text is the word "done")
+  /goal done
+  /goal done with the refactor  (a goal whose text is that sentence, not a mark-done)
+  /goal clear`,
+    build: (cmd: Command) => {
+      cmd.argument("[action]", "done, clear or get, as the one whole word, marks, forgets or shows; anything else (and text after it) is the goal to set (leave all out to show it)").argument("[text...]", "rest of the goal text after the first word");
+    },
+    complete: async (typed: string) => (typed.trim().includes(" ") ? [] : matching(["set", "done", "clear", "get"], typed)),
+  }) satisfies CommandSpec;
+
 /** /doctor is the same command in a session and in the switcher. */
 const doctorSpec = {
   name: "doctor",
@@ -75,14 +105,15 @@ const doctorSpec = {
 export const SWITCHER_COMMANDS = [
   {
     name: "new",
-    description: "start a new session",
-    help: "Starts an empty session and opens it. It runs in the directory toriel was started from (or the one /cd set) unless -C says otherwise.\n\nExamples:\n  /new\n  /new -n \"Mealie import\" -C ~/projects/mealie\n  /new -a explore          (a read-only agent profile; see /agents)\n  /new -m litellm/z-ai/glm-5.3-flash   (start on that model; same ids as /model, which also takes words)",
+    description: "start a new session (with a prompt: it is sent as the first message)",
+    help: "Starts a session and opens it. With a prompt the new session starts working on it at once: the trailing text is sent as its first message. It runs in the directory toriel was started from (or the one /cd set) unless -C says otherwise.\n\nExamples:\n  /new\n  /new -n \"Mealie import\" -C ~/projects/mealie\n  /new -a explore          (a read-only agent profile; see /agents)\n  /new -m litellm/z-ai/glm-5.3-flash   (start on that model; same ids as /model, which also takes words)\n  /new -n \"Fix the import\" finish the mealie import\n  /new -- -v is a flag, not an option   (put -- before a prompt that contains a word starting with -)",
     build: (cmd) => {
       cmd
         .option("-n, --name <name>", "name for the new session")
         .option("-m, --model <model>", "start it on this model, provider/id (tab completes after -m; replaces an agent profile's model)")
         .option("-C, --cwd <dir>", "working directory for the new session (default: where toriel was started, or the /cd directory)")
-        .option("-a, --agent <name>", "start it as an agent profile (see /agents; tab completes the name after -a)");
+        .option("-a, --agent <name>", "start it as an agent profile (see /agents; tab completes the name after -a)")
+        .argument("[prompt...]", "first message for the new session; put -- before one that contains a word starting with -");
     },
     // flags are not completed in general; these two values are worth it
     complete: async (typed, src) => {
@@ -114,6 +145,7 @@ export const SWITCHER_COMMANDS = [
   { name: "resume", description: "resume a paused scheduled prompt",
     help: "Resumes a paused schedule at its next slot. Also clears one that paused itself after failing to deliver.\n\nExample: /resume 3", build: refArgument("resume") },
   permissionsSpec("all"),
+  goalSpec("switcher"),
   doctorSpec,
   { name: "stop", needsSession: true, description: "stop the highlighted session's process (file kept; respawns on next prompt)",
     help: "Stops the highlighted session's pi process but keeps its file; the next message (or /reload, /model, !command) starts it again. Use it to free memory or MCP servers." },
@@ -147,8 +179,8 @@ export const SWITCHER_COMMANDS = [
   },
   {
     name: "park", needsSession: true,
-    description: "park the highlighted session: shown in the oldest colour until you use it again",
-    help: "Parking is a marker, not a state: the session is drawn in the oldest colour until you use it again. A parked subagent is hidden under its parent (/filter shows it).\n\nExample: /park -u   (unpark)",
+    description: "park the highlighted session: oldest colour until reused, idle one stopped, top-level filed under Archive",
+    help: "Parking is a marker, not a state: the session is drawn in the oldest colour until you use it again, and using it again unparks it (the session stays in Archive). Parking also stops an idle session and moves a top-level session to the bottom of the Archive group (created if missing); a parked subagent stays hidden under its parent (/filter shows it) and keeps its group. -u only clears the marker.",
     build: (cmd) => {
       cmd.option("-u, --undo", "unpark it");
     },
@@ -265,6 +297,11 @@ export const SESSION_COMMANDS = [
     },
   },
   {
+    name: "info",
+    description: "print this session as a copy/pasteable markdown card: file, ids, model, context, settings, MCP server names",
+    help: "Shows what toriel knows about this session as a markdown block you can hand to another agent working on it: the session file's path, toriel's session id, the pi session UUID, the name and first message, model, provider, thinking level, context usage, directory, agent profile, plan and auto mode, permission grants, and the MCP server names (names only - never their tokens or headers). It only reads the daemon's session list and mcp.yaml, so a sleeping session stays asleep; the card says the values are the last known state and may be stale. In the panel: c copies it, s saves it to a file under ~/.local/share/toriel/info/.\n\nExample:\n  /info",
+  },
+  {
     name: "mouse",
     description: "show or set toriel's mouse handling: on, off or toggle (off: the terminal does select, copy and middle-click paste)",
     help: "With no argument says whether toriel has the mouse. Off hands the mouse back to the terminal: native select, copy and middle-click paste (also over ssh, where toriel cannot read your clipboard), at the cost of toriel's clicks (switcher rows, double-click on blocks), its own selection highlight and, in some terminals, wheel scrolling. On restores it. Not remembered across restarts. For one click only, hold shift instead.\n\nExamples:\n  /mouse\n  /mouse off\n  /mouse on\n  /mouse toggle",
@@ -289,8 +326,8 @@ export const SESSION_COMMANDS = [
   },
   {
     name: "park",
-    description: "park this session (oldest colour in the switcher until used again), stop it if idle, and go back to the list",
-    help: "Marks the session parked (oldest colour in the list; hidden if it is a subagent), stops it if it is idle, and goes back to the list. Using it again unparks it.",
+    description: "park this session (oldest colour in the switcher until used again), stop it if idle, archive it, and go back to the list",
+    help: "Marks the session parked (oldest colour in the list; hidden if it is a subagent), stops it if it is idle, and goes back to the list. A top-level session also moves to the bottom of the Archive group (created if missing) and stays there; a subagent only hides under its parent. Using it again unparks it.",
   },
   {
     name: "help",
@@ -385,6 +422,7 @@ export const SESSION_COMMANDS = [
     },
   },
   permissionsSpec("session"),
+  goalSpec("session"),
   doctorSpec,
   { name: "abort", description: "interrupt the running agent",
     help: "Interrupts the agent's current turn, like esc. Messages still queued come back into the box." },
@@ -458,12 +496,12 @@ export const SESSION_COMMANDS = [
     name: "mcp",
     description: "list the MCP servers and their states, troubleshoot, add or remove one, or reconnect / sign in to / sign out of one, or have the agent write a skill for one (tab completes names)",
     // biome-ignore lint/suspicious/noTemplateCurlyInString: ${VAR} is pi's own syntax for a header value
-    help: "Actions:\n  list                  every MCP server with its state and its skill on one line (the skill is a skills/ dir or SKILL.md naming the server in the pi agent dir; \"no matching skill (/mcp explore <server>)\" otherwise)\n  status [server]       troubleshoot: each server's state and error text, how it is configured (secrets hidden), whether its command is installed or its URL answers, and what to try. Checks every server that is not connected, or the one named\n  explore <server>      the agent introspects that server (every tool with its full parameter schema, resources) and writes a short pi-format skill for it (what the server is for, the common tasks, gotchas, and the one tool_search call that loads the usual tools; ticket 306): SKILL.md in a subdirectory of the pi agent dir's skills/ (updates one if it already exists); says so instead when the server is not a configured mcp.yaml server, or is not connected (then it suggests /mcp reconnect)\n  add <name> <target>   write a server into toriel's mcp.yaml and reload; <target> is a URL or a command with its arguments. For a URL server that wants a bearer token: --token asks for it (typed or pasted, shown as dots, kept in mcp.yaml, which only you can read), --bearer-env VAR sends Authorization: Bearer <VAR>, and --header NAME=VALUE sets any header (the value may be ${VAR} or !command)\n  token <server>        set the bearer token of a URL server in mcp.yaml: asks for it, or with --bearer-env VAR reads it from that environment variable when a session starts. Servers with an Authorization header skip OAuth sign-in\n  remove <server>       take a server out of toriel's mcp.yaml and reload (its saved sign-in is kept; other open sessions keep it until reloaded)\n  reconnect [server]    reconnect a server (tab completes names; leave out to pick)\n  login / logout [server]   OAuth sign in or out\nAll enabled servers connect when a session starts; a new server needs this session reloaded (add does that).\n\nExamples:\n  /mcp\n  /mcp add docs https://example.com/mcp\n  /mcp add mealie -- podman run -i --rm ghcr.io/example/mealie-mcp\n  /mcp add work-docs https://docs.example.com/mcp --token\n  /mcp add work-docs https://docs.example.com/mcp --bearer-env DOCS_TOKEN\n  /mcp token work-docs\n  /mcp status\n  /mcp status freecad\n  /mcp explore freecad\n  /mcp remove docs\n  /mcp reconnect freecad",
+    help: "Actions:\n  list                  every MCP server with its state and its skill on one line (the skill is a skills/ dir or SKILL.md naming the server in the pi agent dir; \"no matching skill (/mcp explore <server>)\" otherwise)\n  status [server]       troubleshoot: each server's state and error text, how it is configured (secrets hidden), whether its command is installed or its URL answers, and what to try. Checks every server that is not connected, or the one named\n  explore [server]      with a name: the agent introspects that server (every tool with its full parameter schema, resources) and writes a short pi-format skill for it (what the server is for, the common tasks, gotchas, and the one tool_search call that loads the usual tools; ticket 306): SKILL.md in a subdirectory of the pi agent dir's skills/ (updates one if it already exists); says so instead when the server is not a configured mcp.yaml server, or is not connected (then it suggests /mcp reconnect). Bare: re-explores the stale skills of all configured, connected servers at once - a skill is stale when the server's tools changed after the explore that wrote it, or the last explore is 30 days or more old; servers that are not connected are skipped with a /mcp reconnect hint\n  add <name> <target>   write a server into toriel's mcp.yaml and reload; <target> is a URL or a command with its arguments. For a URL server that wants a bearer token: --token asks for it (typed or pasted, shown as dots, kept in mcp.yaml, which only you can read), --bearer-env VAR sends Authorization: Bearer <VAR>, and --header NAME=VALUE sets any header (the value may be ${VAR} or !command)\n  token <server>        set the bearer token of a URL server in mcp.yaml: asks for it, or with --bearer-env VAR reads it from that environment variable when a session starts. Servers with an Authorization header skip OAuth sign-in\n  remove <server>       take a server out of toriel's mcp.yaml and reload (its saved sign-in is kept; other open sessions keep it until reloaded)\n  reconnect [server]    reconnect a server (tab completes names; leave out to pick)\n  login / logout [server]   OAuth sign in or out\nAll enabled servers connect when a session starts; a new server needs this session reloaded (add does that).\n\nExamples:\n  /mcp\n  /mcp add docs https://example.com/mcp\n  /mcp add mealie -- podman run -i --rm ghcr.io/example/mealie-mcp\n  /mcp add work-docs https://docs.example.com/mcp --token\n  /mcp add work-docs https://docs.example.com/mcp --bearer-env DOCS_TOKEN\n  /mcp token work-docs\n  /mcp status\n  /mcp status freecad\n  /mcp explore freecad\n  /mcp explore\n  /mcp remove docs\n  /mcp reconnect freecad",
     complete: async (typed, src) => mcpCompletions(typed, await src.mcpServers()),
     build: (cmd) => {
       cmd
         .argument("[action]", "list (default), status, explore, add, remove, token, reconnect, login or logout")
-        .argument("[server]", "which server (for add, the name to give it); leave out to be asked for reconnect / login / logout (status: all); remove and explore need it")
+        .argument("[server]", "which server (for add, the name to give it); leave out to be asked for reconnect / login / logout (status: all); remove needs it (explore without one re-explores every stale skill at once)")
         .argument("[target...]", "for add: a URL, or a command and its arguments; put -- before arguments that start with -")
         .option("--token", "add / token: ask for a bearer token (typed or pasted, shown as dots) and keep it in mcp.yaml")
         .option("--bearer-env <var>", "add / token: send Authorization: Bearer <that environment variable> (read when a session starts; the secret is not written to mcp.yaml)")

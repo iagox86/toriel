@@ -11,10 +11,12 @@ import type { Host } from "./host.ts";
 import { loadHandled } from "./handled-files.ts";
 import { loadSettings } from "./settings.ts";
 import { loadGroups, pruneStale, resolveGroup, saveGroups, type GroupsFile, withComment, withParked } from "./groups.ts";
+import { applySpawnGroup, groupForSpawn } from "./spawn-placement.ts";
 import {
   buildSessionList,
   isExternalRow,
   appendUnranked,
+  archiveSession,
   deleteEmptyGroup,
   moveGroup,
   moveSession,
@@ -22,7 +24,7 @@ import {
   type MutationResult,
 } from "./session-list.ts";
 import { detachFromParent, loadLineage, parentMap } from "./lineage.ts";
-import { arrangeTree, markFinishedSubagents } from "./session-tree.ts";
+import { arrangeTree, markFinishedSubagents, WAITING_NOTE } from "./session-tree.ts";
 import { styleHelp, styleListing } from "./help-format.ts";
 import { INIT_PROMPT } from "./init-prompt.ts";
 import { loadAgentsChecked } from "./agents.ts";
@@ -37,6 +39,7 @@ import { runDoctorCommand } from "./doctor-commands.ts";
 import { renameNotice } from "./session-id.ts";
 import { runPermissions } from "./permission-commands.ts";
 import { operateSchedule, showSchedules } from "./schedule-commands.ts";
+import { goalAction, requestGoal } from "./goals.ts";
 import { errText, fireAndReport } from "./util.ts";
 
 const LOCK_BITS = 64 | 128; // kitty caps_lock / num_lock, reported in the modifier field
@@ -154,6 +157,7 @@ export class SwitcherActions {
       local: this.h.local,
       groups: this.groups,
       summaries: this.h.summaries,
+      goals: this.h.goalSummaries,
       now: Date.now(),
     });
     // Freeze the display order while the switcher is open.
@@ -168,6 +172,7 @@ export class SwitcherActions {
     if (order) {
       this.groups.order = order;
     }
+    this.h.switcher.orderedAll = list;
     // an empty file list means the listing has not loaded, not that every session is gone
     const pruned = this.h.local.size > 0 && pruneStale(this.groups, new Set(list.flatMap((s) => (s.sessionId ? [s.sessionId] : []))));
     if (order || pruned) {
@@ -236,11 +241,20 @@ export class SwitcherActions {
     this.h.rebuildChat();
   }
 
-  /** Spawn a session; `firstMessage` is prompted once it is entered. */
-  async newSession(firstMessage?: string, name?: string, cwd = this.defaultCwd, agent?: string, model?: string): Promise<void> {
+  /** Spawn a session; `firstMessage` is prompted once it is entered. `restoreText` (default: `firstMessage`) is what a failed spawn puts back into the editor. The new session joins the group of the highlighted row, if any (ticket 326). */
+  async newSession(firstMessage?: string, name?: string, cwd = this.defaultCwd, agent?: string, model?: string, restoreText?: string): Promise<void> {
+    // Capture now: the highlight can move (keys, a list refresh) while the spawn is in flight.
+    const group = groupForSpawn(this.h.switcher.spawnAnchor());
     try {
-      const data = (await this.h.request({ type: "spawn", cwd, name: name ? this.h.uniqueSessionName(name) : name, agent, ...(model !== undefined ? { model } : {}) })) as { sessionId?: number };
+      const data = (await this.h.request({ type: "spawn", cwd, name: name ? this.h.uniqueSessionName(name) : name, agent, ...(model !== undefined ? { model } : {}) })) as { sessionId?: number; uuid?: string };
       if (typeof data?.sessionId === "number") {
+        if (group) {
+          if (data.uuid) {
+            this.placeNewSession(data.uuid, group);
+          } else {
+            this.h.notify(`new session not added to group "${group}": the daemon did not report its id`);
+          }
+        }
         const meta = this.h.sessions.get(data.sessionId);
         if (meta) {
           this.h.viewing = this.h.keyFor(meta);
@@ -256,10 +270,22 @@ export class SwitcherActions {
       }
     } catch (err) {
       if (firstMessage) {
-        this.h.editor.setText(firstMessage);
+        this.h.editor.setText(restoreText ?? firstMessage);
       }
       this.h.switcher.hint = `spawn failed: ${errText(err)}`;
       this.h.tui.requestRender();
+    }
+  }
+
+  /** Assign the captured group; disk and the cached groups stay in step, and the list picks it up on its next refresh. */
+  private placeNewSession(sessionId: string, title: string): void {
+    try {
+      const groups = loadGroups();
+      applySpawnGroup(groups, sessionId, title);
+      saveGroups(groups);
+      this.groups = groups;
+    } catch (err) {
+      this.h.notify(`could not add the new session to group "${title}": ${errText(err)}`);
     }
   }
 
@@ -421,6 +447,36 @@ export class SwitcherActions {
     this.h.tui.requestRender();
   }
 
+  /** Quote a value for a rebuilt command line so it re-parses into the same word: bare only when it cannot be mistaken, escaped inside double quotes otherwise. */
+  private quoteValue(v: string): string {
+    if (/^[^\s"'\\]+$/.test(v)) {
+      return v;
+    }
+    return `"${v.replace(/["\\]/g, "\\$&")}"`;
+  }
+
+  /** The /new line that re-enters as the same spawn: only the options the user gave (in the /new spec order), each value quoted to re-parse, and `--` before a prompt that contains a word starting with -. */
+  private restoreNewLine(args: string[], name: string | undefined, cwd: string | undefined, agent: string | undefined, model: string | undefined): string {
+    const parts = ["/new"];
+    if (name !== undefined) {
+      parts.push(`-n ${this.quoteValue(name)}`);
+    }
+    if (model !== undefined) {
+      parts.push(`-m ${this.quoteValue(model)}`);
+    }
+    if (cwd !== undefined) {
+      parts.push(`-C ${this.quoteValue(cwd)}`);
+    }
+    if (agent !== undefined) {
+      parts.push(`-a ${this.quoteValue(agent)}`);
+    }
+    if (args.length > 0) {
+      const words = args.map((a) => this.quoteValue(a)).join(" ");
+      parts.push(args.some((a) => a.startsWith("-")) ? `-- ${words}` : words);
+    }
+    return parts.join(" ");
+  }
+
   /** The -C directory of /new and /init, `~` expanded: `{}` (the directory toriel started in) when not given, undefined (after saying why) when it is not a directory. */
   private startDir(verb: string, call: Invocation): { cwd?: string } | undefined {
     const dir = call.opts.cwd as string | undefined;
@@ -463,7 +519,11 @@ export class SwitcherActions {
       new: async (call) => {
         const dir = this.startDir("new", call);
         if (dir) {
-          await this.newSession(undefined, call.opts.name as string | undefined, dir.cwd, call.opts.agent as string | undefined, call.opts.model as string | undefined);
+          const prompt = call.args.join(" ").trim();
+          const name = call.opts.name as string | undefined;
+          const agent = call.opts.agent as string | undefined;
+          const model = call.opts.model as string | undefined;
+          await this.newSession(prompt || undefined, name, dir.cwd, agent, model, this.restoreNewLine(call.args, name, dir.cwd, agent, model));
         }
       },
       // a fresh session whose first message is the init prompt: /init is usually the first thing done in a project
@@ -543,7 +603,7 @@ export class SwitcherActions {
   }
 
   /** Commands that file sessions and shape the list: groups, parking, notes, the filter, summaries. */
-  private groupCommands(): Pick<Record<SwitcherCommandName, CommandHandler>, "group" | "ungroup" | "park" | "comment" | "filter" | "summarize" | "external"> {
+  private groupCommands(): Pick<Record<SwitcherCommandName, CommandHandler>, "group" | "ungroup" | "park" | "comment" | "goal" | "filter" | "summarize" | "external"> {
     const needsTarget = this.needsTarget.bind(this);
     return {
       group: needsTarget("group", async (t, arg) => {
@@ -582,7 +642,12 @@ export class SwitcherActions {
           return;
         }
         const undo = call.opts.undo === true;
+        const row = this.h.switcher.orderedAll.find((x) => x.sessionId === t.sessionId);
         this.groups.parked = withParked(this.groups, t.sessionId, !undo);
+        let archived = false;
+        if (!undo && row && (row.depth ?? 0) === 0) {
+          archived = archiveSession(this.groups, this.h.switcher.orderedAll, row).changed;
+        }
         saveGroups(this.groups);
         if (!undo && t.published) {
           // parking closes the chat channel; using the session again publishes it again (ticket 269)
@@ -590,8 +655,25 @@ export class SwitcherActions {
         } else if (undo) {
           await this.h.request({ type: "publish", sessionId: t.sessionId, unpark: true }).catch(() => undefined);
         }
+        // Note shapes as in /park (session-commands.ts): working, stopped, stop
+        // failed or plain parked. The stop outcome replaces the parked note.
+        const working = t.state === "streaming" || t.state === "compacting" || row?.note === WAITING_NOTE;
+        let stopped = "";
+        if (!undo && !working && t.state === "idle" && t.daemonId !== undefined) {
+          try {
+            await this.h.request({ type: "deactivate", session: t.daemonId });
+            stopped = `${t.name} ${archived ? "parked, archived and stopped" : "parked and stopped"}`;
+          } catch (err) {
+            stopped = `${t.name} parked${archived ? " and archived" : ""}, but stopping it failed: ${errText(err)}`;
+          }
+        }
+        const hint = undo
+          ? `${t.name} unparked`
+          : stopped !== ""
+            ? `${stopped} (using it again unparks it)`
+            : `${t.name} parked${archived ? " and archived" : ""}${working ? " (still running: it is working or waiting on you)" : ""} (using it again unparks it)`;
         this.refresh();
-        this.h.switcher.hint = undo ? `${t.name} unparked` : `${t.name} parked (using it again unparks it)`;
+        this.h.switcher.hint = hint;
       }),
       comment: needsTarget("comment", async (t, arg, call) => {
         if (!t.sessionId) {
@@ -607,6 +689,19 @@ export class SwitcherActions {
         saveGroups(this.groups);
         this.refresh();
         this.h.switcher.hint = call.opts.clear === true ? `${t.name}: comment removed` : `${t.name}: comment saved (searchable with /filter)`;
+      }),
+      goal: needsTarget("goal", async (t, arg) => {
+        if (!t.sessionId) {
+          this.h.switcher.hint = "goal: session has no id yet";
+          return;
+        }
+        const parsed = goalAction(arg);
+        if ("error" in parsed) {
+          this.h.switcher.hint = `goal: ${parsed.error}`;
+          return;
+        }
+        this.h.switcher.hint = `${t.name}: ${await requestGoal(this.h, t.sessionId, parsed.action, parsed.text)}`;
+        this.refresh();
       }),
       filter: async (call) => {
         const text = call.args.join(" ");

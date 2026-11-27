@@ -138,7 +138,17 @@ describe("switcher tree rows", () => {
     const lines = text(build());
     assert.ok(lines.some((l) => /▾ parent\b.*2 children, 1 parked/.test(l)), lines.join("\n"));
     assert.ok(lines.some((l) => /└ kid\b/.test(l)));
+    assert.ok(lines.some((l) => /·\s{4}└ kid\b/.test(l)), "a child row clears the parent's fold arrow");
     assert.ok(!lines.some((l) => l.includes("parkedkid")), "parked children are hidden");
+  });
+
+  it("keeps deeper subagent rows clear of their parent's fold arrow", () => {
+    const sw = new Switcher();
+    sw.sessions = arrangeTree([row("parent", { state: "idle" }), row("kid", { state: "idle" }), row("grandkid", { state: "idle" })], new Map([["kid", "parent"], ["grandkid", "kid"]]));
+    sw.refresh();
+    const lines = text(sw);
+    assert.ok(lines.some((l) => /·\s{4}└ ▾ kid\b/.test(l)), lines.join("\n"));
+    assert.ok(lines.some((l) => /·\s{8}└ grandkid\b/.test(l)), "a depth-2 branch never shares its parent's fold arrow column");
   });
 
   it("hides the children of a folded parent and moves the cursor onto it", () => {

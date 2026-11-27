@@ -1,10 +1,10 @@
 // Starting, stopping and listening to the pi child processes behind sessions.
 import * as fs from "node:fs";
 import { RpcClient } from "@earendil-works/pi-coding-agent";
-import { childEnv, sandboxWritableRoots } from "./child-env.ts";
+import { type ChildExtras, childEnv, sandboxWritableRoots } from "./child-env.ts";
 import { mcpYamlFile } from "./config-dir.ts";
 import { scopeForSession } from "./scope-root.ts";
-import { DIALOG_METHODS, FILE_HISTORY_DIR, MCP_SUMMARIES_FILE, PLAN_DIR, SANDBOX_TMP_DIR, SHARED_DIR, SOCK } from "./config.ts";
+import { DIALOG_METHODS, FILE_HISTORY_DIR, MCP_EXPLORE_RECORDS_FILE, MCP_SUMMARIES_FILE, PLAN_DIR, SANDBOX_TMP_DIR, SHARED_DIR, SOCK } from "./config.ts";
 import { answerablePrompt, exemptPaths, protectedPaths, touchesProtected } from "./daemon-permissions.ts";
 import { type GrantStore, ruleFor, withSuggestion } from "./permissions.ts";
 import { type BridgeTracker, INJECT_COMMAND, injectedId, mergedQueueTexts, parseBridgeReport } from "./daemon-bridge.ts";
@@ -27,11 +27,12 @@ import { log } from "./log.ts";
 import { getTiming } from "./timing.ts";
 
 const timing = getTiming("daemon");
-import { type AskRule, AUTO_ANSWERED_NOTICE, AUTO_DENIED_NOTICE, AUTO_DISMISSED_NOTICE, encodeLine, GRANT_ANSWERED_NOTICE, type UsageReport } from "./shared.ts";
+import { type AskRule, AUTO_ANSWERED_NOTICE, AUTO_DENIED_NOTICE, AUTO_DISMISSED_NOTICE, encodeLine, GRANT_ANSWERED_NOTICE, SKILL_LOADED_NOTICE, type UsageReport } from "./shared.ts";
 import { floorReason, isPermissionPrompt, promptSubject } from "./auto-mode.ts";
 import { type ChildConfig, loadSettings, resolveChildConfig, settingsMtime } from "./settings.ts";
 import { fmtDuration, parseDurationText } from "./when.ts";
 import { errText } from "./util.ts";
+import { skillNameFromPath } from "./skill-notice.ts";
 import { parseReport as parseTasksReport, STATUS_KEY as TASKS_KEY } from "../pi/extensions/lib/tasks.ts";
 import { STATUS_KEY as PLAN_KEY } from "../pi/extensions/lib/plan-mode.ts";
 
@@ -39,6 +40,23 @@ export interface SlashCommand {
   name: string;
   description?: string;
   source: string;
+}
+
+/**
+ * The MCP variables for a session's child, by what its profile allows: mcp.yaml and the remembered summaries
+ * only when the profile has MCP support, and the explore records only for a session without an agent profile
+ * -- a profile's --tools allowlist makes pi.getAllTools() there report only the allowlisted subset, and that
+ * child would stamp the subset as the last tool sighting, so every such subagent run would ring "tools
+ * changed" (ticket 308).
+ */
+export function mcpChildEnvOf(agent: AgentProfile | undefined): Pick<ChildExtras, "mcpFile" | "mcpDirect" | "mcpSummaries" | "mcpRecords"> {
+  const hasMcp = profileHasMcp(agent);
+  return {
+    mcpFile: hasMcp ? mcpYamlFile() : undefined,
+    mcpDirect: mcpServersOf(agent?.tools ?? []),
+    mcpSummaries: hasMcp ? MCP_SUMMARIES_FILE : undefined,
+    mcpRecords: agent === undefined ? MCP_EXPLORE_RECORDS_FILE : undefined,
+  };
 }
 
 export interface StartOptions {
@@ -55,6 +73,11 @@ export interface StartOptions {
   subagent?: boolean;
 }
 
+
+/** The environment the toriel_agent tool reads in a delegating child: the pair the extension registers the tools on. The single source of truth for the delegation variables: test/child-env.test.ts derives the tested set from this output. */
+export function delegateEnv(types: string): Record<string, string> {
+  return { TORIEL_CAN_SPAWN: "1", TORIEL_AGENT_TYPES: types };
+}
 
 export class ChildManager {
   private readonly hub: ClientHub;
@@ -122,7 +145,7 @@ export class ChildManager {
       return {};
     }
     const types = loadAgents(s.cwd).agents.map((a) => `- ${a.name}: ${a.description}`).join("\n");
-    return { TORIEL_CAN_SPAWN: "1", TORIEL_AGENT_TYPES: types };
+    return delegateEnv(types);
   }
 
   /**
@@ -151,7 +174,7 @@ export class ChildManager {
       cliPath: cfg.piCli,
       cwd: s.cwd,
       args,
-      env: { ...childEnv(s, SOCK, process.env, scope, { sharedDir: SHARED_DIR, tmpDir: SANDBOX_TMP_DIR, sandboxWritable: sandbox, mcpFile: profileHasMcp(s.agent) ? mcpYamlFile() : undefined, mcpDirect: mcpServersOf(s.agent?.tools ?? []), mcpSummaries: profileHasMcp(s.agent) ? MCP_SUMMARIES_FILE : undefined, fileHistoryDir: FILE_HISTORY_DIR, planDir: PLAN_DIR, freshness: settings.fileFreshness }), ...this.delegationEnv(s) },
+      env: { ...childEnv(s, SOCK, process.env, scope, { sharedDir: SHARED_DIR, tmpDir: SANDBOX_TMP_DIR, sandboxWritable: sandbox, ...mcpChildEnvOf(s.agent), fileHistoryDir: FILE_HISTORY_DIR, planDir: PLAN_DIR, freshness: settings.fileFreshness }), ...this.delegationEnv(s) },
     });
     client.onEvent((event) => this.onEvent(s, event as Record<string, unknown>));
     this.launching.add(client);
@@ -565,6 +588,49 @@ export class ChildManager {
     return true;
   }
 
+  /**
+   * A skill the agent read (ticket 317): the first successful read of `.../skills/<name>/SKILL.md` in the session announces it once -
+   * one durable notice carrying the read's toolCallId, which a controller docks under the read call and flashes for a viewed session.
+   * pi reports a tool call's start before its path is checked and before a permission gate has answered it, so the start only remembers
+   * the call in `pendingSkillReads` (its end removes that), and a non-error end is what announces and occupies the slot: a failed or
+   * denied read announces nothing and never burns it, and an end that does not say `isError: false` stays silent too. A call whose
+   * start was seen but that never ends leaves one stale pending entry (bounded: one per pending read). Not a read of a skill, an
+   * unparseable event, a re-read: a silent no-op, never a reason to fail the event it rides in.
+   */
+  private takeSkillLoad(s: DaemonSession, event: Record<string, unknown>): void {
+    if (event.type === "tool_execution_start") {
+      if (event.toolName !== "read" || typeof event.toolCallId !== "string") {
+        return;
+      }
+      const path = (event.args as { path?: unknown } | undefined)?.path;
+      const name = skillNameFromPath(path);
+      if (name === undefined || s.loadedSkills?.has(name)) {
+        return;
+      }
+      s.pendingSkillReads = s.pendingSkillReads ?? new Map();
+      s.pendingSkillReads.set(event.toolCallId, name);
+      return;
+    }
+    if (event.type !== "tool_execution_end") {
+      return;
+    }
+    const id = typeof event.toolCallId === "string" ? event.toolCallId : undefined;
+    const name = id === undefined ? undefined : s.pendingSkillReads?.get(id);
+    // every end event for the id is consumed, so a re-sent or late end cannot announce twice
+    if (id !== undefined) {
+      s.pendingSkillReads?.delete(id);
+    }
+    if (name === undefined || event.isError !== false) {
+      return;
+    }
+    s.loadedSkills = s.loadedSkills ?? new Set();
+    if (s.loadedSkills.has(name)) {
+      return;
+    }
+    s.loadedSkills.add(name);
+    this.hub.broadcast({ type: "notice", session: s.id, text: `${SKILL_LOADED_NOTICE}${name})`, durable: true, toolCallId: id });
+  }
+
   /** pi settles a dialog with a `timeout` by itself and says nothing, so the record is dropped then too. */
   private expireDialog(s: DaemonSession, dialog: Record<string, unknown>): void {
     const timeout = Number(dialog.timeout);
@@ -770,6 +836,7 @@ export class ChildManager {
       return;
     }
     this.hub.broadcast({ type: "event", session: s.id, event });
+    this.takeSkillLoad(s, event);
     // the append itself: the transcript, not an inference, says an inject landed
     const injected = injectedId(event);
     if (injected !== undefined) {

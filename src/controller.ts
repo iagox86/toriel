@@ -48,6 +48,7 @@ import { rewindTargets } from "./rewind.ts";
 import { guardClicks } from "./click-guard.ts";
 import { autocompleteMaxVisible, hideThinkingBlock, wheelScrollLines } from "./pi-settings.ts";
 import { SessionActions } from "./session-actions.ts";
+import type { GoalSummary } from "./goals.ts";
 import { SwitcherActions } from "./switcher-actions.ts";
 import { killServer } from "./lifecycle.ts";
 import { compareDaemon, describeDaemon, type DaemonVerdict, type Hello } from "./version-check.ts";
@@ -58,7 +59,7 @@ import {
   sessionKey,
   type LocalSession,
 } from "./session-list.ts";
-import { AUTO_ANSWERED_NOTICE, AUTO_DENIED_NOTICE, type ClientCommand, type DaemonMessage, type DistributiveOmit, GRANT_ANSWERED_NOTICE, type SessionMeta } from "./shared.ts";
+import { AUTO_ANSWERED_NOTICE, AUTO_DENIED_NOTICE, SKILL_LOADED_NOTICE, type ClientCommand, type DaemonMessage, type DistributiveOmit, GRANT_ANSWERED_NOTICE, type SessionMeta } from "./shared.ts";
 import { drifted } from "./drift.ts";
 import { MOUSE_OFF, MOUSE_ON, mouseNotice, nextMouse, parseMouseArg } from "./mouse.ts";
 import { openUrl } from "./open-url.ts";
@@ -152,6 +153,8 @@ class Controller {
 
   /** Daemon-known sessions by daemon id. */
   sessions = new Map<number, SessionMeta>();
+  /** A goal summary per session UUID, from the daemon's session lists (ticket 258): rows without a live meta fall back to it. */
+  goalSummaries: Record<string, GoalSummary> = {};
   /** Sessions from the filesystem (listAll), by session file path. */
   local = new Map<string, LocalSession>();
   /** Transcript state by canonical key (session file path, or daemon:N). */
@@ -412,6 +415,7 @@ class Controller {
   handleDaemonMessage(msg: DaemonMessage): void {
     switch (msg.type) {
       case "sessions":
+        this.goalSummaries = msg.goals ?? {};
         this.onSessions(msg.sessions);
         return;
       case "history":
@@ -440,7 +444,11 @@ class Controller {
       case "notice": {
         const meta = this.sessions.get(msg.session);
         if (meta && msg.durable) {
-          this.noteInTranscript(meta, msg.text);
+          this.noteInTranscript(meta, msg.text, msg.toolCallId);
+          // a skill load arrives as one notice (ticket 317): the transcript note is where it is kept, so the viewed session also gets the flash
+          if (msg.text.startsWith(SKILL_LOADED_NOTICE) && this.keyFor(meta) === this.viewing) {
+            this.notify(msg.text);
+          }
         } else if (meta && this.keyFor(meta) === this.viewing) {
           this.notify(msg.text);
         }
@@ -906,7 +914,7 @@ class Controller {
    * does not lose it. A session whose transcript was never loaded here has nothing to attach it to, and must not get a view
    * made just for the note: an existing view is what stops the switcher replaying that session's file when it is opened.
    */
-  private noteInTranscript(meta: SessionMeta, text: string): void {
+  private noteInTranscript(meta: SessionMeta, text: string, toolCallId?: string): void {
     const key = this.keyFor(meta);
     const view = this.views.get(key);
     if (!view) {
@@ -915,8 +923,11 @@ class Controller {
       }
       return;
     }
-    // a grant's answer reads under the tool call it allowed; only when there is no such call does it become a row of its own
-    if ((text.startsWith(GRANT_ANSWERED_NOTICE) || text.startsWith(AUTO_ANSWERED_NOTICE) || text.startsWith(AUTO_DENIED_NOTICE)) && attachCallNote(view, text)) {
+    // a notice that names its call docks under that call by id (a skill's load, ticket 317); a grant's or auto mode's answer reads under the call it allowed; only then does it become a row of its own
+    const docks = toolCallId !== undefined
+      ? attachCallNote(view, text, toolCallId)
+      : (text.startsWith(GRANT_ANSWERED_NOTICE) || text.startsWith(AUTO_ANSWERED_NOTICE) || text.startsWith(AUTO_DENIED_NOTICE)) && attachCallNote(view, text);
+    if (docks) {
       if (key === this.viewing) {
         this.renderChrome();
       }

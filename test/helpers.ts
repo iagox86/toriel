@@ -4,7 +4,10 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import { withoutSessionEnv } from "../scripts/test-env.ts";
 import { LineSplitter } from "../src/shared.ts";
+
+export { SESSION_ENV, withoutSessionEnv } from "../scripts/test-env.ts";
 
 const DAEMON = path.join(import.meta.dirname, "..", "src", "daemon.ts");
 const FAKE_PI = path.join(import.meta.dirname, "fixtures", "fake-pi.mjs");
@@ -32,22 +35,8 @@ export interface Harness {
   connect(): Promise<Client>;
 }
 
-/**
- * What a daemon hands its children, plus the `toriel --timing` switches (a daemon inherits those from the controller); a test run from
- * inside a toriel session inherits them and must not act on them (test daemons would write to the real timing.jsonl, ticket 225).
- * Spawned daemons get their env through `withoutSessionEnv`; `npm test` strips the three switches from the test process itself
- * (`env -u` in package.json), because unit tests import src modules whose `getTiming` reads the environment at import time.
- */
-export const SESSION_ENV = ["TORIEL_SOCK", "TORIEL_CAN_SPAWN", "TORIEL_AGENT_TYPES", "TORIEL_PROFILE", "TORIEL_SESSION_ID", "TORIEL_CHILD", "TORIEL_TIMING", "TORIEL_TIMING_MS", "TORIEL_TIMING_FILE"] as const;
-
-/** `env` without the variables a surrounding toriel session set. */
-export function withoutSessionEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const clean = { ...env };
-  for (const k of SESSION_ENV) {
-    delete clean[k];
-  }
-  return clean;
-}
+// SESSION_ENV and withoutSessionEnv live in scripts/test-env.ts (ticket 339): the test runner drops the same variables from the
+// test process itself; spawned daemons get theirs through withoutSessionEnv.
 
 export async function startDaemon(extraEnv: Record<string, string> = {}): Promise<Harness> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-test-"));

@@ -27,7 +27,8 @@
   "scripts": {
     "start": "node toriel.ts",
     "lint": "biome lint .",
-    "test": "env -u TORIEL_TIMING -u TORIEL_TIMING_MS -u TORIEL_TIMING_FILE node --test test/*.test.ts",
+    "test": "node scripts/test.ts",
+    "check": "node scripts/check.ts",
     "typecheck": "tsc -p ."
   }
 }

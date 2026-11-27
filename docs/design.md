@@ -606,8 +606,13 @@ Near-term (post-budget-reset), rough order = dependency + value:
    could follow, as further `mcp__<server>__*` profiles). `research-code` was dropped (explore covers it). Spawn decisions: records live in
    daemon memory only (a restart loses handles and spawn counts and ends
    running subagents; lineage and files stay); limits are the constants in
-   `subagents.ts`, not settings yet; the foreground call is one long request
-   on the daemon socket (cancel = connection drop), not polling; `maxDepth`
+   `subagents.ts`, not settings yet; a spawn from a session the user started
+   waits for a free slot instead of meeting the concurrency cap, first come
+   first served and woken as subagents end (ticket 341), while a spawn from a
+   subagent is still refused outright when every slot is taken - its parent
+   holds one of those slots, so waiting could deadlock; the foreground call is
+   one long request on the daemon socket (cancel = connection drop), not
+   polling; `maxDepth`
    gates tool registration, so the hard cap 2 is only reachable by raising it;
    tokens come from the child's `message_end` usage (fresh input + output + cache writes, not cache reads), not provider quota windows. Findings that matter: `--tools` does not remove
    extension tools (use --no-extensions); pi cannot select MCP servers per run
@@ -1562,6 +1567,7 @@ What was built, in two steps. First ticket 209's `mcpWhenUp` setting plus an ext
 - **Protected path.** `mcp.yaml` joins the grants file and pi's agent dir in `protectedPaths`: an entry is a command the next session runs, so an ask about it always reaches the user and auto mode never answers it.
 - **Limits, stated.** One decision per session start (plus `/mcp-up`); a session started while an app was down has no tools of its `whenUp` server until `/mcp-up`; URL servers only for `whenUp`; pi's own `/mcp` panel changes to a registered server last for the session only; a project's `.pi/mcp.json` no longer applies.
 - **Parked.** A server whose tools never appear in `getAllTools` (resources-only, or no tools) is never learned and never cleaned from the summaries file: it is only ever touched through a tool's namespace.
+- **Parked.** A detached fork keeps its `kind: "fork"` lineage entry for ever (nothing prunes lineage when a session is trashed), so lineage.json grows slowly: prune ids with no session file during the usage scan or on trash.
 
 ## Sending a queued message now (ticket 222, investigated 2026-11-15)
 
@@ -1694,3 +1700,25 @@ On openai-completions pi folds the system prompt, every later system change (pro
   3. pi records the inner calls on the result message (`nestedCalls`); toriel's transcript shows the `mcp_call` with its arguments. The `mcp_servers` section still says "load with tool_search", which would need replacing.
 
   **Go, as an opt-in setting first** (plain sessions only), measured over a week of real sessions against `tool_search` for success rate and cost, before it becomes the default. Spike files: the session scratchpad's `cachefix/mcp-call-ext.ts` and `arm.sh`.
+
+## Skill load notice: what the announcement waits for (ticket 317, built 2026-11-26)
+
+When the model reads a skill's file (a `read` of `.../skills/<name>/SKILL.md`) and the read succeeds, the daemon
+announces it once per skill per session: one durable notice `skill loaded(<name>)` carrying the read's toolCallId
+(protocol 20). A controller docks it under that call by id (the call may be long done, and the note is appended
+to what the call already carries) and flashes the same line for the session being viewed, so flash and note are
+one announcement; the chat bridge posts the one notice it receives. pi reports a call's start before its path is
+checked and before a permission gate has answered it, so `takeSkillLoad` (`src/daemon-children.ts`) only
+remembers the call in `pendingSkillReads` at the start and fires on a non-error end; a failed or denied read
+costs nothing. `/clear` resets the per-session set (`handleClear`), `skillNameFromPath` (`src/skill-notice.ts`)
+normalizes the path and checks the shape of the name.
+
+Parked:
+- pi's skill frontmatter `name` can differ from the skill's directory name; the announcement uses the directory name (pi only warns when a frontmatter name has bad characters, it does not tell anyone the mismatch).
+- Codemode and bash-style reads of skill files are not caught: only the read tool's own execution events are.
+- A subagent session announces within its own session only; parents and viewers of other sessions see nothing of a child's loads.
+
+## Per-session goals (ticket 258; built 2026-11-26)
+
+One goal text per session UUID (goals.json, `GOALS_FILE`): set, marked done or cleared with `/goal` and the daemon's `goal` command, flagged on the switcher row (` goal: <text>`, dimmed once done, a done row's green check), copied by /fork, deleted with the session. The user-done note reaches only the controllers' transcript views, not the pi child's context.
+- Parked: delivering that note into the pi child's context (plausibly via a session bridge message), so a running agent hears it directly instead of picking the goal state up at its next session start.

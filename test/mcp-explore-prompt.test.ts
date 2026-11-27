@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { mcpExplorePrompt } from "../src/mcp-explore-prompt.ts";
+import { explorePromptServerNames, mcpExploreAllFirstLine } from "../pi/extensions/lib/mcp-config.ts";
+import { mcpExploreAllPrompt, mcpExplorePrompt } from "../src/mcp-explore-prompt.ts";
 
 describe("mcpExplorePrompt", () => {
   it("names the server and tells the agent how to introspect it, updating an existing skill rather than overwriting", () => {
@@ -15,7 +16,15 @@ describe("mcpExplorePrompt", () => {
     assert.match(p, /update it rather than overwriting/i);
   });
 
-  it("points at the memory extension's skills folder first, a filesystem-safe dir name, the pi skill format, and the description frontmatter", () => {
+  it("puts the skill under a directory named to contain the server's name, so the pairing finds it, and keeps the name filesystem-safe", () => {
+    const p = mcpExplorePrompt("freecad");
+    assert.match(p, /whose name contains the server's name/);
+    assert.match(p, /gdb-mcp for gdb/, "an example of a containing name (not a topic name)");
+    assert.match(p, /pair the skill with the server/);
+    assert.match(p, /filesystem-safe/i);
+  });
+
+  it("points at the memory extension's skills folder first, the pi skill format, and the description frontmatter", () => {
     const p = mcpExplorePrompt("freecad");
     assert.match(p, /pi-hermes-memory\/skills/i);
     assert.match(p, /skills\/ folder/i);
@@ -41,5 +50,40 @@ describe("mcpExplorePrompt", () => {
     assert.match(p, /Do not copy every tool's parameters/);
     assert.match(p, /exact tool_search call that loads the tools most tasks need in one go/);
     assert.match(p, /without the prompt cache/);
+  });
+});
+
+describe("mcpExploreAllPrompt", () => {
+  const servers = ["freecad", "git"];
+  const all = mcpExploreAllPrompt(servers);
+
+  it("opens with exactly the line the extension stamps records from, and that line parses back to the server list", () => {
+    assert.ok(all.startsWith(`${mcpExploreAllFirstLine(servers)}\n`), "first line is mcpExploreAllFirstLine verbatim");
+    assert.deepEqual(explorePromptServerNames(all), servers);
+  });
+
+  it("asks for introspection of each listed server with its full parameter schemas", () => {
+    assert.match(all, /each of the servers named above/i);
+    assert.match(all, /list and describe its tools to get their full parameter schemas/i);
+    assert.match(all, /resources if it has any/i);
+  });
+
+  it("keeps the single-server rules: same skills-directory placement with the server's name in the dir name, the cap, the tool_search line after the frontmatter", () => {
+    assert.match(all, /single-server prompt/i);
+    assert.match(all, /pi-hermes-memory\/skills/i);
+    assert.match(all, /skills\/ folder/i);
+    assert.match(all, /whose name contains the server's name/i);
+    assert.match(all, /filesystem-safe/i);
+    assert.match(all, /about 4 KB at most/);
+    assert.match(all, /frontmatter/);
+    assert.match(all, /right after the frontmatter/i);
+    assert.match(all, /tool_search/i);
+    assert.match(all, /update .* rather than overwrite/i);
+  });
+
+  it("wants the result verified by reading back with the read tool, factually, and the unreachable servers said", () => {
+    assert.match(all, /reading it back with your read tool/i);
+    assert.match(all, /not what you guess/i);
+    assert.match(all, /configured or is not connected, say so and continue with the rest/i);
   });
 });

@@ -271,6 +271,33 @@ describe("applyEvent", () => {
     assert.equal(attachCallNote(newView(), "allowed by permission grant #3: /p"), false);
   });
 
+  it("docks a notice by its toolCallId onto the read call even once done, appended after the grant note it already carries (ticket 317)", () => {
+    const items: Item[] = [];
+    const view = newView();
+    const tui = { requestRender() {} } as never;
+    const e = {
+      tui,
+      cwd: "/w",
+      addItem: (i: Item) => {
+        items.push(i);
+        view.items.push(i);
+      },
+    };
+    const plain = (item: Item | undefined) => ((item as Item).component as unknown as { render(w: number): string[] }).render(80).join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+    const expand = (item: Item | undefined) => ((item as Item).component as unknown as { expanded: boolean }).expanded = true;
+    applyEvent(view, { type: "tool_execution_start", toolCallId: "read-1", toolName: "read", args: { path: "skills/foo/SKILL.md" } }, e);
+    // the permission was answered before the read ended, so the grant's note docks first, the old way
+    assert.equal(attachCallNote(view, "allowed by permission grant #9: /p"), true);
+    applyEvent(view, { type: "tool_execution_end", toolCallId: "read-1", isError: false, result: { content: [{ type: "text", text: "# skill" }] } }, e);
+    assert.equal(attachCallNote(view, "skill loaded(foo)", "read-1"), true, "a call that is done still takes the notice that names it");
+    assert.equal(attachCallNote(view, "skill loaded(bar)", "read-1"), true, "a second notice is appended too");
+    assert.equal(attachCallNote(view, "skill loaded(bar)", "read-2"), false, "a call the transcript does not have is no docking place: the caller shows a row");
+    expand(items[0]);
+    const text = plain(items[0]);
+    assert.match(text, /toriel: allowed by permission grant #9: \/p[\s\S]*toriel: skill loaded\(foo\)/);
+    assert.match(text, /skill loaded\(foo\)[\s\S]*skill loaded\(bar\)/, "appended in arrival order");
+  });
+
   it("shows a message from another session as 'from NAME' rather than as something the user typed", () => {
     const tui = { requestRender() {} } as never;
     const label = "[from Boss (0b1c2d3e-aaaa-4bbb-8ccc-111111111111)]: please check the schema";

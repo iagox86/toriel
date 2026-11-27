@@ -5,7 +5,8 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { learnSummaries, MCP_FILE_ENV, MCP_SUMMARIES_ENV, piConfig, summaryLine } from "../pi/extensions/lib/mcp-config.ts";
+import { computeToolHashes, learnSummaries, loadExploreRecords, mcpExploreAllFirstLine, MCP_FILE_ENV, MCP_RECORDS_ENV, MCP_SUMMARIES_ENV, piConfig, saveExploreRecords, summaryLine } from "../pi/extensions/lib/mcp-config.ts";
+import { mcpExplorePrompt } from "../src/mcp-explore-prompt.ts";
 import setup, { addToolSearchGuideline, describeOutcomes, loadServers, loadSummaries, reconcile, recordSummaries, saveSummaries, TOOL_SEARCH_GUIDELINE, UP_COMMAND } from "../pi/extensions/toriel-mcp.ts";
 
 async function listener(): Promise<{ port: number; close(): Promise<void> }> {
@@ -96,8 +97,8 @@ describe("reconcile", () => {
   });
 });
 
-  function load(file: string | undefined, summaries?: string, tools: Array<{ name: string; namespace?: { aliases?: string[]; instructions?: string } }> = []) {
-    const saved = { file: process.env[MCP_FILE_ENV], summaries: process.env[MCP_SUMMARIES_ENV] };
+  function load(file: string | undefined, summaries?: string, tools: Array<{ name: string; parameters?: unknown; namespace?: { aliases?: string[]; instructions?: string } }> = [], records?: string) {
+    const saved = { file: process.env[MCP_FILE_ENV], summaries: process.env[MCP_SUMMARIES_ENV], records: process.env[MCP_RECORDS_ENV] };
     const put = (key: string, value: string | undefined): void => {
       if (value === undefined) {
         delete process.env[key];
@@ -107,6 +108,7 @@ describe("reconcile", () => {
     };
     put(MCP_FILE_ENV, file);
     put(MCP_SUMMARIES_ENV, summaries);
+    put(MCP_RECORDS_ENV, records);
     const handlers: Array<(e: unknown, ctx: never) => unknown> = [];
     const events: string[] = [];
     const commands = new Map<string, (args: string, ctx: { ui: { notify(m: string, t?: string): void } }) => Promise<void> | void>();
@@ -129,6 +131,7 @@ describe("reconcile", () => {
     } finally {
       put(MCP_FILE_ENV, saved.file);
       put(MCP_SUMMARIES_ENV, saved.summaries);
+      put(MCP_RECORDS_ENV, saved.records);
     }
     return { handlers, events, commands, registered, configs };
   }
@@ -269,6 +272,119 @@ describe("remembered server summaries (ticket 303)", () => {
 
   it("does not listen for run ends when the daemon named no summaries file", () => {
     assert.deepEqual(load(yamlFile("servers: {}\n")).events, ["session_start", "before_agent_start"]);
+  });
+});
+
+describe("explore records (ticket 308)", () => {
+  const recordsFile = (): string => path.join(fs.mkdtempSync(path.join(os.tmpdir(), "toriel-mcprec-")), "state", "mcp-explore-records.json");
+  const rtool = (name: string, server: string, parameters?: unknown) => ({ name, namespace: { aliases: [server] }, parameters });
+
+  it("listens for the settle boundary when the daemon named a records file, even without a summaries file", () => {
+    assert.deepEqual(load(yamlFile("servers: {}\n"), undefined, [], recordsFile()).events, ["session_start", "before_agent_start", "agent_before_settle", "agent_settled"]);
+  });
+
+  it("stamps the servers an explore prompt named at the settle of a completed run, and the tools it saw whatever the outcome, without rewriting an unchanged file", async () => {
+    const file = recordsFile();
+    const tools = [rtool("mcp__git__git_read", "git", { type: "object" }), rtool("mcp__gdb__gdb_start", "gdb")];
+    const x = load(yamlFile("servers:\n  git: { command: g }\n  gdb: { command: d }\n"), undefined, tools, file);
+    await x.handlers[1]?.({ messageType: "user", prompt: mcpExplorePrompt("git") }, {} as never);
+    await x.handlers[2]?.({ type: "agent_before_settle", outcome: "completed" }, {} as never);
+    await x.handlers[3]?.({ type: "agent_settled" }, {} as never);
+    const fresh = computeToolHashes(tools);
+    const records = loadExploreRecords(file);
+    assert.equal(records.latest.git?.hash, fresh.git);
+    assert.match(records.latest.git?.at ?? "/", /^\d{4}-\d{2}-\d{2}T/, "a sighting is stamped with the time the session's view was set up");
+    assert.deepEqual(Object.keys(records.explored), ["git"]);
+    assert.equal(records.explored.git?.hash, fresh.git);
+    assert.match(records.explored.git?.at ?? "/", /^\d{4}-\d{2}-\d{2}T/, "stamped with the run's end time");
+    await x.handlers[1]?.({ messageType: "user", prompt: "fix a bug in the parser" }, {} as never);
+    await x.handlers[2]?.({ type: "agent_before_settle", outcome: "error" }, {} as never);
+    await x.handlers[3]?.({ type: "agent_settled" }, {} as never);
+    await x.handlers[1]?.({ messageType: "custom" }, {} as never);
+    await x.handlers[2]?.({ type: "agent_before_settle", outcome: "completed" }, {} as never);
+    await x.handlers[3]?.({ type: "agent_settled" }, {} as never);
+    assert.deepEqual(loadExploreRecords(file).explored, records.explored, "a run the prompt did not open as explore leaves the stamp");
+    // an aborted run skips pi's agent_before_settle and goes to agent_settled: the skill is never marked written
+    await x.handlers[1]?.({ messageType: "user", prompt: mcpExplorePrompt("git") }, {} as never);
+    await x.handlers[3]?.({ type: "agent_settled", aborted: true }, {} as never);
+    assert.deepEqual(loadExploreRecords(file).explored, records.explored, "an aborted explore run does not mark the skill written");
+  });
+
+  it("writes nothing at the settle when the run records nothing new", async () => {
+    const file = recordsFile();
+    const tools = [rtool("mcp__git__git_read", "git", { type: "object" })];
+    const x = load(yamlFile("servers:\n  git: { command: g }\n"), undefined, tools, file);
+    await x.handlers[1]?.({ messageType: "user", prompt: "hello" }, {} as never);
+    await x.handlers[2]?.({ type: "agent_before_settle", outcome: "completed" }, {} as never);
+    await x.handlers[3]?.({ type: "agent_settled" }, {} as never);
+    const first = fs.readFileSync(file, "utf8");
+    await x.handlers[1]?.({ messageType: "user", prompt: "hello again" }, {} as never);
+    await x.handlers[2]?.({ type: "agent_before_settle", outcome: "completed" }, {} as never);
+    await x.handlers[3]?.({ type: "agent_settled" }, {} as never);
+    assert.equal(fs.readFileSync(file, "utf8"), first, "a session that saw the same tools again wrote nothing (it stamps the same sighting time)");
+  });
+
+  it("records a run's tools from agent_settled when the run was aborted, and stamps no explored name", async () => {
+    const file = recordsFile();
+    const tools = [rtool("mcp__git__git_read", "git")];
+    const x = load(yamlFile("servers:\n  git: { command: g }\n"), undefined, tools, file);
+    await x.handlers[3]?.({ type: "agent_settled", aborted: true }, {} as never);
+    assert.equal(loadExploreRecords(file).latest.git?.hash, computeToolHashes(tools).git);
+    assert.deepEqual(loadExploreRecords(file).explored, {});
+  });
+
+  it("does not let a sighting older than the recorded one overwrite it, and does not write when it cannot", async () => {
+    const file = recordsFile();
+    saveExploreRecords(file, { explored: {}, latest: { git: { at: new Date(Date.now() + 60_000).toISOString(), hash: "h-newer" } } });
+    const tools = [rtool("mcp__git__git_read", "git")];
+    const x = load(yamlFile("servers:\n  git: { command: g }\n"), undefined, tools, file);
+    await x.handlers[3]?.({ type: "agent_settled" }, {} as never);
+    assert.equal(loadExploreRecords(file).latest.git?.hash, "h-newer", "this session's view was set up before that sighting");
+  });
+
+  it("keeps records of servers this run does not touch, and stamps no explored name that has no tools", async () => {
+    const file = recordsFile();
+    saveExploreRecords(file, { explored: { gdb: { at: "t0", hash: "old" } }, latest: { gdb: { at: "t0", hash: "old" } } });
+    const tools = [rtool("mcp__git__git_read", "git", { type: "object" })];
+    const x = load(yamlFile("servers:\n  git: { command: g }\n"), undefined, tools, file);
+    await x.handlers[1]?.({ messageType: "user", prompt: mcpExploreAllFirstLine(["git", "gdb"]) }, {} as never);
+    await x.handlers[2]?.({ type: "agent_before_settle", outcome: "completed" }, {} as never);
+    await x.handlers[3]?.({ type: "agent_settled" }, {} as never);
+    const records = loadExploreRecords(file);
+    assert.equal(records.latest.git?.hash, computeToolHashes(tools).git, "latest takes the fresh hash of a server this run saw");
+    assert.deepEqual(records.latest.gdb, { at: "t0", hash: "old" }, "a server this run did not see keeps its sighting");
+    assert.equal(records.explored.git?.hash, records.latest.git?.hash);
+    assert.deepEqual(records.explored.gdb, { at: "t0", hash: "old" }, "gdb has no tools this run: its stamp is kept, not refreshed");
+    assert.deepEqual(Object.keys(records.explored).sort(), ["gdb", "git"]);
+  });
+
+  it("never throws when the records file cannot be written", () => {
+    const blocked = path.join(yamlFile(""), "under-a-file", "s.json");
+    const x = load(yamlFile("servers:\n  git: { command: g }\n"), undefined, [rtool("mcp__git__git_read", "git")], blocked);
+    assert.doesNotThrow(() => x.handlers[3]?.({ type: "agent_settled" }, {} as never));
+  });
+
+  it("leaves explored unmarked when a continued run's last settle boundary is not completed", async () => {
+    const file = recordsFile();
+    const tools = [rtool("mcp__git__git_read", "git", { type: "object" })];
+    const x = load(yamlFile("servers:\n  git: { command: g }\n"), undefined, tools, file);
+    await x.handlers[1]?.({ messageType: "user", prompt: mcpExplorePrompt("git") }, {} as never);
+    // an extension can continue a run past its first settle boundary (toriel-tasks does), so a later boundary outranks the first
+    await x.handlers[2]?.({ type: "agent_before_settle", outcome: "completed" }, {} as never);
+    await x.handlers[2]?.({ type: "agent_before_settle", outcome: "error" }, {} as never);
+    await x.handlers[3]?.({ type: "agent_settled" }, {} as never);
+    assert.deepEqual(loadExploreRecords(file).explored, {}, "the continuation's error is the run's outcome, so the skill is not marked written");
+    assert.equal(loadExploreRecords(file).latest.git?.hash, computeToolHashes(tools).git, "the sighting still lands");
+  });
+
+  it("leaves explored unmarked when a run whose first boundary was completed ends aborted", async () => {
+    const file = recordsFile();
+    const tools = [rtool("mcp__git__git_read", "git")];
+    const x = load(yamlFile("servers:\n  git: { command: g }\n"), undefined, tools, file);
+    await x.handlers[1]?.({ messageType: "user", prompt: mcpExplorePrompt("git") }, {} as never);
+    await x.handlers[2]?.({ type: "agent_before_settle", outcome: "completed" }, {} as never);
+    await x.handlers[3]?.({ type: "agent_settled", aborted: true }, {} as never);
+    assert.deepEqual(loadExploreRecords(file).explored, {}, "the user aborted the run before it settled");
   });
 });
 

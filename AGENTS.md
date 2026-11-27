@@ -21,21 +21,23 @@ validation steps only for what only Ron can test). API details: the
 
 Any node >= 22.18 on PATH works (the code is TypeScript run directly by node; `.nvmrc` pins the floor). `bin/toriel` finds an nvm node when PATH's node is older.
 
-- `npm test` - all tests, no network or model
-- `npm run typecheck` - tsc (node strips types at runtime and never checks them)
-- `npm run lint` - biome, lint only (the formatter is disabled; formatting is not enforced)
+- `npm run check` - typecheck, lint and all tests in one command, with a short summary; the full output goes to `.toriel-check.log`. This is the command to use (agents especially): it needs no `cd`, `env -u`, `flock` or redirection, so one permission grant covers it.
+  - `npm run check -- test/a.test.ts test/b.test.ts` - just those tests
+  - `npm run check -- --name "some behavior"` - just the tests whose name matches
+  - `npm run check -- --typecheck` (or `--lint`, `--tests`) - just that step
+- `npm test` - all tests with node's full output (also drops the session variables); `npm run typecheck` - tsc (node strips types at runtime and never checks them); `npm run lint` - biome, lint only (the formatter is disabled; formatting is not enforced)
 - `toriel doctor` - the setup report (`/doctor` inside toriel); run it after changing anything a user has to set up
 
 Run it with `bin/toriel` (the launcher picks the right node) or `npm start`.
 
-A single test file or pattern:
+A single test file or pattern, with node's full output (the same variables dropped; `npm test` passes its arguments to `node --test`):
 
 ```
-node --test test/commands.test.ts
-node --test --test-name-pattern="some behavior" test/daemon.test.ts
+npm test -- test/commands.test.ts
+npm test -- --test-name-pattern="some behavior" test/daemon.test.ts
 ```
 
-Run all three before calling work done. Restarting the real daemon is fine,
+Run `npm run check` (all three steps) before calling work done. Test runs from different worktrees take turns through its lock in `~/.cache/toriel/check.lock` (some tests, such as `test/procs.test.ts`, look at the machine's processes and trip over a parallel run), so no `flock` wrapper is needed; a plain `node --test` skips both the lock and the env cleanup. Restarting the real daemon is fine,
 but never kill other live pi sessions.
 
 ## Layout

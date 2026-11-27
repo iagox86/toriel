@@ -1,5 +1,6 @@
 // Wire protocol between the daemon and controllers: JSONL over a unix socket.
 import type { Todo } from "../pi/extensions/lib/tasks.ts";
+import type { GoalSummary } from "./goals.ts";
 // Framing is LF-only (never readline: U+2028/U+2029 are legal inside JSON strings).
 //
 // Model: the daemon tracks SESSIONS; a session may have a live child process
@@ -34,9 +35,10 @@ export const AUTO_ANSWERED_NOTICE = "allowed by auto mode";
 export const AUTO_DENIED_NOTICE = "denied automatically";
 /** The notice for a question nobody answered in time (deny-after), dismissed as if cancelled. */
 export const AUTO_DISMISSED_NOTICE = "dismissed automatically";
+/** How the notice for a skill the agent read begins (ticket 317): a controller docks the durable one under the read call. */
+export const SKILL_LOADED_NOTICE = "skill loaded(";
 
-export const PROTOCOL = 19; // 19: chat_status's optional `problem` and `session`, and SessionMeta.chatProblem (what went wrong in the chat bridge, shown in the status line and as a durable notice, ticket 283); 18: the read_history command (a session's conversation as a digest, for the chat bridge to show a published session's past, ticket 279); 17: observe_dialogs, the ui_resolved message, and the optional `source` of ui_response and prompt (any controller can watch and answer a dialog, the first answer wins, ticket 270); 16: the publish command and SessionMeta.published/chatUp (a session shown in chat, ticket 269); 15: auto_mode/plan_mode's optional `quiet` and the mode_notice command (the shift+tab cycle announces only the mode it settles on, ticket 236); 14: spawn's optional `model` (a new session starts on that model, /new -m, ticket 247); 13: the feedback_snapshot command (the daemon's state for a /feedback bundle, ticket 239); 12: the plan_mode command and SessionMeta.plan/tasks (a read-only session until the user approves a plan, ticket 229; the agent's task list, ticket 228); 11: the deny_after command (deny a permission prompt nobody answers in time, ticket 88); 10: the auto_mode command and SessionMeta.auto/autoUntil (a session that allows its permission prompts except the sketchy ones, ticket 213); 9: watch_add's optional `by` ("agent": a file trigger an agent made through toriel_watch_create, held to the agent limits); 8: permission_check's optional `probe` (answer from the grants without remembering a suggestion for a dialog; the reply says `expiresAt`), for the toriel_permission_check tool; 7: spawn's optional `wake` (start a sleeping session because the user typed a command into it; answers `woke: false` with a reason instead of starting a file another pi may have open); 6: 6: rename and adopt answer with the applied `name` and `nameVerified` (the daemon makes names unique); 5: file-path prompts carry grant rows, and permission_add's `dialog` (4: the watch_add command (file-trigger schedules); 3: agent_spawn's optional cwd; 2: the `cd` command and adopt's `keepPermissions`)
-
+export const PROTOCOL = 22; // 22: the goal command (SessionMeta.goal/goalDone, the sessions broadcast's `goals` map, and clear answering the removed goal record; ticket 258); 21: notice's optional toolCallId (a skill load note docks under that call by id), ticket 317; 20: SessionMeta.subagent.note (why a subagent ended early, or anything else the parent should know; the switcher shows it on a limit/failed/stopped row, ticket 324); 19: chat_status's optional `problem` and `session`, and SessionMeta.chatProblem (what went wrong in the chat bridge, shown in the status line and as a durable notice, ticket 283); 18: the read_history command (a session's conversation as a digest, for the chat bridge to show a published session's past, ticket 279); 17: observe_dialogs, the ui_resolved message, and the optional `source` of ui_response and prompt (any controller can watch and answer a dialog, the first answer wins, ticket 270); 16: the publish command and SessionMeta.published/chatUp (a session shown in chat, ticket 269); 15: auto_mode/plan_mode's optional `quiet` and the mode_notice command (the shift+tab cycle announces only the mode it settles on, ticket 236); 14: spawn's optional `model` (a new session starts on that model, /new -m, ticket 247); 13: the feedback_snapshot command (the daemon's state for a /feedback bundle, ticket 239); 12: the plan_mode command and SessionMeta.plan/tasks (a read-only session until the user approves a plan, ticket 229; the agent's task list, ticket 228); 11: the deny_after command (deny a permission prompt nobody answers in time, ticket 88); 10: the auto_mode command and SessionMeta.auto/autoUntil (a session that allows its permission prompts except the sketchy ones, ticket 213); 9: watch_add's optional `by` ("agent": a file trigger an agent made through toriel_watch_create, held to the agent limits); 8: permission_check's optional `probe` (answer from the grants without remembering a suggestion for a dialog; the reply says `expiresAt`), for the toriel_permission_check tool; 7: spawn's optional `wake` (start a sleeping session because the user typed a command into it; answers `woke: false` with a reason instead of starting a file another pi may have open); 6: 6: rename and adopt answer with the applied `name` and `nameVerified` (the daemon makes names unique); 5: file-path prompts carry grant rows, and permission_add's `dialog` (4: the watch_add command (file-trigger schedules); 3: agent_spawn's optional cwd; 2: the `cd` command and adopt's `keepPermissions`)
 /** Which toriel code a process runs (build-id.ts). */
 export interface BuildInfo {
   /** Hash of the source; the only thing compared. */
@@ -117,6 +119,9 @@ export interface SessionMeta {
   /** The channel the session has in chat (its name, without the #) and the chat server's host, for `/publish` on a published session. */
   chatChannel?: string;
   chatServer?: string;
+  /** The session's goal (ticket 258), and whether it is marked done; set from the goal store, undefined when it has none. */
+  goal?: string;
+  goalDone?: boolean;
   /** toriel settings-file mtime this child started with (null = no file); undefined when inactive. */
   settingsMtime?: number | null;
   /** Problems the settings file had when this child started. */
@@ -167,6 +172,8 @@ export interface SessionMeta {
     budget: number;
     turns: number;
     maxTurns?: number;
+    /** Why it ended early, or anything else the parent should know (set only when there is one). */
+    note?: string;
   };
   /** Whether the current model takes images; undefined when pi did not say. */
   acceptsImages?: boolean;
@@ -316,6 +323,8 @@ type ClientCommandBody =
   | { type: "resolve"; id?: string; query: string }
   /** Show a session in chat (`on` omitted: toggle) or stop showing it; keyed by UUID, so a sleeping session can be published. Answers `{ published }`. */
   | { type: "publish"; id?: string; sessionId: string; on?: boolean; resume?: boolean; unpark?: boolean }
+  /** The session's goal (ticket 258), keyed by UUID: `set` (text required, replaces any previous goal), `done` (marks it done, `by` says who: "user" or "agent") and `clear` forget it, `get` only looks. A mutation broadcasts a new session list. Every answer carries the goal record: after the change for set/done, the one it removed for clear; null when there is none. */
+  | { type: "goal"; id?: string; action: "set" | "done" | "clear" | "get"; sessionId: string; text?: string; by?: "user" | "agent" }
   /** The chat bridge says whether it is connected to the chat server (drives SessionMeta.chatUp). While up, `problem` is the one thing that is wrong right now (a channel it could not make, say; shown in the status line of published sessions), absent when nothing is; `session` (a session number) also leaves a durable notice in that session's transcript. */
   | { type: "chat_status"; id?: string; up: boolean; problem?: string; session?: number }
   /** The chat bridge says which channel (by name) each session it shows has right now, by session UUID; the whole map each time. Drives SessionMeta.chatChannel, for what /publish shows. */
@@ -431,7 +440,8 @@ export interface ScheduleView {
 export type DaemonMessage =
   /** First thing a controller hears: which code the daemon runs. A daemon that never sends it predates the version check. */
   | { type: "hello"; protocol: number; build: BuildInfo; pid: number; sock: string; profile?: string }
-  | { type: "sessions"; sessions: SessionMeta[] }
+  /** A goal summary per session UUID (ticket 258), for the sessions whose metas do not carry the goal: the rows of a session with no live meta (after a daemon restart) fall back to it. */
+  | { type: "sessions"; sessions: SessionMeta[]; goals?: Record<string, GoalSummary> }
   | { type: "event"; session: number; event: Record<string, unknown> }
   | { type: "history"; session: number; messages: unknown[] }
   | { type: "ui_request"; session: number; request: Record<string, unknown> }
@@ -439,7 +449,7 @@ export type DaemonMessage =
   | { type: "ui_resolved"; session: number; id: string; by: string; source?: string }
   | { type: "exited"; session: number; reason?: string }
   /** Something worth saying about a session that is not an event in its transcript (a schedule ended or failed). */
-  | { type: "notice"; session: number; text: string; /** Worth reading later (a grant answered a prompt): a row in the transcript, not a four-second flash. */ durable?: boolean }
+  | { type: "notice"; session: number; text: string; /** Worth reading later (a grant answered a prompt): a row in the transcript, not a four-second flash. */ durable?: boolean; /** The tool call the note docks under when the transcript holds it: a skill's load notice names the read call that read the SKILL.md (ticket 317). Absent: it docks by the older heuristic (a grant's answer) or floats as a row of its own. */ toolCallId?: string }
   /** How many messages pi holds, sent when a run settles; a controller whose count differs asks to resync. */
   | { type: "digest"; session: number; messages: number; streaming: boolean }
   | { type: "response"; id: string; ok: boolean; error?: string; data?: unknown };

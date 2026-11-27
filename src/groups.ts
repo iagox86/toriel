@@ -79,6 +79,9 @@ export function saveGroups(data: GroupsFile): void {
   writeJsonAtomic(groupsFile(), data);
 }
 
+/** The group /park files top-level sessions under, at the bottom of it. */
+export const ARCHIVE_GROUP = "Archive";
+
 /** Resolve a group name to an existing group (case-insensitive) or append it. */
 export function resolveGroup(data: GroupsFile, name: string): string {
   const trimmed = name.trim();

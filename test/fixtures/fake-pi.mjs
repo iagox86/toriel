@@ -248,6 +248,7 @@ async function slowPrompt(first) {
 
 let bashStop;
 let abortSettled = false;
+let readCalls = 0;
 
 async function handle(cmd) {
   if (!started) {
@@ -427,6 +428,30 @@ async function handle(cmd) {
         const todos = cmd.message.trim() === "/tasks-clear" ? [] : [{ content: "Write it", status: "completed" }, { content: "Test it", status: "in_progress", activeForm: "Testing it" }, { content: "Ship it", status: "pending" }];
         return out({ type: "extension_ui_request", id: randomUUID(), method: "setStatus", statusKey: "toriel-tasks", statusText: JSON.stringify({ v: 1, todos }) });
       }
+      if (cmd.message.startsWith("/skill-read ")) {
+        // the read call the model makes on a skill file: pi reports the call as events (ticket 317); the daemon announces the skill
+        ok(cmd.id, "prompt", { disposition: "started" });
+        streaming = true;
+        out({ type: "agent_start" });
+        const callId = `read-skill-${++readCalls}`;
+        out({ type: "tool_execution_start", toolCallId: callId, toolName: "read", args: { path: cmd.message.slice("/skill-read ".length) } });
+        out({ type: "tool_execution_end", toolCallId: callId, isError: false, result: { content: [{ type: "text", text: "# skill" }] } });
+        streaming = false;
+        out({ type: "agent_settled" });
+        return;
+      }
+      if (cmd.message.startsWith("/skill-read-fail ")) {
+        // like /skill-read, but the read is denied: pi reports an error end (ticket 317)
+        ok(cmd.id, "prompt", { disposition: "started" });
+        streaming = true;
+        out({ type: "agent_start" });
+        const callId = `read-skill-${++readCalls}`;
+        out({ type: "tool_execution_start", toolCallId: callId, toolName: "read", args: { path: cmd.message.slice("/skill-read-fail ".length) } });
+        out({ type: "tool_execution_end", toolCallId: callId, isError: true, result: { content: [{ type: "text", text: "permission denied" }] } });
+        streaming = false;
+        out({ type: "agent_settled" });
+        return;
+      }
       if (cmd.message.trim() === "/plan-report-on" || cmd.message.trim() === "/plan-report-off") {
         // what the toriel-plan extension reports when the agent enters or leaves plan mode itself
         ok(cmd.id, "prompt", { disposition: "started" });
@@ -480,9 +505,12 @@ async function handle(cmd) {
         out({ type: "message_end", message: step });
         await sleep(30);
       }
-      if (cmd.message.includes("[error]")) {
-        // a run that fails on its own (no abort): the provider errors after the tool turns
-        const failed = { role: "assistant", content: [], stopReason: "error", errorMessage: "provider exploded" };
+      const failure = cmd.message.includes("[secret-error]")
+        ? "provider exploded: ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789 rejected the request"
+        : cmd.message.includes("[error]") ? "provider exploded" : undefined;
+      if (failure) {
+        // a run that fails on its own (no abort): the provider errors after the tool turns; "[secret-error]" echoes a credential-shaped token in its message (subagent scrub tests)
+        const failed = { role: "assistant", content: [], stopReason: "error", errorMessage: failure };
         out({ type: "message_start", message: failed });
         out({ type: "message_end", message: failed });
         streaming = false;

@@ -6,6 +6,7 @@
 // controller's chat box (the editor): this component only renders and moves.
 import { spinnerFrame } from "./activity.ts";
 import { appendFileSync } from "node:fs";
+import type { SpawnRow } from "./spawn-placement.ts";
 import { Container, truncateToWidth, type Focusable } from "@earendil-works/pi-tui";
 import { fmtTokens, oneLine } from "./format.ts";
 import { fmtClockShort } from "./when.ts";
@@ -20,6 +21,7 @@ import {
   header,
   selected,
   streaming as streamingStyle,
+  success,
 } from "./theme.ts";
 
 /** " @14:05" (the soonest scheduled run), plus " x3" when a session has several; empty when it has none. ASCII on purpose: a clock glyph has an unpredictable width. */
@@ -30,9 +32,18 @@ export function scheduleBadge(s: Pick<SwitcherSession, "schedules" | "nextFire">
   return ` @${fmtClockShort(s.nextFire, now)}${(s.schedules ?? 0) > 1 ? ` x${s.schedules}` : ""}`;
 }
 
-/** The text after a row's name: the schedule clock, then " chat" for a session published to chat (ticket 269). */
-export function rowBadge(s: Pick<SwitcherSession, "schedules" | "nextFire" | "published">, now: Date): string {
-  return scheduleBadge(s, now) + (s.published ? " chat" : "");
+/** The text after a row's name: the schedule clock, then " chat", then the goal last (` goal: ` and its text, dimmed once done; ticket 258) - the goal badge is last so a colour it ends with never affects what follows. */
+export function rowBadge(s: Pick<SwitcherSession, "schedules" | "nextFire" | "published" | "goal" | "goalDone">, now: Date): string {
+  // a leading space and an ASCII prefix, no glyph: ambiguous-width glyphs break the width math the row does on its badge (see scheduleBadge)
+  let badge = scheduleBadge(s, now);
+  if (s.published) {
+    badge += " chat";
+  }
+  if (s.goal) {
+    const flagged = ` goal: ${truncateToWidth(s.goal, 14)}`;
+    badge += s.goalDone ? dim(flagged) : flagged;
+  }
+  return badge;
 }
 
 export type SessionState = "streaming" | "idle" | "inactive" | "dead" | "compacting";
@@ -59,6 +70,9 @@ export interface SwitcherSession {
   /** Published to chat (ticket 269): the row says so. */
   published?: boolean;
   nextFire?: number;
+  /** The session's goal (ticket 258), flagged in the badge, dimmed while goalDone. */
+  goal?: string;
+  goalDone?: boolean;
   /** The /comment text: not drawn, only searched by the filter. */
   comment?: string;
   /** Preformatted age of the last request/response, e.g. "30s", "2h". */
@@ -73,6 +87,8 @@ export interface SwitcherSession {
   muted?: boolean;
   /** A subagent that has ended and whose parent has the result: dimmed until selected. undefined = not known to be one. */
   finished?: boolean;
+  /** A subagent that ended badly (limit, failed, stopped): the row shows the dead glyph in the attention style - the same glyph as a crashed session, on purpose, with the description saying why - and dimmed like other finished rows. */
+  subagentFail?: boolean;
   /** Tree fields (session-tree.ts): set when the list is arranged under parents. */
   depth?: number;
   parentId?: string;
@@ -104,6 +120,8 @@ type Row = { kind: "header"; title: string; count: number; collapsed: boolean; t
 export class Switcher extends Container implements Focusable {
   focused = false;
   sessions: SwitcherSession[] = [];
+  /** Every session row arranged and sorted, before external and /filter hiding - parked lookups and below-maps need the whole list. */
+  orderedAll: SwitcherSession[] = [];
   groups: string[] = [];
   assignments: Record<string, string | null> = {};
   counts = { running: 0, waiting: 0 };
@@ -258,6 +276,18 @@ export class Switcher extends Container implements Focusable {
     return row?.kind === "session" ? row.s : undefined;
   }
 
+  /** The currently highlighted row as a spawn anchor (a header's title, a session's group), or nothing (ticket 326). */
+  spawnAnchor(): SpawnRow | undefined {
+    const row = this.rows[this.selRow];
+    if (!row) {
+      return undefined;
+    }
+    if (row.kind === "header") {
+      return { kind: "header", title: row.title };
+    }
+    return { kind: "session", group: row.s.group };
+  }
+
   currentIsHeader(): boolean {
     return this.rows[this.selRow]?.kind === "header";
   }
@@ -393,11 +423,13 @@ export class Switcher extends Container implements Focusable {
       }
       const s = row.s;
       const isSel = s.key === this.selectedKey;
-      const marker = s.note === WAITING_NOTE || s.descendantsWaiting ? attention("!") : s.state === "streaming" ? streamingStyle(spinnerFrame(Date.now())) : MARKERS[s.state];
+      const marker = s.note === WAITING_NOTE || s.descendantsWaiting ? attention("!") : s.subagentFail ? attention("x") : s.goalDone ? success("\u2713") : s.state === "streaming" ? streamingStyle(spinnerFrame(Date.now())) : MARKERS[s.state];
       const markerText = isSel ? marker : dim(marker);
       const displayName = this.treePrefix(s) + (s.muted ? `[pi] ${oneLine(s.name)}` : oneLine(s.name));
       const badge = rowBadge(s, new Date());
-      const bodyCell = truncateToWidth(displayName, nameWidth - 3 - badge.length).padEnd(nameWidth - 3 - badge.length);
+      // only the badge's visible width counts: its dim styling is escape codes, which padEnd and truncate would count as columns
+      const badgeWidth = nameWidth - 3 - visibleLen(badge);
+      const bodyCell = truncateToWidth(displayName, badgeWidth).padEnd(badgeWidth);
       // recency colours; the selected row keeps its accent, external ones stay dim
       const body = (isSel ? bodyCell : s.muted || s.finished ? dim(bodyCell) : byAge(s.ageMs, bodyCell)) + (isSel ? badge : dim(badge));
       const ageText = truncateToWidth(s.age ?? "-", ageW).padEnd(ageW);
@@ -429,10 +461,10 @@ export class Switcher extends Container implements Focusable {
     return lines.slice(0, height).map((line) => paintLine(line, width));
   }
 
-  /** Indent and fold arrow in front of a name: children hang under their parent, parents show whether they are open. */
+  /** Indent and fold arrow in front of a name: children hang one indent step past their parent's fold arrow (so the fold triangle and the branch mark never share a column, at any depth); parents show whether they are open. */
   private treePrefix(s: SwitcherSession): string {
     const depth = s.depth ?? 0;
-    const branch = depth > 0 ? `${"  ".repeat(depth - 1)}\u2514 ` : "";
+    const branch = depth > 0 ? `${"  ".repeat(2 * depth - 1)}\u2514 ` : "";
     const hasKids = (s.descendants ?? 0) > 0;
     const folded = hasKids && !this.filterNote && s.sessionId !== undefined && this.collapsed.has(s.sessionId);
     return branch + (hasKids ? (folded ? "\u25b8 " : "\u25be ") : "");

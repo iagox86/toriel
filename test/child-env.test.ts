@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { bangEnv, childEnv, sandboxWritableRoots } from "../src/child-env.ts";
+import { SESSION_ENV, withoutSessionEnv } from "../scripts/test-env.ts";
+import { bangEnv, CHILD_ENV_KEYS, childEnv, sandboxWritableRoots } from "../src/child-env.ts";
+import { delegateEnv } from "../src/daemon-children.ts";
 import { BACKGROUND_COMMAND as DAEMON_COMMAND } from "../src/daemon-handlers-ops.ts";
 import { BACKGROUND_COMMAND as EXTENSION_COMMAND } from "../pi/extensions/toriel-jobs.ts";
 
@@ -76,6 +78,13 @@ describe("the MCP file variable (tickets 209, 216)", () => {
     assert.equal(childEnv({}, "/sock", {}, undefined, { mcpSummaries: "/state/mcp-summaries.json" }).TORIEL_MCP_SUMMARIES, "/state/mcp-summaries.json");
     assert.equal(childEnv({}, "/sock", { TORIEL_MCP_SUMMARIES: "/leak" }).TORIEL_MCP_SUMMARIES, undefined, "never inherited from the daemon");
   });
+
+  it("names the file of /mcp explore records only when the daemon gives one, under its own name (ticket 308)", () => {
+    assert.equal(childEnv({}, "/sock", {}, undefined, { mcpRecords: "/state/mcp-explore-records.json" }).TORIEL_MCP_RECORDS, "/state/mcp-explore-records.json");
+    assert.equal(childEnv({}, "/sock", {}, undefined, {}).TORIEL_MCP_RECORDS, undefined);
+    assert.equal(childEnv({}, "/sock", { TORIEL_MCP_RECORDS: "/leak" }).TORIEL_MCP_RECORDS, undefined, "never inherited from the daemon");
+    assert.equal(childEnv({}, "/sock", { TORIEL_MCP_EXPLORE_RECORDS_FILE: "/leak" }).TORIEL_MCP_EXPLORE_RECORDS_FILE, "/leak", "the daemon-side override is this daemon's own setting, not an owned child variable");
+  });
 });
 
 describe("the sandbox and shared-directory variables (board 190)", () => {
@@ -120,5 +129,34 @@ describe("the sandbox and shared-directory variables (board 190)", () => {
 describe("the background command name", () => {
   it("is the same in the daemon and in the extension", () => {
     assert.equal(DAEMON_COMMAND, EXTENSION_COMMAND);
+  });
+});
+
+describe("what a test run drops from a surrounding session (ticket 339)", () => {
+  it("lists every variable the daemon sets on a child, so a test inside a sandboxed, scoped session sees none of them", () => {
+    // the extras turn on every conditional branch childEnv has (session id, scope pair, sandbox pair and tmp, every MCP/
+    // file-history/plan/freshness switch), so any new conditional key shows up in this set
+    const full = childEnv({ sessionId: "abc", sessionFile: "/f" }, "/sock", {}, { root: "/w", mode: "deny" }, {
+      sharedDir: "/s",
+      tmpDir: "/t",
+      sandboxWritable: ["/c"],
+      mcpFile: "/m",
+      mcpDirect: ["git"],
+      mcpSummaries: "/ms",
+      mcpRecords: "/mr",
+      fileHistoryDir: "/h",
+      planDir: "/p",
+      freshness: false,
+    });
+    // the delegation pair comes straight from delegateEnv's output, so a new key there fails this test until CHILD_ENV_KEYS lists it
+    const fullWithDelegation = { ...full, ...delegateEnv("types") };
+    const set = Object.keys(fullWithDelegation);
+    assert.deepEqual(
+      set.filter((k) => !CHILD_ENV_KEYS.includes(k)),
+      [],
+      "a key the daemon sets on a child is missing from CHILD_ENV_KEYS",
+    );
+    assert.deepEqual(Object.keys(withoutSessionEnv({ ...fullWithDelegation, PATH: "/bin", TORIEL_PROFILE: "x", TORIEL_TIMING: "1" })), ["PATH"]);
+    assert.ok(SESSION_ENV.includes("TORIEL_SANDBOX") && SESSION_ENV.includes("TORIEL_SCOPE_ROOT"));
   });
 });

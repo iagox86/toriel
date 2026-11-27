@@ -8,14 +8,14 @@ AGENTS.md (imported above) holds the commands, layout, conventions and job-board
 
 ## Running a single test
 
-Any node >= 22.18 on PATH works; do not prefix PATH. (`bin/toriel` finds an nvm node for toriel itself, but `node --test` and `npm test` use whatever is on PATH, so on a machine whose default node is older, put a suitable nvm node first on PATH for those.)
+Any node >= 22.18 on PATH works; do not prefix PATH. (`bin/toriel` finds an nvm node for toriel itself, but `npm run check` and `npm test` use whatever is on PATH, so on a machine whose default node is older, put a suitable nvm node first on PATH for those.)
 
 ```fish
-node --test test/commands.test.ts
-node --test --test-name-pattern="some behavior" test/daemon.test.ts
+npm run check -- test/commands.test.ts
+npm run check -- --name "some behavior" test/daemon.test.ts
 ```
 
-Run `npm test`, `npm run typecheck` and `npm run lint` before calling work done (typecheck matters: node strips types and never checks them).
+Run `npm run check` (typecheck, lint and all tests; typecheck matters: node strips types and never checks them) before calling work done. Use it, not hand-built commands: no `cd`, `env -u`, `flock`, `bash -c` or log redirection around it; it does all of that itself and prints a short summary, with the full output in `.toriel-check.log`.
 
 ## Architecture in brief
 

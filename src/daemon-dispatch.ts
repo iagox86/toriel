@@ -31,6 +31,7 @@ import {
   handleClearQueue,
   handleCommands,
   handleCompact,
+  handleGoal,
   handleMcpStatus,
   handleModel,
   handleCd,
@@ -88,6 +89,8 @@ export async function dispatch(ctx: DaemonContext, cmd: ClientCommand, socket: n
       return handleAutoMode(ctx, cmd, res);
     case "publish":
       return handlePublish(ctx, cmd, res);
+    case "goal":
+      return handleGoal(ctx, cmd, res);
     case "chat_status": {
       const problem = typeof cmd.problem === "string" && cmd.problem.trim() ? oneLine(cmd.problem).slice(0, 300) : undefined; // reaches the status line and a notice: one line, whatever was sent
       const changed = ctx.published.bridgeUp !== cmd.up || (cmd.up && ctx.published.problem !== problem);
