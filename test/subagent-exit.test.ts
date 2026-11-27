@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { abnormalEnd } from "../src/subagents.ts";
-import { briefReason, exitNote, scrubSecrets, stderrTail, verbLine } from "../src/subagent-exit.ts";
+import { abnormalEnd, limitBreach, watchdogBreach } from "../src/subagents.ts";
+import { briefReason, endedPrefix, exitNote, scrubSecrets, stderrTail, verbLine } from "../src/subagent-exit.ts";
 
 describe("exitNote", () => {
   it("names the code, or the signal when there is one", () => {
@@ -12,6 +12,43 @@ describe("exitNote", () => {
 
   it("appends a one-line stderr tail", () => {
     assert.equal(exitNote(1, null, "boom\n  at x"), "its process exited (code 1): boom at x");
+  });
+});
+
+describe("endedPrefix", () => {
+  it("reads a token budget breach's own note as the reason", () => {
+    const breach = limitBreach({ turns: 5, tokens: 150000, budget: 150000, continuing: true });
+    assert.ok(breach);
+    assert.equal(endedPrefix("limit", breach), "limit - it used 150000 tokens, over its budget of 150000");
+  });
+
+  it("reads a turn cap breach's own note as the reason", () => {
+    const breach = limitBreach({ turns: 3, maxTurns: 3, tokens: 100, budget: 150000, continuing: true });
+    assert.ok(breach);
+    assert.equal(endedPrefix("limit", breach), "limit - it reached its limit of 3 turns");
+  });
+
+  it("reads a watchdog stop's own note as the reason", () => {
+    const now = 1_000_000;
+    const breach = watchdogBreach({ now, startedAt: now, lastEventAt: now - 6 * 60_000, background: false, idleMs: 5 * 60_000, maxMs: 0 });
+    assert.ok(breach);
+    assert.equal(endedPrefix("stopped", breach), "stopped - it produced nothing for 5 min (stuck in a tool call?)");
+  });
+
+  it("reads a failed run's exit note as the reason", () => {
+    assert.equal(endedPrefix("failed", exitNote(1, null)), "failed - its process exited (code 1)");
+  });
+
+  it("says just the state without a note", () => {
+    assert.equal(endedPrefix("failed", undefined), "failed");
+  });
+
+  it("stops a parent-stop note from saying stopped twice", () => {
+    assert.equal(endedPrefix("stopped", "stopped by its parent"), "stopped - by its parent");
+  });
+
+  it("passes a note that does not start with the stopped prefix through unchanged", () => {
+    assert.equal(endedPrefix("stopped", "its parent cancelled the call"), "stopped - its parent cancelled the call");
   });
 });
 

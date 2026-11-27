@@ -38,6 +38,17 @@ export function briefReason(note: string | undefined): string {
   return first.length > 80 ? `${first.slice(0, 77)}...` : first;
 }
 
+/** Whether a subagent ended badly for the switcher: anything that is not a normal finish or a run still going. */
+export function badEnd(state: string): state is "limit" | "failed" | "stopped" {
+  return state === "limit" || state === "failed" || state === "stopped";
+}
+
+/** The switcher row prefix for a badly ended subagent: its state and the short reason (briefReason), e.g. "failed - its process exited (code 1)"; strips a redundant leading "stopped" so a watchdog or parent-stop note does not say stopped twice. */
+export function endedPrefix(state: string, note: string | undefined): string {
+  const why = briefReason((note ?? "").replace(/^(stopped: |stopped )/, ""));
+  return why && why !== state ? `${state} - ${why}` : state;
+}
+
 /** "finished", "failed (why)" or "was cut short (why)" for the line that opens a delivered result. */
 export function verbLine(state: string, note: string | undefined): string {
   if (state === "done") {

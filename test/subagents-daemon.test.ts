@@ -137,6 +137,9 @@ describe("daemon: subagents", () => {
     assert.equal(r.state, "limit");
     assert.match(r.text, /over its budget of 25/);
     assert.match(r.text, /Partial result:\nstep \d/);
+    const named = () => c.sessions().find((x) => x.sessionName?.startsWith("tiny: look"));
+    await until(() => !!named()?.subagent?.note);
+    assert.match(named()?.subagent?.note ?? "", /over its budget of 25/, "the record's note reaches the session meta");
   });
 
   it("cuts a subagent off at its maxTurns", async () => {

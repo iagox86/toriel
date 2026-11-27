@@ -73,6 +73,8 @@ export interface SwitcherSession {
   muted?: boolean;
   /** A subagent that has ended and whose parent has the result: dimmed until selected. undefined = not known to be one. */
   finished?: boolean;
+  /** A subagent that ended badly (limit, failed, stopped): the row shows the dead glyph in the attention style - the same glyph as a crashed session, on purpose, with the description saying why - and dimmed like other finished rows. */
+  subagentFail?: boolean;
   /** Tree fields (session-tree.ts): set when the list is arranged under parents. */
   depth?: number;
   parentId?: string;
@@ -393,7 +395,7 @@ export class Switcher extends Container implements Focusable {
       }
       const s = row.s;
       const isSel = s.key === this.selectedKey;
-      const marker = s.note === WAITING_NOTE || s.descendantsWaiting ? attention("!") : s.state === "streaming" ? streamingStyle(spinnerFrame(Date.now())) : MARKERS[s.state];
+      const marker = s.note === WAITING_NOTE || s.descendantsWaiting ? attention("!") : s.subagentFail ? attention("x") : s.state === "streaming" ? streamingStyle(spinnerFrame(Date.now())) : MARKERS[s.state];
       const markerText = isSel ? marker : dim(marker);
       const displayName = this.treePrefix(s) + (s.muted ? `[pi] ${oneLine(s.name)}` : oneLine(s.name));
       const badge = rowBadge(s, new Date());

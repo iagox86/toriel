@@ -354,3 +354,44 @@ describe("buildSessionList: a running subagent's budget", () => {
     assert.doesNotMatch(descriptionOf(undefined) ?? "", /budget/);
   });
 });
+
+describe("buildSessionList: a badly ended subagent", () => {
+  const rowOf = (subagent?: SessionMeta["subagent"]) => build({ daemon: [meta({ sessionFile: "/a", subagent })], files: [local("/a")] })[0];
+
+  it("leads a limit's description with the record's own reason", () => {
+    const row = rowOf({ state: "limit", delivered: false, parent: "p", tokens: 3000, budget: 150000, turns: 5, note: "stopped: it used 3000 tokens, over its budget of 150000" });
+    assert.match(row?.description ?? "", /^limit - it used 3000 tokens, over its budget of 150000 - proj/);
+  });
+
+  it("leads a turn-capped limit's description with the cap it reached", () => {
+    const row = rowOf({ state: "limit", delivered: false, parent: "p", tokens: 100, budget: 150000, turns: 25, maxTurns: 25, note: "stopped: it reached its limit of 25 turns" });
+    assert.match(row?.description ?? "", /^limit - it reached its limit of 25 turns - proj/);
+  });
+
+  it("shows a bare limit when the record carries no note", () => {
+    const row = rowOf({ state: "limit", delivered: false, parent: "p", tokens: 1200, budget: 0, turns: 0 });
+    assert.match(row?.description ?? "", /^limit - proj/);
+  });
+
+  it("leads a failed or stopped description with the state and the short note, or just the state without one", () => {
+    const failed = rowOf({ state: "failed", delivered: true, parent: "p", tokens: 10, budget: 150000, turns: 1, note: "its process exited (code 1): boom" });
+    assert.equal(failed?.description, "failed - its process exited (code 1) - proj");
+    const stopped = rowOf({ state: "stopped", delivered: true, parent: "p", tokens: 10, budget: 150000, turns: 1, note: "was aborted mid-run; no stop was requested" });
+    assert.equal(stopped?.description, "stopped - aborted mid-run; no stop was requested - proj");
+    assert.equal(rowOf({ state: "failed", delivered: true, parent: "p", tokens: 10, budget: 150000, turns: 1 })?.description, "failed - proj");
+  });
+
+  it("leaves a done subagent's and an ordinary session's description alone", () => {
+    assert.equal(rowOf({ state: "done", delivered: true, parent: "p", tokens: 3000, budget: 150000, turns: 2 })?.description, "proj");
+    assert.equal(rowOf(undefined)?.description, "proj");
+  });
+
+  it("flags the bad rows and only the bad rows", () => {
+    assert.equal(rowOf({ state: "limit", delivered: false, parent: "p", tokens: 10, budget: 150000, turns: 5 })?.subagentFail, true);
+    assert.equal(rowOf({ state: "failed", delivered: true, parent: "p", tokens: 10, budget: 150000, turns: 1, note: "x" })?.subagentFail, true);
+    assert.equal(rowOf({ state: "stopped", delivered: true, parent: "p", tokens: 10, budget: 150000, turns: 1 })?.subagentFail, true);
+    assert.equal(rowOf({ state: "done", delivered: true, parent: "p", tokens: 3000, budget: 150000, turns: 2 })?.subagentFail, undefined);
+    assert.equal(rowOf({ state: "running", delivered: false, parent: "p", tokens: 3000, budget: 150000, turns: 2 })?.subagentFail, undefined);
+    assert.equal(rowOf(undefined)?.subagentFail, undefined);
+  });
+});
