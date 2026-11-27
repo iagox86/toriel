@@ -171,6 +171,16 @@ describe("bare /mcp", () => {
     assert.equal(r.kind, "run");
     assert.deepEqual(r.kind === "run" ? r.call.args : null, []);
   });
+
+  it("lets /mcp explore run bare, and --help says what the bare form re-explores", () => {
+    const r = parseCommandLine(SESSION_COMMANDS, "/mcp explore");
+    assert.equal(r.kind, "run");
+    assert.deepEqual(r.kind === "run" ? r.call.args : null, ["explore"]);
+    const help = parseCommandLine(SESSION_COMMANDS, "/mcp --help");
+    assert.ok(help.kind === "help" && /explore \[server\]/.test(help.text), "the action line offers the bare form");
+    assert.match(help.text ?? "", /Bare: re-explores[\s\S]*tools changed[\s\S]*30 days/);
+    assert.ok((help.kind === "help" ? help.text : "").includes("\n  /mcp explore\n"), "the bare form is an example");
+  });
 });
 
 describe("schedule commands", () => {

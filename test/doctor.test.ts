@@ -91,6 +91,54 @@ describe("the settings file", () => {
 });
 
 describe("doctor checks", () => {
+  /** A setup whose git server has a paired skill and an explore record; `over` shapes the staleness case. */
+  const staleSkill = (over: { skill?: boolean; at?: Date; exploredHash?: string | null; latest?: string | null } = {}) => {
+    const s = setup({});
+    const at = over.at ?? new Date(Date.now() - 40 * 86_400_000);
+    if (over.skill !== false) {
+      fs.mkdirSync(path.join(s.agentDir, "skills", "git"), { recursive: true });
+      fs.writeFileSync(path.join(s.agentDir, "skills", "git", "SKILL.md"), "# git");
+    }
+    const records = path.join(s.agentDir, "mcp-explore-records.json");
+    fs.writeFileSync(records, JSON.stringify({
+      explored: over.exploredHash === null ? {} : { git: { at: at.toISOString(), hash: over.exploredHash ?? "hash-old" } },
+      latest: over.latest === null ? {} : { git: over.latest ?? "hash-old" },
+    }));
+    return { at, opts: { ...s.opts, mcpRecords: records } as DoctorOptions };
+  };
+  const yyyy = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+  it("mcp-skill-stale: a skill the server's tools moved past (ticket 308)", () => {
+    const { at, opts } = staleSkill({ exploredHash: "hash-old", latest: "hash-new" });
+    const found = collectFindings(opts).filter((f) => f.id === "mcp-skill-stale");
+    assert.equal(found.length, 1, "only the git server has a skill");
+    assert.equal(found[0]?.level, "feature");
+    assert.equal(found[0]?.message, `the "git" MCP skill is stale: the server's tools changed after the explore on ${yyyy(at)} - /mcp explore git`);
+    assert.ok(found[0]?.manual, "re-exploring needs a live session and a model run, which the doctor does not spend tokens on");
+  });
+
+  it("mcp-skill-stale: a skill left alone past the 30 days (ticket 330)", () => {
+    const { opts } = staleSkill({ at: new Date(Date.now() - 40 * 86_400_000), exploredHash: "hash-old", latest: "hash-old" });
+    const found = collectFindings(opts).filter((f) => f.id === "mcp-skill-stale");
+    assert.equal(found.length, 1);
+    assert.equal(found[0]?.message, 'the "git" MCP skill is stale: explored 40 days ago - /mcp explore git');
+    assert.ok(found[0]?.manual);
+  });
+
+  it("mcp-skill-stale: a skill from an explore run the doctor has no record of", () => {
+    const { opts } = staleSkill({ exploredHash: null, latest: "hash-new" });
+    const found = collectFindings(opts).filter((f) => f.id === "mcp-skill-stale");
+    assert.equal(found.length, 1);
+    assert.equal(found[0]?.message, 'the "git" MCP skill is stale: no record of a previous explore - /mcp explore git');
+    assert.ok(found[0]?.manual);
+  });
+
+  it("mcp-skill-stale: quiet for a fresh skill, past-30-days skill, and servers without a paired skill", () => {
+    assert.deepEqual(collectFindings(staleSkill({ at: new Date(Date.now() - 86_400_000), exploredHash: "hash-old", latest: "hash-old" }).opts).filter((f) => f.id === "mcp-skill-stale"), [], "explored a day ago, tools seen the same");
+    assert.deepEqual(collectFindings(staleSkill({ at: new Date(Date.now() - 86_400_000), exploredHash: "hash-old", latest: null }).opts).filter((f) => f.id === "mcp-skill-stale"), [], "explored a day ago, server never seen since");
+    assert.deepEqual(collectFindings(staleSkill({ skill: false }).opts).filter((f) => f.id === "mcp-skill-stale"), [], "no skill: /mcp list suggests the explore instead");
+  });
+
   it("finds nothing wrong with a complete setup", () => {
     const { opts, agentDir } = setup();
     fs.mkdirSync(path.join(agentDir, "feedback"), { recursive: true });
@@ -231,6 +279,7 @@ describe("doctor checks", () => {
       })(),
       setup({ mcpExtra: { broken: { exposure: "direct" } } }).opts,
       { ...setup({ mcpExtra: { busy: { command: "x" } } }).opts, mcpUsage: () => ({ sessions: 20, byServer: { busy: 10 } }) },
+      staleSkill().opts,
       setup({ piMcpJson: { mcpServers: { freecad: { url: "http://127.0.0.1:39280/mcp" } } } }).opts,
       setup({ config: { authorizerChain: ["toriel-grants"], permission: { "*": "allow", external_directory_write: { "/tmp/*": "allow" }, path: { "*": "ask", [GRANTS_RULE]: "ask" } } }, settings: JSON.stringify({ scopeGuardAcceptedAllows: [{ surface: "external_directory_write", pattern: "/tmp/*" }, { surface: "*", pattern: "*" }] }) }).opts,
       { ...setup({ settings: '{"chatto":{"url":"https://chat.example.com","tokenFile":"/nonexistent/chatto.token","group":"Toriel","allowedUser":"u1"}}' }).opts, chatClientInstalled: () => false },
@@ -677,7 +726,7 @@ describe("doctor report", () => {
     assert.match(text, /Required: all 5 ok/);
     assert.match(text, /Recommended: all 6 ok/);
     assert.doesNotMatch(text, / ok {7}/);
-    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(21 ok\)/);
+    assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(22 ok\)/);
   });
 });
 
@@ -706,7 +755,7 @@ describe("doctor report colours", () => {
   it("colours the compact report too, with the passing checks' count dim", () => {
     const coloured = renderDoctor(checks(), { compact: true, style: ANSI_STYLE });
     assert.match(coloured, /Required\x1b\[22m: \x1b\[32mall 5 ok\x1b\[39m/);
-    assert.match(coloured, /\x1b\[2m {2}\(21 ok\)\x1b\[22m/);
+    assert.match(coloured, /\x1b\[2m {2}\(22 ok\)\x1b\[22m/);
   });
 });
 
