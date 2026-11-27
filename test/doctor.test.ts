@@ -102,7 +102,7 @@ describe("doctor checks", () => {
     const records = path.join(s.agentDir, "mcp-explore-records.json");
     fs.writeFileSync(records, JSON.stringify({
       explored: over.exploredHash === null ? {} : { git: { at: at.toISOString(), hash: over.exploredHash ?? "hash-old" } },
-      latest: over.latest === null ? {} : { git: over.latest ?? "hash-old" },
+      latest: over.latest === null ? {} : { git: { at: at.toISOString(), hash: over.latest ?? "hash-old" } },
     }));
     return { at, opts: { ...s.opts, mcpRecords: records } as DoctorOptions };
   };
@@ -133,10 +133,26 @@ describe("doctor checks", () => {
     assert.ok(found[0]?.manual);
   });
 
-  it("mcp-skill-stale: quiet for a fresh skill, past-30-days skill, and servers without a paired skill", () => {
+  it("mcp-skill-stale: quiet for a fresh skill, a fresh one with no sighting since, and servers without a paired skill", () => {
     assert.deepEqual(collectFindings(staleSkill({ at: new Date(Date.now() - 86_400_000), exploredHash: "hash-old", latest: "hash-old" }).opts).filter((f) => f.id === "mcp-skill-stale"), [], "explored a day ago, tools seen the same");
     assert.deepEqual(collectFindings(staleSkill({ at: new Date(Date.now() - 86_400_000), exploredHash: "hash-old", latest: null }).opts).filter((f) => f.id === "mcp-skill-stale"), [], "explored a day ago, server never seen since");
     assert.deepEqual(collectFindings(staleSkill({ skill: false }).opts).filter((f) => f.id === "mcp-skill-stale"), [], "no skill: /mcp list suggests the explore instead");
+  });
+
+  it("mcp-skill-stale: leaves a server the owner switched off alone while still flagging a stale enabled one", () => {
+    const s = setup({ mcpExtra: { off: { command: "x", enabled: false } } });
+    for (const name of ["git", "off"]) {
+      fs.mkdirSync(path.join(s.agentDir, "skills", name), { recursive: true });
+      fs.writeFileSync(path.join(s.agentDir, "skills", name, "SKILL.md"), `# ${name}`);
+    }
+    const at = new Date(Date.now() - 40 * 86_400_000).toISOString();
+    const records = path.join(s.agentDir, "mcp-explore-records.json");
+    fs.writeFileSync(records, JSON.stringify({
+      explored: { git: { at, hash: "hash-old" }, off: { at, hash: "hash-old" } },
+      latest: { git: { at, hash: "hash-old" }, off: { at, hash: "hash-old" } },
+    }));
+    const found = collectFindings({ ...s.opts, mcpRecords: records } as DoctorOptions).filter((f) => f.id === "mcp-skill-stale");
+    assert.deepEqual(found.map((f) => f.message), ['the "git" MCP skill is stale: explored 40 days ago - /mcp explore git'], "the disabled off server is not flagged");
   });
 
   it("finds nothing wrong with a complete setup", () => {

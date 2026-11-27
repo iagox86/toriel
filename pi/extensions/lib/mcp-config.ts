@@ -258,15 +258,15 @@ export function learnSummaries(known: Readonly<Record<string, string>>, tools: r
   return changed ? next : undefined;
 }
 
-/** The environment variable naming the file of /mcp explore records (ticket 308); the daemon sets it, the toriel-mcp extension stamps it at the end of each run. */
-export const MCP_RECORDS_ENV = "TORIEL_MCP_EXPLORE_RECORDS_FILE";
+/** The environment variable naming the file of /mcp explore records (ticket 308); the daemon sets it for children that may stamp it (a session without an agent profile only: a profile's tool allowlist would hash a subset). The daemon-side override of the path is the distinct TORIEL_MCP_EXPLORE_RECORDS_FILE, which children never get. */
+export const MCP_RECORDS_ENV = "TORIEL_MCP_RECORDS";
 
-/** What is remembered about /mcp explore (ticket 308), and from it whether a server's skill has gone stale: the skill's write time with the tool hash of that moment, against the last-seen tool hash. */
+/** What is remembered about /mcp explore (ticket 308), and from it whether a server's skill has gone stale: the skill's write time with the tool hash of that moment, against the last sighting of the server's tools (its hash with when the session that saw them was set up, so a sighting can be judged against the write time). */
 export interface McpExploreRecords {
   /** Server -> the /mcp explore run's end (ISO timestamp) and the server's tool hash at that moment. */
   explored: Record<string, { at: string; hash: string }>;
-  /** Server -> the tool hash the most recent run that had the server connected saw. */
-  latest: Record<string, string>;
+  /** Server -> the tool hash of the most recent sighting of the server's tools, and when that session's view was set up (its session start). */
+  latest: Record<string, { at: string; hash: string }>;
 }
 
 /** What of a tool the record hash takes: its name, its parameters, and the server it belongs to. Descriptions and exposure are left out, so they cannot move the hash. */
@@ -325,23 +325,20 @@ export function loadExploreRecords(file: string | undefined): McpExploreRecords 
       return { explored: {}, latest: {} };
     }
     const { explored, latest } = parsed as { explored?: unknown; latest?: unknown };
-    const stamps = (): Record<string, { at: string; hash: string }> => {
-      if (typeof explored !== "object" || explored === null || Array.isArray(explored)) {
+    // explored stamps and latest sightings share the {at, hash} shape; a malformed entry of either is left out
+    const stamp = (value: unknown): Record<string, { at: string; hash: string }> => {
+      if (typeof value !== "object" || value === null || Array.isArray(value)) {
         return {};
       }
       return Object.fromEntries(
-        Object.entries(explored as Record<string, unknown>).flatMap(([server, stamp]): Array<[string, { at: string; hash: string }]> => {
-          const at = (typeof stamp === "object" && stamp !== null ? (stamp as { at?: unknown }).at : undefined);
-          const hash = (typeof stamp === "object" && stamp !== null ? (stamp as { hash?: unknown }).hash : undefined);
+        Object.entries(value as Record<string, unknown>).flatMap(([server, entry]): Array<[string, { at: string; hash: string }]> => {
+          const at = typeof entry === "object" && entry !== null ? (entry as { at?: unknown }).at : undefined;
+          const hash = typeof entry === "object" && entry !== null ? (entry as { hash?: unknown }).hash : undefined;
           return typeof at === "string" && typeof hash === "string" ? [[server, { at, hash }]] : [];
         }),
       );
     };
-    const seen = (): Record<string, string> =>
-      typeof latest === "object" && latest !== null && !Array.isArray(latest)
-        ? Object.fromEntries(Object.entries(latest as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === "string"))
-        : {};
-    return { explored: stamps(), latest: seen() };
+    return { explored: stamp(explored), latest: stamp(latest) };
   } catch {
     return { explored: {}, latest: {} };
   }
@@ -355,14 +352,24 @@ export function saveExploreRecords(file: string, records: McpExploreRecords): vo
   fs.renameSync(tmp, file);
 }
 
-/** The records after `updates` land: on a conflict the update wins. Neither input is changed. */
+/** The records after `updates` land: an explored stamp is the update's, a latest sighting is taken only when its `at` is not older than the one already recorded (a session whose view of the server predates a fresher sighting must not overwrite it - it would be evidence in staleness that the tools went backwards, ticket 308). Neither input is changed. */
 export function mergeExploreRecords(
   current: McpExploreRecords,
-  updates: { explored?: Record<string, { at: string; hash: string }>; latest?: Record<string, string> },
+  updates: { explored?: Record<string, { at: string; hash: string }>; latest?: Record<string, { at: string; hash: string }> },
 ): McpExploreRecords {
+  const seenAt = (at: string): number => {
+    const t = Date.parse(at);
+    return Number.isFinite(t) ? t : Number.NEGATIVE_INFINITY;
+  };
   return {
     explored: { ...current.explored, ...(updates.explored ?? {}) },
-    latest: { ...current.latest, ...(updates.latest ?? {}) },
+    latest: {
+      ...current.latest,
+      ...Object.fromEntries(Object.entries(updates.latest ?? {}).filter(([name, update]) => {
+        const have = current.latest[name];
+        return have === undefined || seenAt(update.at) >= seenAt(have.at);
+      })),
+    },
   };
 }
 
@@ -374,7 +381,7 @@ export function mcpExploreAllFirstLine(servers: readonly string[]): string {
 const EXPLORE_ONE_PREFIX = 'Write a skill for the MCP server "';
 const EXPLORE_ALL_PREFIX = "Write or update skills for the MCP servers: ";
 
-/** The server names an /mcp explore prompt starts with: the one in the single-server prompt, or the list the combined prompt opens with. Names may hold anything but a double quote; callers validate them against the configured servers. */
+/** The server names an /mcp explore prompt starts with: the one in the single-server prompt, or the list the combined prompt opens with (split on ", ", the grammar that line uses - a server name holding it stays unpairable). Names may hold anything but a double quote; callers validate them against the configured servers. */
 export function explorePromptServerNames(prompt: string | undefined): string[] {
   const first = (prompt ?? "").split("\n", 1)[0] ?? "";
   if (first.startsWith(EXPLORE_ONE_PREFIX)) {
@@ -382,9 +389,7 @@ export function explorePromptServerNames(prompt: string | undefined): string[] {
     return close === -1 ? [] : [first.slice(EXPLORE_ONE_PREFIX.length, close)];
   }
   if (first.startsWith(EXPLORE_ALL_PREFIX)) {
-    const names = first.slice(EXPLORE_ALL_PREFIX.length);
-    const bare = names.endsWith(".") ? names.slice(0, -1) : names;
-    return bare.split(", ").map((n) => n.trim());
+    return first.slice(EXPLORE_ALL_PREFIX.length).split(", ").map((n) => n.trim());
   }
   return [];
 }

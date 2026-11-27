@@ -280,13 +280,13 @@ describe("the /mcp explore records (ticket 308)", () => {
     const all = mcpExploreAllFirstLine(["a", "b", "c"]);
     assert.equal(all, "Write or update skills for the MCP servers: a, b, c");
     assert.deepEqual(explorePromptServerNames(all), ["a", "b", "c"]);
-    assert.deepEqual(explorePromptServerNames(`${all}.`), ["a", "b", "c"], "one trailing . is stripped");
+    assert.deepEqual(explorePromptServerNames(`${all}.`), ["a", "b", "c."], "nothing outside the grammar is stripped or split");
     assert.deepEqual(explorePromptServerNames(`${all}\nThen write one skill per server.`), ["a", "b", "c"], "only the first line counts");
     assert.deepEqual(explorePromptServerNames("Look at the MCP servers: a, b"), []);
     assert.deepEqual(explorePromptServerNames(undefined), []);
   });
 
-  it("reads a missing, unreadable or malformed records file as none, drops malformed entries, and saves a clean round-trip", () => {
+  it("reads a missing, unreadable or malformed records file as none, drops malformed entries of both halves, and saves a clean round-trip", () => {
     const file = path.join(tmpDir(), "state", "mcp-explore-records.json");
     fs.mkdirSync(path.dirname(file), { recursive: true });
     assert.deepEqual(loadExploreRecords(file), { explored: {}, latest: {} });
@@ -295,21 +295,34 @@ describe("the /mcp explore records (ticket 308)", () => {
     assert.deepEqual(loadExploreRecords(file), { explored: {}, latest: {} });
     fs.writeFileSync(file, "[1,2]");
     assert.deepEqual(loadExploreRecords(file), { explored: {}, latest: {} });
-    fs.writeFileSync(file, '{"explored": {"git": {"at": "t1", "hash": "h1"}, "bad": 3}, "latest": {"git": "g", "bad": 5}}');
-    assert.deepEqual(loadExploreRecords(file), { explored: { git: { at: "t1", hash: "h1" } }, latest: { git: "g" } });
-    saveExploreRecords(file, { explored: { gdb: { at: "t2", hash: "h2" } }, latest: { git: "g1" } });
-    assert.deepEqual(loadExploreRecords(file), { explored: { gdb: { at: "t2", hash: "h2" } }, latest: { git: "g1" } });
+    fs.writeFileSync(file, '{"explored": {"git": {"at": "t1", "hash": "h1"}, "bad": 3}, "latest": {"git": {"at": "s1", "hash": "g"}, "bad": 5}}');
+    assert.deepEqual(loadExploreRecords(file), { explored: { git: { at: "t1", hash: "h1" } }, latest: { git: { at: "s1", hash: "g" } } });
+    fs.writeFileSync(file, '{"explored": {"git": {"at": "t1", "hash": "h1"}}, "latest": {"git": "g", "half": {"hash": "h"}, "nohash": {"at": "s"}}}');
+    assert.deepEqual(loadExploreRecords(file), { explored: { git: { at: "t1", hash: "h1" } }, latest: {} }, "a malformed latest sighting counts as absent");
+    saveExploreRecords(file, { explored: { gdb: { at: "t2", hash: "h2" } }, latest: { git: { at: "s2", hash: "g1" } } });
+    assert.deepEqual(loadExploreRecords(file), { explored: { gdb: { at: "t2", hash: "h2" } }, latest: { git: { at: "s2", hash: "g1" } } });
     assert.deepEqual(fs.readdirSync(path.dirname(file)), ["mcp-explore-records.json"], "no temp file is left behind");
   });
 
-  it("merges records, the updates winning on a conflict, without changing the inputs", () => {
-    const current: McpExploreRecords = { explored: { git: { at: "t1", hash: "h1" } }, latest: { git: "h1" } };
+  it("merges records: explored stamps to the update, latest sightings only when not older than the recorded one, without changing the inputs", () => {
+    const current: McpExploreRecords = { explored: { git: { at: "2026-05-10T12:00:00.000Z", hash: "h1" } }, latest: { git: { at: "2026-05-10T13:00:00.000Z", hash: "h1" } } };
     assert.deepEqual(mergeExploreRecords(current, {}), current, "empty updates change nothing");
-    assert.deepEqual(mergeExploreRecords(current, { latest: { git: "h2", gdb: "z" } }), { explored: { git: { at: "t1", hash: "h1" } }, latest: { git: "h2", gdb: "z" } });
     assert.deepEqual(
-      mergeExploreRecords(current, { explored: { git: { at: "t9", hash: "h9" }, gdb: { at: "t2", hash: "h2" } } }),
-      { explored: { git: { at: "t9", hash: "h9" }, gdb: { at: "t2", hash: "h2" } }, latest: { git: "h1" } },
+      mergeExploreRecords(current, { latest: { git: { at: "2026-05-10T14:00:00.000Z", hash: "h2" }, gdb: { at: "2026-05-10T13:00:00.000Z", hash: "z" } } }),
+      { explored: { git: { at: "2026-05-10T12:00:00.000Z", hash: "h1" } }, latest: { git: { at: "2026-05-10T14:00:00.000Z", hash: "h2" }, gdb: { at: "2026-05-10T13:00:00.000Z", hash: "z" } } },
     );
-    assert.deepEqual(current, { explored: { git: { at: "t1", hash: "h1" } }, latest: { git: "h1" } });
+    assert.deepEqual(
+      mergeExploreRecords(current, { latest: { git: { at: "2026-05-10T09:00:00.000Z", hash: "h0" } } }),
+      { explored: { git: { at: "2026-05-10T12:00:00.000Z", hash: "h1" } }, latest: { git: { at: "2026-05-10T13:00:00.000Z", hash: "h1" } } },
+      "an older sighting does not overwrite a newer one (a session whose view predates it, ticket 308)");
+    assert.deepEqual(
+      mergeExploreRecords(current, { latest: { git: { at: "2026-05-10T13:00:00.000Z", hash: "h1" } } }),
+      { explored: { git: { at: "2026-05-10T12:00:00.000Z", hash: "h1" } }, latest: { git: { at: "2026-05-10T13:00:00.000Z", hash: "h1" } } },
+      "an equally old sighting takes the update");
+    assert.deepEqual(
+      mergeExploreRecords(current, { explored: { git: { at: "2026-06-01T00:00:00.000Z", hash: "h9" }, gdb: { at: "2026-05-10T12:00:00.000Z", hash: "h2" } }, latest: { git: { at: "2026-05-10T09:00:00.000Z", hash: "h0" } } }),
+      { explored: { git: { at: "2026-06-01T00:00:00.000Z", hash: "h9" }, gdb: { at: "2026-05-10T12:00:00.000Z", hash: "h2" } }, latest: { git: { at: "2026-05-10T13:00:00.000Z", hash: "h1" } } },
+    );
+    assert.deepEqual(current, { explored: { git: { at: "2026-05-10T12:00:00.000Z", hash: "h1" } }, latest: { git: { at: "2026-05-10T13:00:00.000Z", hash: "h1" } } }, "the inputs are unchanged");
   });
 });

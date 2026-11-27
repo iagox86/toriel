@@ -119,7 +119,7 @@ Type `/` for commands; tab completes them and their arguments, `/help` lists the
 
 `/comment <text>` keeps a longer note to yourself about a session (why it exists, where it stands). It is not drawn in the list, but `/filter` and `ctrl-f` search it. With no text the switcher puts the current comment in the box to edit; `-c` removes it.
 
-`/mcp explore <server>` asks the session's agent to introspect one MCP server and write a skill for it. Bare `/mcp explore` does the same for every configured, connected server whose skill has gone stale, all at once: its server's tools changed after the explore that wrote the skill, or the last explore was 30 or more days ago. Servers that are not connected are skipped with a `/mcp reconnect` hint, and the `mcp-skill-stale` doctor check reports the same from a terminal.
+`/mcp explore <server>` asks the session's agent to introspect one MCP server and write a skill for it. Bare `/mcp explore` does the same for every configured, connected server whose skill has gone stale, all at once: its server's tools changed after the explore that wrote the skill, or the last explore was 30 or more days ago. Servers that are not connected are skipped with a `/mcp reconnect` hint, and servers switched off in mcp.yaml (`enabled: false`) are left alone either way, as the doctor's `mcp-skill-stale` check also does when it reports stale skills from a terminal.
 
 `/btw <question>` asks a copy of the session (it has read the whole conversation, but has no tools) a side question in the background while you keep working. The answer opens in a panel: `c` copies it, `s` saves it to `~/.local/share/toriel/btw/`, any other key closes. The session never sees the question or the answer.
 

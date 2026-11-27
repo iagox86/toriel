@@ -16,7 +16,15 @@ describe("mcpExplorePrompt", () => {
     assert.match(p, /update it rather than overwriting/i);
   });
 
-  it("points at the memory extension's skills folder first, a filesystem-safe dir name, the pi skill format, and the description frontmatter", () => {
+  it("puts the skill under a directory named to contain the server's name, so the pairing finds it, and keeps the name filesystem-safe", () => {
+    const p = mcpExplorePrompt("freecad");
+    assert.match(p, /whose name contains the server's name/);
+    assert.match(p, /gdb-mcp for gdb/, "an example of a containing name (not a topic name)");
+    assert.match(p, /pair the skill with the server/);
+    assert.match(p, /filesystem-safe/i);
+  });
+
+  it("points at the memory extension's skills folder first, the pi skill format, and the description frontmatter", () => {
     const p = mcpExplorePrompt("freecad");
     assert.match(p, /pi-hermes-memory\/skills/i);
     assert.match(p, /skills\/ folder/i);
@@ -60,10 +68,11 @@ describe("mcpExploreAllPrompt", () => {
     assert.match(all, /resources if it has any/i);
   });
 
-  it("keeps the single-server rules: same skills-directory placement, the cap, the tool_search line after the frontmatter", () => {
+  it("keeps the single-server rules: same skills-directory placement with the server's name in the dir name, the cap, the tool_search line after the frontmatter", () => {
     assert.match(all, /single-server prompt/i);
     assert.match(all, /pi-hermes-memory\/skills/i);
     assert.match(all, /skills\/ folder/i);
+    assert.match(all, /whose name contains the server's name/i);
     assert.match(all, /filesystem-safe/i);
     assert.match(all, /about 4 KB at most/);
     assert.match(all, /frontmatter/);

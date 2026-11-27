@@ -14,19 +14,25 @@
 // TORIEL_MCP_SUMMARIES), so the system prompt's server list does not change when the server connects. The end of each run records
 // the connected servers' summaries for the next session.
 //
-// The end of each run also stamps /mcp explore records (ticket 308; the file in TORIEL_MCP_EXPLORE_RECORDS_FILE): the hash of every
-// connected server's tools as it is now, and, when the run was opened by an /mcp explore prompt, the servers it names stamped with
-// that hash and the time -- so a later reader can tell when a server's skill was last written and whether its tools changed since.
+// At the settle boundary of each run the extension also stamps /mcp explore records (ticket 308; the file in
+// TORIEL_MCP_RECORDS): the hash of every connected server's tools as it is now, whatever the run's outcome -
+// seeing the tools is unconditional - stamped with the session start as the sighting time; and, when the run was
+// opened by an /mcp explore prompt and completed, the servers it names stamped with that hash and the settle
+// time, as the skill's write time -- so a later reader can tell when a server's skill was last written and
+// whether its tools changed since. An aborted run skips pi's agent_before_settle boundary, so its sighting
+// lands from agent_settled.
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { computeToolHashes, explorePromptServerNames, learnSummaries, loadExploreRecords, MCP_DIRECT_ENV, MCP_FILE_ENV, MCP_RECORDS_ENV, MCP_SUMMARIES_ENV, type McpServerConfig, mergeExploreRecords, parseDirectServers, parseMcpYaml, piConfig, probeUrl, redactUrl, saveExploreRecords, type ToolNamespaceInfo, toolServerName } from "./lib/mcp-config.ts";
+import { canonicalize, computeToolHashes, explorePromptServerNames, learnSummaries, loadExploreRecords, MCP_DIRECT_ENV, MCP_FILE_ENV, MCP_RECORDS_ENV, MCP_SUMMARIES_ENV, type McpServerConfig, mergeExploreRecords, parseDirectServers, parseMcpYaml, piConfig, probeUrl, redactUrl, saveExploreRecords, type ToolNamespaceInfo, toolServerName } from "./lib/mcp-config.ts";
 
 // Only the slice of pi's extension API this file uses (see toriel-usage.ts).
 interface Ctx {
   ui?: { notify?(message: string, type?: "info" | "warning" | "error"): void };
 }
+/** How a settled run ended (pi's AgentActivityOutcome). */
+type RunOutcome = "completed" | "aborted" | "error";
 interface Pi {
-  on(event: "session_start" | "agent_end" | "before_agent_start", handler: (event: unknown, ctx: Ctx) => unknown): unknown;
+  on(event: "session_start" | "agent_end" | "before_agent_start" | "agent_before_settle" | "agent_settled", handler: (event: unknown, ctx: Ctx) => unknown): unknown;
   getAllTools?(): ToolNamespaceInfo[];
   getActiveTools?(): string[];
   registerMcpServer?(name: string, config: Record<string, unknown>): void;
@@ -155,18 +161,18 @@ export function explorePromptServers(event: unknown): string[] | undefined {
   }
 }
 
-/** Stamp the explore records at a run's end (ticket 308): every connected server's fresh tool hash as `latest`, and the servers the run's prompt asked to explore, stamped with the hash their tools hash to now and the time now, as `explored`. One read and one write. Never throws: a lost record only means the server looks stale again later. */
-export function recordExploreRecords(file: string, tools: readonly ToolNamespaceInfo[], names: readonly string[]): void {
+/** Stamp the explore records at a run's settle (ticket 308): every connected server's fresh tool hash as `latest`, with `sightedAt` (when this session's view of its servers was set up) as its sighting time, so a sighting from before the skill's write is not evidence in the staleness check; and the servers an explore prompt named, stamped with the hash their tools hash to now and the time now, as `explored`. One read and one write; no write when nothing changed (a session that settles often must not widen the read-merge-write race). Never throws: a lost record only means the server looks stale again later. */
+export function recordExploreRecords(file: string, tools: readonly ToolNamespaceInfo[], names: readonly string[], sightedAt: string): void {
   try {
+    const current = loadExploreRecords(file);
     const hashes = computeToolHashes(tools);
-    const at = new Date().toISOString();
-    saveExploreRecords(
-      file,
-      mergeExploreRecords(loadExploreRecords(file), {
-        latest: hashes,
-        explored: Object.fromEntries(names.filter((n) => n in hashes).map((n) => [n, { at, hash: hashes[n] }])),
-      }),
-    );
+    const merged = mergeExploreRecords(current, {
+      latest: Object.fromEntries(Object.keys(hashes).map((n) => [n, { hash: hashes[n], at: sightedAt }])),
+      explored: Object.fromEntries(names.filter((n) => n in hashes).map((n) => [n, { at: new Date().toISOString(), hash: hashes[n] }])),
+    });
+    if (JSON.stringify(canonicalize(merged)) !== JSON.stringify(canonicalize(current))) {
+      saveExploreRecords(file, merged);
+    }
   } catch {
     // see above
   }
@@ -196,10 +202,14 @@ export default function (pi: Pi): void {
   }
   const summariesFile = process.env[MCP_SUMMARIES_ENV];
   const recordsFile = process.env[MCP_RECORDS_ENV];
-  // The servers the run's opening prompt asked to explore: set when a run starts, consumed and cleared at its end.
+  // The servers the run's opening prompt asked to explore: set when a run starts, consumed and cleared at its settle.
   let pendingExplore: string[] | undefined;
+  // When this session's view of its servers was set up: the sighting time `latest` stamps carry, so the staleness
+  // check can tell a session whose view predates an explore (not evidence) from one that connected after it.
+  let sightedAt = new Date().toISOString();
   pi.on("session_start", async (_event, ctx) => {
     try {
+      sightedAt = new Date().toISOString();
       const { servers, problems } = loadServers(file);
       if (problems.length > 0) {
         ctx.ui?.notify?.(`mcp.yaml (${file}):\n${problems.map((p) => `  ${p}`).join("\n")}`, "warning");
@@ -220,9 +230,20 @@ export default function (pi: Pi): void {
     pi.on("agent_end", () => recordSummaries(summariesFile, file, pi.getAllTools?.() ?? []));
   }
   if (recordsFile) {
-    pi.on("agent_end", () => {
-      recordExploreRecords(recordsFile, pi.getAllTools?.() ?? [], pendingExplore ?? []);
+    const stamp = (names: readonly string[]): void => {
+      recordExploreRecords(recordsFile, pi.getAllTools?.() ?? [], names, sightedAt);
       pendingExplore = undefined;
+    };
+    pi.on("agent_before_settle", (event) => {
+      // the boundary is the only place the outcome is said: an explore skill is stamped only for a run that completed, while what the tools looked like is recorded whatever ended the run
+      stamp((event as { outcome?: RunOutcome }).outcome === "completed" ? (pendingExplore ?? []) : []);
+      return undefined;
+    });
+    pi.on("agent_settled", (event) => {
+      // an aborted run skips agent_before_settle (it goes agent_end -> agent_settled), so its sighting lands here
+      if ((event as { aborted?: boolean }).aborted === true) {
+        stamp([]);
+      }
     });
   }
   pi.registerCommand?.(UP_COMMAND, {

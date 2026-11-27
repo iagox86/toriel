@@ -1222,7 +1222,7 @@ export class SessionCommands {
     await this.h.session.prompt(mcpExplorePrompt(server));
   }
 
-  /** Bare /mcp explore (ticket 330): re-explore every configured, connected server whose skill is stale (no skill yet, no explore record, the server's tools changed after the explore that wrote it, or the record is at least MCP_SKILL_STALE_DAYS old). Needs a live child (liveMeta), like the named form; sends the combined prompt through the ordinary prompt path. */
+  /** Bare /mcp explore (ticket 330): re-explore every configured, connected server whose skill is stale (no skill yet, no explore record, the server's tools changed after the explore that wrote it, or the record is at least MCP_SKILL_STALE_DAYS old) and that the owner has not switched off in mcp.yaml (`enabled: false`). Needs a live child (liveMeta), like the named form; sends the combined prompt through the ordinary prompt path. */
   private async mcpExploreAll(): Promise<void> {
     const meta = await this.liveMeta();
     if (!meta) {
@@ -1244,7 +1244,11 @@ export class SessionCommands {
     const names: string[] = [];
     const skipped: string[] = [];
     for (const name of configs.keys()) {
-      const input: StalenessInput = { server: name, hasSkill: skillForServer(skillsDirs, name) !== undefined, record: records.explored[name], latestHash: records.latest[name], now };
+      const entry = configs.get(name)?.entry;
+      if (entry?.enabled === false) {
+        continue; // a server the owner switched off is not this command's business, even if its skill is stale or it shows connected
+      }
+      const input: StalenessInput = { hasSkill: skillForServer(skillsDirs, name) !== undefined, record: records.explored[name], latest: records.latest[name], now };
       const verdict = stalenessVerdict(input);
       if (verdict.kind === "fresh") {
         continue;

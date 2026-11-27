@@ -451,20 +451,26 @@ export function collectFindings(opts: DoctorOptions = {}): Finding[] {
     }
   }
   // toriel's MCP config (tickets 209, 216): a bad entry is left out of the session, so say which and why
-  for (const problem of readMcpYaml(mcpFile).problems) {
+  // (parsed once here; the staleness loop below reads the same result)
+  const mcpParsed = readMcpYaml(mcpFile);
+  for (const problem of mcpParsed.problems) {
     out.push({ id: "mcp-yaml", level: "recommended", message: `${mcpFile}: ${problem}`, manual: "the file is yours; doctor will not guess what an entry should be" });
   }
   // a skill an /mcp explore wrote goes stale (tickets 308, 330): the server's tools changed after the explore that
-  // wrote it, or the record is at least MCP_SKILL_STALE_DAYS old. Servers without a paired skill are not reported
-  // (/mcp list shows those), and the doctor cannot know whether a server is connected.
+  // wrote it, or the record is at least MCP_SKILL_STALE_DAYS old. Servers without a paired skill, or switched off
+  // in mcp.yaml (`enabled: false` - the owner's choice, however stale or connected), are not reported
+  // (/mcp list shows the ones without a skill), and the doctor cannot know whether a server is connected.
   const skillDirs = piSkillsDirs(opts.agentDir ?? piAgentDir(env));
   const skillsRecords = loadExploreRecords(opts.mcpRecords ?? MCP_EXPLORE_RECORDS_FILE);
   const skillsNow = new Date();
-  for (const name of Object.keys(readMcpYaml(mcpFile).servers)) {
+  for (const [name, server] of Object.entries(mcpParsed.servers)) {
+    if (server.enabled === false) {
+      continue;
+    }
     if (skillForServer(skillDirs, name) === undefined) {
       continue;
     }
-    const input: StalenessInput = { server: name, hasSkill: true, record: skillsRecords.explored[name], latestHash: skillsRecords.latest[name], now: skillsNow };
+    const input: StalenessInput = { hasSkill: true, record: skillsRecords.explored[name], latest: skillsRecords.latest[name], now: skillsNow };
     const verdict = stalenessVerdict(input);
     if (verdict.kind === "fresh") {
       continue;

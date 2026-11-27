@@ -77,10 +77,11 @@ describe("the MCP file variable (tickets 209, 216)", () => {
     assert.equal(childEnv({}, "/sock", { TORIEL_MCP_SUMMARIES: "/leak" }).TORIEL_MCP_SUMMARIES, undefined, "never inherited from the daemon");
   });
 
-  it("names the file of /mcp explore records only when the daemon gives one (ticket 308)", () => {
-    assert.equal(childEnv({}, "/sock", {}, undefined, { mcpRecords: "/state/mcp-explore-records.json" }).TORIEL_MCP_EXPLORE_RECORDS_FILE, "/state/mcp-explore-records.json");
-    assert.equal(childEnv({}, "/sock", {}, undefined, {}).TORIEL_MCP_EXPLORE_RECORDS_FILE, undefined);
-    assert.equal(childEnv({}, "/sock", { TORIEL_MCP_EXPLORE_RECORDS_FILE: "/leak" }).TORIEL_MCP_EXPLORE_RECORDS_FILE, undefined, "never inherited from the daemon");
+  it("names the file of /mcp explore records only when the daemon gives one, under its own name (ticket 308)", () => {
+    assert.equal(childEnv({}, "/sock", {}, undefined, { mcpRecords: "/state/mcp-explore-records.json" }).TORIEL_MCP_RECORDS, "/state/mcp-explore-records.json");
+    assert.equal(childEnv({}, "/sock", {}, undefined, {}).TORIEL_MCP_RECORDS, undefined);
+    assert.equal(childEnv({}, "/sock", { TORIEL_MCP_RECORDS: "/leak" }).TORIEL_MCP_RECORDS, undefined, "never inherited from the daemon");
+    assert.equal(childEnv({}, "/sock", { TORIEL_MCP_EXPLORE_RECORDS_FILE: "/leak" }).TORIEL_MCP_EXPLORE_RECORDS_FILE, "/leak", "the daemon-side override is this daemon's own setting, not an owned child variable");
   });
 });
 

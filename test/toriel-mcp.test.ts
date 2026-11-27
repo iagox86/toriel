@@ -246,41 +246,75 @@ describe("explore records (ticket 308)", () => {
   const recordsFile = (): string => path.join(fs.mkdtempSync(path.join(os.tmpdir(), "toriel-mcprec-")), "state", "mcp-explore-records.json");
   const rtool = (name: string, server: string, parameters?: unknown) => ({ name, namespace: { aliases: [server] }, parameters });
 
-  it("listens for run ends when the daemon named a records file, even without a summaries file", () => {
-    assert.deepEqual(load(yamlFile("servers: {}\n"), undefined, [], recordsFile()).events, ["session_start", "before_agent_start", "agent_end"]);
+  it("listens for the settle boundary when the daemon named a records file, even without a summaries file", () => {
+    assert.deepEqual(load(yamlFile("servers: {}\n"), undefined, [], recordsFile()).events, ["session_start", "before_agent_start", "agent_before_settle", "agent_settled"]);
   });
 
-  it("stamps the server an explore prompt named with the hash its tools hash to at the run's end, and refreshes latest on later runs", async () => {
+  it("stamps the servers an explore prompt named at the settle of a completed run, and the tools it saw whatever the outcome, without rewriting an unchanged file", async () => {
     const file = recordsFile();
     const tools = [rtool("mcp__git__git_read", "git", { type: "object" }), rtool("mcp__gdb__gdb_start", "gdb")];
     const x = load(yamlFile("servers:\n  git: { command: g }\n  gdb: { command: d }\n"), undefined, tools, file);
     await x.handlers[1]?.({ messageType: "user", prompt: mcpExplorePrompt("git") }, {} as never);
-    await x.handlers[2]?.({}, {} as never);
+    await x.handlers[2]?.({ type: "agent_before_settle", outcome: "completed" }, {} as never);
     const fresh = computeToolHashes(tools);
     const records = loadExploreRecords(file);
-    assert.deepEqual(records.latest, fresh);
+    assert.equal(records.latest.git?.hash, fresh.git);
+    assert.match(records.latest.git?.at ?? "/", /^\d{4}-\d{2}-\d{2}T/, "a sighting is stamped with the time the session's view was set up");
     assert.deepEqual(Object.keys(records.explored), ["git"]);
     assert.equal(records.explored.git?.hash, fresh.git);
     assert.match(records.explored.git?.at ?? "/", /^\d{4}-\d{2}-\d{2}T/, "stamped with the run's end time");
     await x.handlers[1]?.({ messageType: "user", prompt: "fix a bug in the parser" }, {} as never);
-    await x.handlers[2]?.({}, {} as never);
-    assert.deepEqual(loadExploreRecords(file).explored, records.explored, "a run the prompt did not open as explore leaves the stamp");
+    await x.handlers[2]?.({ type: "agent_before_settle", outcome: "error" }, {} as never);
     await x.handlers[1]?.({ messageType: "custom" }, {} as never);
-    await x.handlers[2]?.({}, {} as never);
-    assert.deepEqual(loadExploreRecords(file).explored, records.explored, "a run opened by a custom message is not an explore run");
-    assert.deepEqual(loadExploreRecords(file).latest, fresh);
+    await x.handlers[2]?.({ type: "agent_before_settle", outcome: "completed" }, {} as never);
+    assert.deepEqual(loadExploreRecords(file).explored, records.explored, "a run the prompt did not open as explore leaves the stamp");
+    // an aborted run skips pi's agent_before_settle and goes to agent_settled: the skill is never marked written
+    await x.handlers[1]?.({ messageType: "user", prompt: mcpExplorePrompt("git") }, {} as never);
+    await x.handlers[3]?.({ type: "agent_settled", aborted: true }, {} as never);
+    assert.deepEqual(loadExploreRecords(file).explored, records.explored, "an aborted explore run does not mark the skill written");
+  });
+
+  it("writes nothing at the settle when the run records nothing new", async () => {
+    const file = recordsFile();
+    const tools = [rtool("mcp__git__git_read", "git", { type: "object" })];
+    const x = load(yamlFile("servers:\n  git: { command: g }\n"), undefined, tools, file);
+    await x.handlers[1]?.({ messageType: "user", prompt: "hello" }, {} as never);
+    await x.handlers[2]?.({ type: "agent_before_settle", outcome: "completed" }, {} as never);
+    const first = fs.readFileSync(file, "utf8");
+    await x.handlers[1]?.({ messageType: "user", prompt: "hello again" }, {} as never);
+    await x.handlers[2]?.({ type: "agent_before_settle", outcome: "completed" }, {} as never);
+    assert.equal(fs.readFileSync(file, "utf8"), first, "a session that saw the same tools again wrote nothing (it stamps the same sighting time)");
+  });
+
+  it("records a run's tools from agent_settled when the run was aborted, and stamps no explored name", async () => {
+    const file = recordsFile();
+    const tools = [rtool("mcp__git__git_read", "git")];
+    const x = load(yamlFile("servers:\n  git: { command: g }\n"), undefined, tools, file);
+    await x.handlers[3]?.({ type: "agent_settled", aborted: true }, {} as never);
+    assert.equal(loadExploreRecords(file).latest.git?.hash, computeToolHashes(tools).git);
+    assert.deepEqual(loadExploreRecords(file).explored, {});
+  });
+
+  it("does not let a sighting older than the recorded one overwrite it, and does not write when it cannot", async () => {
+    const file = recordsFile();
+    saveExploreRecords(file, { explored: {}, latest: { git: { at: new Date(Date.now() + 60_000).toISOString(), hash: "h-newer" } } });
+    const tools = [rtool("mcp__git__git_read", "git")];
+    const x = load(yamlFile("servers:\n  git: { command: g }\n"), undefined, tools, file);
+    await x.handlers[2]?.({ type: "agent_before_settle", outcome: "completed" }, {} as never);
+    assert.equal(loadExploreRecords(file).latest.git?.hash, "h-newer", "this session's view was set up before that sighting");
   });
 
   it("keeps records of servers this run does not touch, and stamps no explored name that has no tools", async () => {
     const file = recordsFile();
-    saveExploreRecords(file, { explored: { gdb: { at: "t0", hash: "old" } }, latest: { gdb: "old" } });
+    saveExploreRecords(file, { explored: { gdb: { at: "t0", hash: "old" } }, latest: { gdb: { at: "t0", hash: "old" } } });
     const tools = [rtool("mcp__git__git_read", "git", { type: "object" })];
     const x = load(yamlFile("servers:\n  git: { command: g }\n"), undefined, tools, file);
     await x.handlers[1]?.({ messageType: "user", prompt: mcpExploreAllFirstLine(["git", "gdb"]) }, {} as never);
-    await x.handlers[2]?.({}, {} as never);
+    await x.handlers[2]?.({ type: "agent_before_settle", outcome: "completed" }, {} as never);
     const records = loadExploreRecords(file);
-    assert.deepEqual(records.latest, { gdb: "old", git: computeToolHashes(tools).git }, "latest takes the fresh hashes and keeps a server this run did not see");
-    assert.equal(records.explored.git?.hash, records.latest.git);
+    assert.equal(records.latest.git?.hash, computeToolHashes(tools).git, "latest takes the fresh hash of a server this run saw");
+    assert.deepEqual(records.latest.gdb, { at: "t0", hash: "old" }, "a server this run did not see keeps its sighting");
+    assert.equal(records.explored.git?.hash, records.latest.git?.hash);
     assert.deepEqual(records.explored.gdb, { at: "t0", hash: "old" }, "gdb has no tools this run: its stamp is kept, not refreshed");
     assert.deepEqual(Object.keys(records.explored).sort(), ["gdb", "git"]);
   });
@@ -288,7 +322,7 @@ describe("explore records (ticket 308)", () => {
   it("never throws when the records file cannot be written", () => {
     const blocked = path.join(yamlFile(""), "under-a-file", "s.json");
     const x = load(yamlFile("servers:\n  git: { command: g }\n"), undefined, [rtool("mcp__git__git_read", "git")], blocked);
-    assert.doesNotThrow(() => x.handlers[2]?.({}, {} as never));
+    assert.doesNotThrow(() => x.handlers[2]?.({ type: "agent_before_settle", outcome: "completed" }, {} as never));
   });
 });
 
