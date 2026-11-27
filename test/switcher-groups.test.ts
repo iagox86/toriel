@@ -111,7 +111,7 @@ describe("session commands on a group heading", () => {
   it("flags the commands that act on the highlighted session", () => {
     assert.deepEqual(
       flagged.map((c) => c.name).sort(),
-      ["adopt", "comment", "delete", "detach", "group", "park", "rename", "stop", "ungroup"],
+      ["adopt", "comment", "delete", "detach", "goal", "group", "park", "rename", "stop", "ungroup"],
     );
   });
 

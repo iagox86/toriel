@@ -48,12 +48,13 @@ function meta(over: Partial<SessionMeta> = {}): SessionMeta {
   };
 }
 
-function build(opts: { daemon?: SessionMeta[]; files?: LocalSession[]; groups?: GroupsFile; summaries?: Map<string, string> }) {
+function build(opts: { daemon?: SessionMeta[]; files?: LocalSession[]; groups?: GroupsFile; summaries?: Map<string, string>; goals?: Record<string, { text: string; done: boolean }> }) {
   return buildSessionList({
     daemon: opts.daemon ?? [],
     local: new Map((opts.files ?? []).map((l) => [l.path, l])),
     groups: opts.groups ?? { groups: [], assignments: {} },
     summaries: opts.summaries ?? new Map(),
+    goals: opts.goals,
     now: NOW,
   });
 }
@@ -97,6 +98,22 @@ describe("buildSessionList", () => {
     const rows = build({ files: [local("/a.jsonl")] });
     assert.equal(rows[0].state, "inactive");
     assert.equal(rows[0].daemonId, undefined);
+  });
+
+  it("carries the goal from a live meta, and from the broadcast map for a row without one (ticket 258)", () => {
+    const live = build({ daemon: [meta({ sessionFile: "/a.jsonl", sessionId: "uuid-/a.jsonl", goal: "ship the release", goalDone: true })] })[0];
+    assert.equal(live.goal, "ship the release");
+    assert.equal(live.goalDone, true);
+    // asleep since a daemon restart: only the file and the sessions map are left, so the row reads there
+    const asleep = build({
+      files: [local("/a.jsonl")],
+      goals: { "uuid-/a.jsonl": { text: "outlive the restart", done: false } },
+    })[0];
+    assert.equal(asleep.state, "inactive");
+    assert.equal(asleep.goal, "outlive the restart");
+    assert.equal(asleep.goalDone, undefined);
+    const doneRow = build({ files: [local("/a.jsonl")], goals: { "uuid-/a.jsonl": { text: "outlive the restart", done: true } } })[0];
+    assert.equal(doneRow.goalDone, true);
   });
 
   it("marks a crashed child dead with a respawn note", () => {

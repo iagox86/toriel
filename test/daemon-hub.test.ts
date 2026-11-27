@@ -36,7 +36,7 @@ describe("ClientHub.broadcastSessions", () => {
   });
 
   it("sends the hello first to a controller that connects while a list is pending", () => {
-    const hub = new ClientHub(() => [], { type: "hello" } as never);
+    const hub = new ClientHub(() => [], undefined, { type: "hello" } as never);
     const a = fakeSocket();
     hub.broadcastSessions();
     hub.addController(a.socket);

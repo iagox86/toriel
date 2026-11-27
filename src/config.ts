@@ -66,6 +66,8 @@ export const SANDBOX_TMP_DIR = process.env.TORIEL_SANDBOX_TMP_DIR ?? path.join(D
 export const PERMISSIONS_FILE =process.env.TORIEL_PERMISSIONS ?? path.join(DATA_DIR, "toriel", "permissions.json");
 /** The sessions published to chat (ticket 269). */
 export const PUBLISHED_FILE = process.env.TORIEL_PUBLISHED ?? path.join(DATA_DIR, "toriel", "published.json");
+/** One goal text per session (ticket 258). */
+export const GOALS_FILE = process.env.TORIEL_GOALS ?? path.join(DATA_DIR, "toriel", "goals.json");
 export const LINEAGE_FILE =process.env.TORIEL_LINEAGE ?? path.join(DATA_DIR, "toriel", "lineage.json");
 export const SESSION_AGENTS_FILE = process.env.TORIEL_SESSION_AGENTS ?? path.join(DATA_DIR, "toriel", "session-agents.json");
 export const HANDLED_FILE = process.env.TORIEL_HANDLED ?? path.join(DATA_DIR, "toriel", "handled-files.json");

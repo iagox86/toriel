@@ -2,6 +2,7 @@
 // session files into rows, ordering them, and the group/order mutations behind
 // shift-move and group delete. No I/O, no UI - everything takes plain data.
 import * as path from "node:path";
+import type { GoalSummary } from "./goals.ts";
 import { fmtAge, firstMessageLabel } from "./format.ts";
 import { ARCHIVE_GROUP, type GroupsFile, isParked, resolveGroup } from "./groups.ts";
 import type { SessionMeta } from "./shared.ts";
@@ -39,6 +40,8 @@ export interface ListInputs {
   groups: GroupsFile;
   /** Last message text per session key (live descriptions). */
   summaries: Map<string, string>;
+  /** A goal summary per session UUID (ticket 258): the fallback for rows with no live meta (a session asleep since a daemon restart). */
+  goals?: Record<string, GoalSummary>;
   now: number;
 }
 
@@ -70,6 +73,7 @@ export function buildSessionList(inp: ListInputs): SwitcherSession[] {
       state = meta.compacting ? "compacting" : meta.streaming ? "streaming" : meta.dead ? "dead" : "idle";
     }
     const sessionId = meta?.sessionId ?? info?.id;
+    const goalFallback = sessionId ? inp.goals?.[sessionId] : undefined;
     const group = sessionId ? (inp.groups.assignments[sessionId] ?? undefined) : undefined;
     let note: string | undefined;
     if (meta?.pendingDialog) {
@@ -114,6 +118,8 @@ export function buildSessionList(inp: ListInputs): SwitcherSession[] {
       schedules: meta?.schedules,
       published: meta?.published,
       nextFire: meta?.nextFire,
+      goal: meta?.goal ?? goalFallback?.text,
+      goalDone: meta?.goalDone ?? (goalFallback?.done === true ? true : undefined),
       comment: sessionId ? inp.groups.comments?.[sessionId] : undefined,
       age: fmtAge(modified > 0 ? inp.now - modified : 0),
       // parked sessions take the oldest colour whatever their real age

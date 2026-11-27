@@ -61,6 +61,36 @@ const permissionsSpec = (scope: "session" | "all") =>
     complete: (typed: string) => permissionCompletions(typed),
   }) satisfies CommandSpec;
 
+/** /goal is the same command in a session and in the switcher; only its scope differs (this session, or the highlighted one). */
+const goalSpec = (scope: "session" | "switcher") =>
+  ({
+    name: "goal",
+    description: scope === "session" ? "set, show, mark done or clear this session's goal" : "set, show, mark done or clear the highlighted session's goal",
+    needsSession: scope === "switcher",
+    help: `A goal is one short line saying what a session is working towards: the switcher row flags it (dimmed once it is done), and the agent can read or mark it through toriel's goal command from pi. It is kept across restarts, deleted with the session, and a fork copies it.
+
+Actions (typed after /goal; done, clear and get act as the action only as the one whole word):
+  <text>       set it (replaces an earlier goal)
+  set <text>   the same, for a goal that starts with an action word ("set done" sets the word)
+  done         mark it done as the user (an agent picks up the goal state at its next session start)
+  clear        forget it
+  get          show it (the default; plain /goal does this too)
+
+Anything else is the goal text, so "done with refactor" or "clear the cache before deploy" set that as one, word for word.
+
+Examples:
+  /goal fix the flaky build
+  /goal
+  /goal set done                (a goal whose text is the word "done")
+  /goal done
+  /goal done with the refactor  (a goal whose text is that sentence, not a mark-done)
+  /goal clear`,
+    build: (cmd: Command) => {
+      cmd.argument("[action]", "done, clear or get, as the one whole word, marks, forgets or shows; anything else (and text after it) is the goal to set (leave all out to show it)").argument("[text...]", "rest of the goal text after the first word");
+    },
+    complete: async (typed: string) => (typed.trim().includes(" ") ? [] : matching(["set", "done", "clear", "get"], typed)),
+  }) satisfies CommandSpec;
+
 /** /doctor is the same command in a session and in the switcher. */
 const doctorSpec = {
   name: "doctor",
@@ -115,6 +145,7 @@ export const SWITCHER_COMMANDS = [
   { name: "resume", description: "resume a paused scheduled prompt",
     help: "Resumes a paused schedule at its next slot. Also clears one that paused itself after failing to deliver.\n\nExample: /resume 3", build: refArgument("resume") },
   permissionsSpec("all"),
+  goalSpec("switcher"),
   doctorSpec,
   { name: "stop", needsSession: true, description: "stop the highlighted session's process (file kept; respawns on next prompt)",
     help: "Stops the highlighted session's pi process but keeps its file; the next message (or /reload, /model, !command) starts it again. Use it to free memory or MCP servers." },
@@ -391,6 +422,7 @@ export const SESSION_COMMANDS = [
     },
   },
   permissionsSpec("session"),
+  goalSpec("session"),
   doctorSpec,
   { name: "abort", description: "interrupt the running agent",
     help: "Interrupts the agent's current turn, like esc. Messages still queued come back into the box." },

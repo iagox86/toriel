@@ -246,6 +246,7 @@ export async function removeSession(ctx: DaemonContext, s: DaemonSession | undef
       log(`removed ${gone.length} schedule(s) of the deleted session ${uuid}`);
     }
     ctx.published.set(uuid, false);
+    ctx.goals.remove(uuid);
     const grants = ctx.grants.removeSession(uuid);
     if (grants.length > 0) {
       log(`removed ${grants.length} permission grant(s) of the deleted session ${uuid}`);
@@ -474,6 +475,13 @@ export async function handleAdopt(
     grantsCopied = ctx.grants.copySession(parentId, s.sessionId).length;
     if (grantsCopied > 0) {
       log(`session ${s.id} took ${grantsCopied} permission grants from ${parentId}`);
+      ctx.hub.broadcastSessions();
+    }
+  }
+  if (cmd.fork && parentId && s.sessionId) {
+    // the copy keeps the job it was forked from (the goal text, done state included): the rows flag it too
+    if (ctx.goals.copy(parentId, s.sessionId)) {
+      log(`session ${s.id} took its goal from ${parentId}`);
       ctx.hub.broadcastSessions();
     }
   }

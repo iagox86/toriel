@@ -10,6 +10,7 @@ import type { SessionRegistry } from "./daemon-session.ts";
 import type { GrantStore } from "./permissions.ts";
 import type { Presence } from "./presence.ts";
 import type { PublishedStore } from "./published.ts";
+import type { GoalStore } from "./goals.ts";
 import type { Scheduler } from "./scheduler.ts";
 import type { SubagentManager } from "./daemon-subagents.ts";
 import type { ClientCommand } from "./shared.ts";
@@ -28,6 +29,8 @@ export interface DaemonContext {
   watches?: WatchManager;
   /** Sessions published to chat (ticket 269). */
   published: PublishedStore;
+  /** One goal per session (ticket 258). */
+  goals: GoalStore;
   /** Permission grants (docs/permissions.md). */
   grants: GrantStore;
   /** Subagents started by the toriel_agent tool (docs/design.md item 9). */
