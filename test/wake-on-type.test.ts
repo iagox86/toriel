@@ -194,6 +194,24 @@ describe("wakeForTyping", () => {
     await new SessionCommands(broken.host).wakeForTyping();
     assert.deepEqual(broken.notices, ["starting session..."]);
   });
+
+  it("/info never dispatches a spawn, and says there is nothing to describe when there is no viewed session", async () => {
+    const wake = wakeHost({ id: 7, active: false, cwd: "/work/proj" }, async () => ({ woke: true }));
+    (wake.host as { viewing: string | null }).viewing = null;
+    Object.assign(wake.host, { editor: { setText: () => {} } });
+    assert.equal(new SessionCommands(wake.host).run("/info"), true);
+    assert.equal(wake.requests.length, 0, "the session is never started");
+    assert.deepEqual(wake.notices, ["nothing to describe yet - send a message first"]);
+  });
+
+  it("/info renders the card for a sleeping session without starting it", async () => {
+    const panels: Array<{ text: string; actions: unknown }> = [];
+    const wake = wakeHost({ id: 7, sessionFile: WAKE_KEY, active: false, cwd: "/work/proj" }, async () => ({ woke: true }));
+    Object.assign(wake.host, { editor: { setText: () => {} }, infoPanel: { show: (...args: unknown[]) => void panels.push({ text: args[0] as string, actions: args[1] }) }, tui: { requestRender: () => {} } });
+    assert.equal(new SessionCommands(wake.host).run("/info"), true);
+    assert.equal(wake.requests.length, 0, "the sleeping session is never started");
+    assert.ok(panels.length === 1 && panels[0].text.includes("session file"), "the card was drawn");
+  });
 });
 
 /** A session file that looks like one pi wrote `ageMs` ago. */

@@ -38,6 +38,7 @@ import { runPermissions } from "./permission-commands.ts";
 import { addSchedule, addWatch, operateSchedule, showSchedules } from "./schedule-commands.ts";
 import { errText } from "./util.ts";
 import { publishInfo } from "./publish-info.ts";
+import { saveInfo, sessionInfo } from "./session-info.ts";
 import { fmtClock, fmtDuration } from "./when.ts";
 import { log } from "./log.ts";
 
@@ -118,6 +119,7 @@ export class SessionCommands {
       btw: (c) => this.btw(c.args.join(" "), c.opts.model as string | undefined),
       performance: (c) => this.performance(c.opts.model as string | undefined),
       comment: (c) => this.comment(c.args.join(" "), c.opts.clear === true),
+      info: () => this.info(),
       help: () => {
         this.h.infoPanel.show(styleListing(listing(SESSION_COMMANDS)));
         this.h.tui.requestRender();
@@ -668,6 +670,47 @@ export class SessionCommands {
     } catch (err) {
       this.fail("clear", err);
     }
+  }
+
+  /**
+   * /info (ticket 255): a markdown card of this session (file, ids, model, context, settings,
+   * MCP server names) to copy or save for another agent. Does NOT wake a sleeping session:
+   * it reads the daemon's cached session list and mcp.yaml (names only - never the entries,
+   * which can hold tokens), so the values are the last known state and may be stale.
+   */
+  private info(): void {
+    const key = this.h.viewing;
+    if (!key?.startsWith("/")) {
+      this.h.notify("nothing to describe yet - send a message first");
+      return;
+    }
+    const meta = this.viewedMeta();
+    if (!meta?.sessionFile) {
+      this.h.notify("no session info yet - toriel has not listed this session");
+      return;
+    }
+    const mcp = readMcpYaml();
+    const text = sessionInfo({
+      meta,
+      firstMessage: this.h.local.get(key)?.firstMessage || undefined,
+      mcpServers: Object.entries(mcp.servers).map(([name, entry]) => ({ name, enabled: entry.enabled !== false })),
+      mcpProblems: mcp.problems.length,
+    });
+    this.h.infoPanel.show(text, [
+      { key: "c", label: "copies", run: () => void this.h.copyText(text).then((r) => this.h.notify(r === true ? "info: copied" : `info: copy failed (${r})`)) },
+      {
+        key: "s",
+        label: "saves to a file",
+        run: () => {
+          try {
+            this.h.notify(`info: saved to ${saveInfo(text)}`);
+          } catch (err) {
+            this.fail("info", err);
+          }
+        },
+      },
+    ]);
+    this.h.tui.requestRender();
   }
 
   /**
