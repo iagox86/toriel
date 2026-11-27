@@ -7,8 +7,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { parseArgs } from "node:util";
-import { chooseSteps, type LockOwner, lockIsStale, pickLines, type Step, type TestSummary, testSummaryLines } from "./check-lib.ts";
-import { allTestFiles, REPO_ROOT, withoutSessionEnv } from "./test-env.ts";
+import { acquireLock, chooseSteps, pickLines, signalExitCode, type Step, type TestSummary, testSummaryLines } from "./check-lib.ts";
+import { allTestFiles, fileArgFrom, REPO_ROOT, resolveFileArg, withoutSessionEnv } from "./test-env.ts";
 
 const HELP = `usage: npm run check [-- [--typecheck] [--lint] [--tests] [--name <pattern>] [test files...]]
 
@@ -22,7 +22,7 @@ Test runs from different worktrees take turns (a lock in ~/.cache/toriel), so no
 
 const LOG = path.join(REPO_ROOT, ".toriel-check.log");
 const SUMMARY = path.join(REPO_ROOT, ".toriel-check-summary.log");
-const LOCK = path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache"), "toriel", "check.lock");
+const LOCK_DIR = path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache"), "toriel");
 
 function parse(): { steps: Step[]; files: string[]; name?: string } | undefined {
   const { values, positionals } = parseArgs({
@@ -34,11 +34,7 @@ function parse(): { steps: Step[]; files: string[]; name?: string } | undefined 
     return undefined;
   }
   // npm runs scripts from the package root; INIT_CWD is where the user (or agent) was
-  const from = process.env.INIT_CWD ?? process.cwd();
-  const files = positionals.map((f) => {
-    const own = path.resolve(from, f);
-    return path.relative(REPO_ROOT, fs.existsSync(own) ? own : path.resolve(REPO_ROOT, f));
-  });
+  const files = positionals.map((f) => resolveFileArg(f, fileArgFrom(process.env, process.cwd())));
   for (const f of files) {
     if (!fs.existsSync(path.join(REPO_ROOT, f))) {
       throw new Error(`no such test file: ${f}`);
@@ -67,71 +63,16 @@ function run(cmd: string, args: string[], log: fs.WriteStream): Promise<{ code: 
   });
 }
 
-function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
-function readOwner(): LockOwner | undefined {
-  try {
-    return JSON.parse(fs.readFileSync(LOCK, "utf8")) as LockOwner;
-  } catch {
-    return undefined;
-  }
-}
-
-/** Take the machine-wide test lock, waiting (and saying so once) while another run holds it. */
-async function lock(): Promise<() => void> {
-  fs.mkdirSync(path.dirname(LOCK), { recursive: true });
-  let told = false;
-  for (;;) {
-    try {
-      fs.writeFileSync(LOCK, JSON.stringify({ pid: process.pid, root: REPO_ROOT, startedAt: Date.now() } satisfies LockOwner), { flag: "wx" });
-      const release = (): void => {
-        if (readOwner()?.pid === process.pid) {
-          fs.rmSync(LOCK, { force: true });
-        }
-      };
-      process.on("exit", release);
-      for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-        process.on(sig, () => {
-          release();
-          // the usual shell convention: 128 + the signal number
-          process.exit(128 + { SIGINT: 2, SIGTERM: 15, SIGHUP: 1 }[sig]);
-        });
-      }
-      return release;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
-        throw err;
-      }
-    }
-    const owner = readOwner();
-    if (lockIsStale(owner, alive, Date.now())) {
-      // the takeover is one atomic step: the rename either moves the dead lock (gone for the next racer, whose own
-      // rename then throws) or throws because another run moved it a moment ago - rmSync would let two racers that
-      // both saw the lock stale take it one after the other
-      try {
-        fs.renameSync(LOCK, `${LOCK}.stale-${process.pid}-${Math.random().toString(36).slice(2)}`);
-        continue;
-      } catch {
-        // lost the race: fall through and read the lock again
-      }
-    }
-    if (!told && owner) {
-      console.log(`waiting for another test run to finish (pid ${owner.pid}, ${owner.root})`);
-      told = true;
-    }
-    await new Promise((r) => setTimeout(r, 1000));
-  }
-}
-
 async function tests(args: { files: string[]; name?: string }, log: fs.WriteStream): Promise<boolean> {
-  const release = await lock();
+  const release = await acquireLock(LOCK_DIR, REPO_ROOT);
+  process.on("exit", release);
+  for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+    process.on(sig, () => {
+      release();
+      // the usual shell convention: 128 + the signal number
+      process.exit(signalExitCode(sig));
+    });
+  }
   const started = Date.now();
   fs.rmSync(SUMMARY, { force: true });
   const files = args.files.length > 0 ? args.files : allTestFiles();

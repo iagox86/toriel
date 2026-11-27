@@ -1,9 +1,60 @@
-// `npm run check` (ticket 340): which steps run, when the test lock is abandoned, and what the summary prints.
+// `npm run check` (ticket 340): which steps run, when the test lock is abandoned and taken over, what the summary prints, and
+// how npm test classifies its arguments.
+import { spawn } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
-import { chooseSteps, firstLine, LOCK_STALE_MS, lockIsStale, MAX_FAILURES_SHOWN, pickLines, testSummaryLines, type TestSummary } from "../scripts/check-lib.ts";
+import { describe, it, type TestContext } from "node:test";
+import { acquireLock, chooseSteps, firstLine, LOCK_NAME, LOCK_STALE_MS, lockIsStale, MAX_FAILURES_SHOWN, pickLines, realDeps, readOwner, signalExitCode, TOKEN_NAME, type LockDeps, type LockOwner, testSummaryLines, type TestSummary } from "../scripts/check-lib.ts";
 import checkReporter, { type EventData } from "../scripts/check-reporter.ts";
-import { isTestFileArg } from "../scripts/test-env.ts";
+import { fileArgFrom, isTestFileArg, REPO_ROOT, resolveFileArg } from "../scripts/test-env.ts";
+
+/** A provably dead pid: a child node process that has already exited (asserted dead, so a freak pid reuse fails loudly). */
+const deadPid = async (): Promise<number> => {
+  const child = spawn(process.execPath, ["-e", ""]);
+  const pid = child.pid;
+  if (pid === undefined) {
+    throw new Error("the child had no pid");
+  }
+  await new Promise<void>((resolve) => child.once("exit", () => resolve()));
+  if (realDeps.alive(pid)) {
+    throw new Error("the fixture pid is somehow alive again");
+  }
+  return pid;
+};
+
+/** A temp dir for lock files, removed with the test: the real ~/.cache/toriel is never touched. */
+const tempDir = (t: TestContext): string => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "toriel-check-lock-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return dir;
+};
+
+/** Seed a lock or token file in `dir` and return its path for the content assertions. */
+const seedOwner = (dir: string, name: string, owner: LockOwner): string => {
+  const file = path.join(dir, name);
+  fs.writeFileSync(file, JSON.stringify(owner));
+  return file;
+};
+
+/** LockDeps that never sleep; wait doubles as a runaway guard so a buggy polling loop fails fast instead of hanging. */
+function testDeps(over: Partial<LockDeps> = {}): LockDeps {
+  let waits = 0;
+  return {
+    alive: realDeps.alive,
+    now: realDeps.now,
+    tell: () => {},
+    wait: () => {
+      waits += 1;
+      if (waits > 100) {
+        throw new Error("acquireLock is still polling after 100 loops");
+      }
+      return Promise.resolve();
+    },
+    ...over,
+  };
+}
 
 describe("npm test's file arguments", () => {
   it("sees a test file argument but not a flag or a flag's value, so flags alone still run every file", () => {
@@ -13,6 +64,28 @@ describe("npm test's file arguments", () => {
     assert.equal(isTestFileArg("--test-name-pattern=foo.ts"), false);
     assert.equal(isTestFileArg("--test-name-pattern"), false);
     assert.equal(isTestFileArg("-w"), false);
+    assert.equal(isTestFileArg("test/a.test.ts", "-w"), true);
+    // the space-separated documented form: the value rides on no dash, so the flag must consume it
+    assert.equal(isTestFileArg("foo.ts", "--test-name-pattern"), false);
+    assert.equal(isTestFileArg("foo.ts", "--test-reporter-destination"), false);
+    assert.equal(isTestFileArg("foo.ts", "--test-concurrency"), false);
+    assert.equal(isTestFileArg("foo.ts", "--test-name-pattern=foo.ts"), true);
+  });
+
+  it("does not count the token of a space-separated value-taking flag as a file either", () => {
+    assert.equal(isTestFileArg("foo.ts", "--test-skip-pattern"), false);
+    assert.equal(isTestFileArg("foo.ts", "--test-shard"), false);
+    assert.equal(isTestFileArg("foo.ts", "--test-timeout"), false);
+  });
+
+  it("resolves a file argument from INIT_CWD when it exists there, and from the repo root otherwise", (t) => {
+    assert.equal(fileArgFrom({ INIT_CWD: "/x" }, "/y"), "/x");
+    assert.equal(fileArgFrom({}, "/y"), "/y");
+    const outside = tempDir(t);
+    fs.writeFileSync(path.join(outside, "probe.test.ts"), "");
+    assert.equal(resolveFileArg("probe.test.ts", outside), path.relative(REPO_ROOT, path.join(outside, "probe.test.ts")));
+    assert.equal(resolveFileArg("test/check.test.ts", outside), "test/check.test.ts");
+    assert.equal(resolveFileArg("test/check.test.ts", REPO_ROOT), "test/check.test.ts");
   });
 });
 
@@ -63,6 +136,70 @@ describe("the test lock", () => {
     assert.equal(lockIsStale(owner, () => false, now), true);
     assert.equal(lockIsStale(undefined, () => true, now), true);
     assert.equal(lockIsStale({ ...owner, startedAt: now - LOCK_STALE_MS - 1 }, () => true, now), true);
+  });
+});
+
+describe("the lock takeover", () => {
+  const FRESH = Date.now();
+
+  it("takes over a lock whose owner is dead, removing the old file and leaving nothing else behind", async (t) => {
+    const dir = tempDir(t);
+    seedOwner(dir, LOCK_NAME, { pid: await deadPid(), root: "/old", startedAt: FRESH });
+    const release = await acquireLock(dir, "/new", testDeps({ now: () => FRESH }));
+    assert.deepEqual(readOwner(path.join(dir, LOCK_NAME)), { pid: process.pid, root: "/new", startedAt: FRESH });
+    assert.deepEqual(fs.readdirSync(dir), [LOCK_NAME]);
+    release();
+    assert.equal(fs.existsSync(path.join(dir, LOCK_NAME)), false);
+  });
+
+  it("waits for a lock whose owner is alive and never touches the file", async (t) => {
+    const dir = tempDir(t);
+    const owner = { pid: 424242, root: "/live", startedAt: FRESH - 1000 };
+    seedOwner(dir, LOCK_NAME, owner);
+    const told: string[] = [];
+    await assert.rejects(acquireLock(dir, "/new", testDeps({ alive: () => true, now: () => FRESH, tell: (m) => told.push(m) })));
+    assert.deepEqual(readOwner(path.join(dir, LOCK_NAME)), owner);
+    assert.deepEqual(fs.readdirSync(dir), [LOCK_NAME]);
+    assert.deepEqual(told, ["waiting for another test run to finish (pid 424242, /live)"]);
+  });
+
+  it("waits instead of taking over while another live process holds the takeover token", async (t) => {
+    const dir = tempDir(t);
+    const lockOwner = { pid: await deadPid(), root: "/dead", startedAt: FRESH };
+    const tokenOwner = { pid: process.pid, root: "/taker", startedAt: FRESH };
+    seedOwner(dir, LOCK_NAME, lockOwner);
+    seedOwner(dir, TOKEN_NAME, tokenOwner);
+    await assert.rejects(acquireLock(dir, "/new", testDeps({ alive: (p) => p === process.pid, now: () => FRESH })));
+    assert.deepEqual(readOwner(path.join(dir, LOCK_NAME)), lockOwner);
+    assert.deepEqual(readOwner(path.join(dir, TOKEN_NAME)), tokenOwner);
+    assert.deepEqual(fs.readdirSync(dir).sort(), [LOCK_NAME, TOKEN_NAME]);
+  });
+
+  it("clears a token whose holder is dead and then takes the lock", async (t) => {
+    const dir = tempDir(t);
+    seedOwner(dir, TOKEN_NAME, { pid: await deadPid(), root: "/crashed", startedAt: FRESH });
+    const release = await acquireLock(dir, "/new", testDeps({ now: () => FRESH }));
+    assert.deepEqual(readOwner(path.join(dir, LOCK_NAME)), { pid: process.pid, root: "/new", startedAt: FRESH });
+    assert.deepEqual(fs.readdirSync(dir), [LOCK_NAME]);
+    release();
+    assert.equal(fs.existsSync(path.join(dir, LOCK_NAME)), false);
+  });
+
+  it("releases the lock only while it still names this pid", async (t) => {
+    const dir = tempDir(t);
+    const file = path.join(dir, LOCK_NAME);
+    const release = await acquireLock(dir, "/new", testDeps());
+    fs.writeFileSync(file, JSON.stringify({ pid: 424243, root: "/other", startedAt: FRESH }));
+    release();
+    assert.equal(readOwner(file)?.pid, 424243);
+  });
+});
+
+describe("a killed run's exit code", () => {
+  it("follows the shell convention of 128 + the signal number", () => {
+    assert.equal(signalExitCode("SIGINT"), 130);
+    assert.equal(signalExitCode("SIGTERM"), 143);
+    assert.equal(signalExitCode("SIGHUP"), 129);
   });
 });
 

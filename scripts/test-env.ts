@@ -34,7 +34,28 @@ export function allTestFiles(root: string = REPO_ROOT): string[] {
     .map((f) => path.join("test", f));
 }
 
-/** Whether a `npm test` argument names a test file: not a flag, and matching a script/test extension. A flag's value such as `--test-name-pattern=foo.ts` rides on its flag's dash, so flags alone still run every file. */
-export function isTestFileArg(a: string): boolean {
+/** node --test flags that take a value as the next token; the `=value` form rides on its dash and needs no looking ahead. */
+const VALUE_FLAGS = ["--test-name-pattern", "--test-skip-pattern", "--test-reporter", "--test-reporter-destination", "--test-shard", "--test-concurrency", "--test-timeout"];
+
+/**
+ * Whether a `npm test` argument names a test file: not a flag, not the token after a value-taking one (space-separated
+ * `--test-name-pattern foo.ts` must not count foo.ts as a file), and matching a script/test extension, so flags alone
+ * still run every file.
+ */
+export function isTestFileArg(a: string, prev?: string): boolean {
+  if (prev !== undefined && VALUE_FLAGS.includes(prev)) {
+    return false;
+  }
   return !a.startsWith("-") && /\.(test\.)?[cm]?[jt]s$/.test(a);
+}
+
+/** Where a file argument resolves from: INIT_CWD, where the user (or agent) ran npm, or the process cwd without it. */
+export function fileArgFrom(env: NodeJS.ProcessEnv, cwd: string): string {
+  return env.INIT_CWD ?? cwd;
+}
+
+/** A file argument as a path relative to the root: resolved from `from` when the file exists there, from the root otherwise. */
+export function resolveFileArg(f: string, from: string, root: string = REPO_ROOT): string {
+  const own = path.resolve(from, f);
+  return path.relative(root, fs.existsSync(own) ? own : path.resolve(root, f));
 }
