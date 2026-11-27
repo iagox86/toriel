@@ -505,9 +505,12 @@ async function handle(cmd) {
         out({ type: "message_end", message: step });
         await sleep(30);
       }
-      if (cmd.message.includes("[error]")) {
-        // a run that fails on its own (no abort): the provider errors after the tool turns
-        const failed = { role: "assistant", content: [], stopReason: "error", errorMessage: "provider exploded" };
+      const failure = cmd.message.includes("[secret-error]")
+        ? "provider exploded: ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789 rejected the request"
+        : cmd.message.includes("[error]") ? "provider exploded" : undefined;
+      if (failure) {
+        // a run that fails on its own (no abort): the provider errors after the tool turns; "[secret-error]" echoes a credential-shaped token in its message (subagent scrub tests)
+        const failed = { role: "assistant", content: [], stopReason: "error", errorMessage: failure };
         out({ type: "message_start", message: failed });
         out({ type: "message_end", message: failed });
         streaming = false;
