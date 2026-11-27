@@ -111,6 +111,7 @@ export function buildSessionList(inp: ListInputs): SwitcherSession[] {
       muted: !!meta?.externallyLive,
       finished: meta?.subagent ? meta.subagent.state !== "running" && meta.subagent.delivered : undefined,
       subagentFail,
+      spawnsQueued: meta?.spawnsQueued,
       daemonId: meta?.id,
       sessionId,
       cwd,

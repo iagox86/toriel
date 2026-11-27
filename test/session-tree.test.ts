@@ -31,6 +31,12 @@ describe("arrangeTree", () => {
     assert.equal(childNote(row("solo")), "");
   });
 
+  it("counts subagent spawns still waiting for a slot, with or without children (ticket 345)", () => {
+    assert.equal(childNote({ ...row("solo"), spawnsQueued: 1 }), "1 subagent queued");
+    const [a] = arrangeTree([row("a", { spawnsQueued: 2 }), row("k1", { state: "streaming" })], new Map([["k1", "a"]]));
+    assert.equal(childNote(a as SwitcherSession), "1 child, 1 working, 2 subagents queued");
+  });
+
   it("leaves a session top-level when its parent is not listed or the links form a cycle", () => {
     const out = arrangeTree([row("x"), row("y"), row("lost")], new Map([["x", "y"], ["y", "x"], ["lost", "gone"]]));
     assert.deepEqual(out.map((s) => s.depth), [0, 0, 0]);
