@@ -75,9 +75,10 @@ export async function doctorMain(args: readonly string[], io: DoctorIo, opts: Do
   // and how much recent sessions used each MCP server (ticket 304): it reads pi's session files, so the in-app /doctor skips it
   const { scanMcpUsage } = await import("./mcp-usage.ts");
   const { piAgentDir } = await import("./pi-dir.ts");
-  // agent-profile sessions are left out of the usage (their sessions declare their servers whatever mcp.yaml says; ticket 304)
+  // agent-profile sessions and forks are left out of the usage (the former declare their servers whatever mcp.yaml says; a fork repeats its parent's calls; ticket 304). The two state files resolve from the ambient environment like every other state path in config.ts, not from opts.env: opts.env carries only the config-dir and pi-dir overrides it names (piAgentDir honors PI_CODING_AGENT_DIR, the fixture passes {env: {}} with nothing else), and every caller today leaves the two sources identical, so the mix this could make cannot happen. If an env-passing doctor ever needs otherwise, session-agents and lineage resolve per-env like config-dir's files do.
   const { loadSessionAgents } = await import("./session-agents.ts");
-  const mcpUsage = () => scanMcpUsage(join(piAgentDir(opts.env ?? process.env), "sessions"), { agents: new Set(Object.keys(loadSessionAgents())) });
+  const { forkIds, loadLineage } = await import("./lineage.ts");
+  const mcpUsage = () => scanMcpUsage(join(piAgentDir(opts.env ?? process.env), "sessions"), { agents: new Set(Object.keys(loadSessionAgents())), forks: forkIds(loadLineage()) });
   const options = { probeLitellm, probeChat: probeChatServer, mcpUsage, ...opts, startup: [], tty: io.tty === true };
   const checks = doctor.runDoctor(options);
   const style = io.color ? doctor.ANSI_STYLE : undefined;

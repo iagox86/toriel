@@ -143,6 +143,7 @@ describe("what a test run drops from a surrounding session (ticket 339)", () => 
       mcpFile: "/m",
       mcpDirect: ["git"],
       mcpSummaries: "/ms",
+      mcpRecords: "/mr",
       fileHistoryDir: "/h",
       planDir: "/p",
       freshness: false,

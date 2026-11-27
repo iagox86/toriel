@@ -158,7 +158,7 @@ describe("doctor checks", () => {
   it("finds nothing wrong with a complete setup", () => {
     const { opts, agentDir } = setup();
     fs.mkdirSync(path.join(agentDir, "feedback"), { recursive: true });
-    const all = { ...opts, feedbackDir: path.join(agentDir, "feedback"), mcpUsage: () => ({ sessions: 0, byServer: {} }) };
+    const all = { ...opts, feedbackDir: path.join(agentDir, "feedback"), mcpUsage: () => ({ sessions: 0, byServer: {}, declared: {} }) };
     assert.deepEqual(collectFindings(all), []);
     const checks = runDoctor(all);
     assert.equal(exitCode(checks), 0);
@@ -294,7 +294,7 @@ describe("doctor checks", () => {
         return { ...s.opts, feedbackDir: path.join(s.agentDir, "feedback"), startup: [] };
       })(),
       setup({ mcpExtra: { broken: { exposure: "direct" } } }).opts,
-      { ...setup({ mcpExtra: { busy: { command: "x" } } }).opts, mcpUsage: () => ({ sessions: 20, byServer: { busy: 10 } }) },
+      { ...setup({ mcpExtra: { busy: { command: "x" } } }).opts, mcpUsage: () => ({ sessions: 20, byServer: { busy: 10 }, declared: {} }) },
       staleSkill().opts,
       setup({ piMcpJson: { mcpServers: { freecad: { url: "http://127.0.0.1:39280/mcp" } } } }).opts,
       setup({ config: { authorizerChain: ["toriel-grants"], permission: { "*": "allow", external_directory_write: { "/tmp/*": "allow" }, path: { "*": "ask", [GRANTS_RULE]: "ask" } } }, settings: JSON.stringify({ scopeGuardAcceptedAllows: [{ surface: "external_directory_write", pattern: "/tmp/*" }, { surface: "*", pattern: "*" }] }) }).opts,
@@ -444,7 +444,7 @@ describe("doctor checks", () => {
 
   it("mcp-exposure: recommends declaring a server most sessions use, with the numbers, and the fix sets it with a backup (ticket 304)", () => {
     const s = setup({ mcpExtra: { busy: { command: "x" } } });
-    const usage = { sessions: 20, byServer: { busy: 10 } };
+    const usage = { sessions: 20, byServer: { busy: 10 }, declared: {} };
     const found = collectFindings({ ...s.opts, startup: [], mcpUsage: () => usage }).filter((f) => f.id === "mcp-exposure" && f.message.includes(`"busy"`));
     assert.equal(found.length, 1);
     assert.match(found[0]?.message ?? "", /"busy" MCP server .* exposure: direct: 10 of the last 20 sessions/);
@@ -458,7 +458,7 @@ describe("doctor checks", () => {
 
   it("mcp-exposure: several servers advised in one run keep one backup holding the original", () => {
     const s = setup({ gitMcp: "deferred", gdbMcp: "deferred", ghidraMcp: "deferred", vikunjaMcp: "deferred", mcpExtra: { busy: { command: "x" }, idle: { command: "y", exposure: "direct" } } });
-    const usage = { sessions: 20, byServer: { busy: 10 } };
+    const usage = { sessions: 20, byServer: { busy: 10 }, declared: { idle: 20 } };
     const found = collectFindings({ ...s.opts, startup: [], mcpUsage: () => usage }).filter((f) => f.id === "mcp-exposure");
     assert.equal(found.length, 2, "busy gets direct, idle gets deferred");
     const original = fs.readFileSync(s.mcpFile as string, "utf8");
@@ -738,7 +738,7 @@ describe("doctor report", () => {
   });
 
   it("leaves the passing checks out of the compact report and counts them", () => {
-    const text = renderDoctor(runDoctor({ ...setup({ config: {} }).opts, mcpUsage: () => ({ sessions: 0, byServer: {} }) }), { compact: true });
+    const text = renderDoctor(runDoctor({ ...setup({ config: {} }).opts, mcpUsage: () => ({ sessions: 0, byServer: {}, declared: {} }) }), { compact: true });
     assert.match(text, /Required: all 5 ok/);
     assert.match(text, /Recommended: all 6 ok/);
     assert.doesNotMatch(text, / ok {7}/);

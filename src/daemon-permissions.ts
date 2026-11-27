@@ -3,7 +3,7 @@
 // link in each child asks `permission_check` before pi's dialog opens.
 import { join } from "node:path";
 import * as os from "node:os";
-import { PERMISSIONS_FILE } from "./config.ts";
+import { MCP_EXPLORE_RECORDS_FILE, MCP_SUMMARIES_FILE, PERMISSIONS_FILE } from "./config.ts";
 import { mcpYamlFile } from "./config-dir.ts";
 import type { Cmd, DaemonContext, Responder } from "./daemon-context.ts";
 import { scopeOf } from "./daemon-schedule.ts";
@@ -63,10 +63,10 @@ export function handlePermissionCheck(ctx: DaemonContext, cmd: Cmd<"permission_c
   res(true, undefined, { allow: false });
 }
 
-/** Files a grant must never answer for: the grants themselves, pi's own configuration (minus the agent-maintained memory subtrees, `exemptPaths` below) and toriel's mcp.yaml (an entry there is a command the next session runs). Such an ask always reaches the user. */
+/** Files a grant must never answer for: the grants themselves, pi's own configuration (minus the agent-maintained memory subtrees, `exemptPaths` below), toriel's mcp.yaml (an entry there is a command the next session runs), the MCP summaries file (it feeds the system prompt of every future plain session, so text planted there is prompt injection that persists) and the MCP explore-records file (faking a sighting makes a stale skill look fresh). Such an ask always reaches the user. The extension writes both MCP files with in-process fs, so protecting them never stands between it and its own state. */
 export function protectedPaths(): string[] {
   const token = chatTokenFile();
-  return [PERMISSIONS_FILE, piAgentDir(), mcpYamlFile(), ...(token ? [token] : [])];
+  return [PERMISSIONS_FILE, piAgentDir(), mcpYamlFile(), MCP_SUMMARIES_FILE, MCP_EXPLORE_RECORDS_FILE, ...(token ? [token] : [])];
 }
 
 /**

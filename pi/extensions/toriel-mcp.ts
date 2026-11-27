@@ -23,7 +23,7 @@
 // reader can tell when a server's skill was last written and whether its tools changed since.
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { canonicalize, computeToolHashes, explorePromptServerNames, learnSummaries, loadExploreRecords, MCP_DIRECT_ENV, MCP_FILE_ENV, MCP_RECORDS_ENV, MCP_SUMMARIES_ENV, type McpServerConfig, mergeExploreRecords, parseDirectServers, parseMcpYaml, piConfig, probeUrl, redactUrl, saveExploreRecords, type ToolNamespaceInfo, toolServerName } from "./lib/mcp-config.ts";
+import { canonicalize, computeToolHashes, explorePromptServerNames, learnSummaries, loadExploreRecords, MCP_DIRECT_ENV, MCP_FILE_ENV, MCP_RECORDS_ENV, MCP_SUMMARIES_ENV, type McpServerConfig, mergeExploreRecords, parseDirectServers, parseMcpYaml, piConfig, probeUrl, redactUrl, saveExploreRecords, summaryLine, type ToolNamespaceInfo, toolServerName } from "./lib/mcp-config.ts";
 
 // Only the slice of pi's extension API this file uses (see toriel-usage.ts).
 interface Ctx {
@@ -112,7 +112,7 @@ export async function reconcile(
   return Object.fromEntries(outcomes);
 }
 
-/** The remembered summaries (ticket 303). A missing, unreadable or malformed file is none, so the worst case is the old behavior. */
+/** The remembered summaries (ticket 303). Every value is lined again on load (first line, trimmed, capped) and empty ones dropped, so a stale or hand-edited value cannot carry newlines or oversize text into the system prompt. A missing, unreadable or malformed file is none, so the worst case is the old behavior. */
 export function loadSummaries(file: string | undefined): Record<string, string> {
   if (!file) {
     return {};
@@ -122,7 +122,12 @@ export function loadSummaries(file: string | undefined): Record<string, string> 
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
       return {};
     }
-    return Object.fromEntries(Object.entries(parsed).filter((e): e is [string, string] => typeof e[1] === "string"));
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .filter((e): e is [string, string] => typeof e[1] === "string")
+        .map(([name, text]) => [name, summaryLine(text)])
+        .filter((e) => e[1].length > 0),
+    );
   } catch {
     return {};
   }
@@ -136,10 +141,11 @@ export function saveSummaries(file: string, summaries: Record<string, string>): 
   fs.renameSync(tmp, file);
 }
 
-/** Record the summaries of the servers connected now, when they differ from the file's. Never throws: a lost summary only means the next session's server list changes once. */
+/** Record the summaries of the servers connected now, when they differ from the file's. Never throws: a lost summary only means the next session's server list changes once. A load that reported problems saw only part of mcp.yaml (or none of it), so the summaries its pruning would drop are kept: a broken edit must not wipe the file. */
 export function recordSummaries(file: string, mcpFile: string, tools: readonly ToolNamespaceInfo[]): void {
   try {
-    const next = learnSummaries(loadSummaries(file), tools, loadServers(mcpFile).servers);
+    const { servers, problems } = loadServers(mcpFile);
+    const next = learnSummaries(loadSummaries(file), tools, servers, { skipPrune: problems.length > 0 });
     if (next) {
       saveSummaries(file, next);
     }

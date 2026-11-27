@@ -197,7 +197,20 @@ describe("remembered server summaries (ticket 303)", () => {
     const tools = [tool("read", "git", "not an MCP tool"), tool("mcp__git__git_read", "git", "Git tools.\nUse repo:"), tool("mcp__mine__x", "mine", "Server text."), tool("mcp__gone__x", "gone", "Not in mcp.yaml."), tool("mcp__git__git_write", "git")];
     assert.deepEqual(learnSummaries({}, tools, servers), { git: "Git tools." });
     assert.equal(learnSummaries({ git: "Git tools." }, tools, servers), undefined, "unchanged: the file is not rewritten");
-    assert.deepEqual(learnSummaries({ git: "Old.", other: "Kept." }, tools, servers), { git: "Git tools.", other: "Kept." });
+    assert.deepEqual(learnSummaries({ git: "Old.", other: "Kept." }, tools, servers), { git: "Git tools." }, "a name mcp.yaml no longer has is dropped");
+  });
+
+  it("removes the summary of a connected server whose instructions are now empty", () => {
+    const servers = { git: { command: "g" } };
+    const tools = [tool("mcp__git__git_read", "git", "")];
+    assert.deepEqual(learnSummaries({ git: "Git tools.", other: "Gone." }, tools, { git: { command: "g" }, other: { command: "o" } }), { other: "Gone." });
+    assert.deepEqual(learnSummaries({ git: "Git tools." }, tools, servers), {}, "emptied: the file is rewritten without the gone summary");
+  });
+
+  it("skipPrune keeps the names the servers map does not have, as when mcp.yaml loaded with problems", () => {
+    const one = [tool("mcp__git__git_read", "git", "Git tools.")];
+    assert.deepEqual(learnSummaries({ git: "Old.", gdb: "GDB tools." }, one, { git: { command: "g" } }, { skipPrune: true }), { git: "Git tools.", gdb: "GDB tools." }, "gdb was not in the partial load, yet it is kept");
+    assert.deepEqual(learnSummaries({ git: "Old.", gdb: "GDB tools." }, one, {}), {}, "without it, pruning drops every name the load could not see");
   });
 
   it("reads a missing or malformed file as no summaries, and writes it atomically", () => {
@@ -215,6 +228,13 @@ describe("remembered server summaries (ticket 303)", () => {
     assert.deepEqual(loadSummaries(file), {});
   });
 
+  it("lines every loaded value again and drops empty ones, as if it had just been learned", () => {
+    const file = tmp();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ git: "  Git tools.\nUse repo: git.example.com  ", long: "x".repeat(400), empty: "   \n  ", gone: "", kept: 3 }));
+    assert.deepEqual(loadSummaries(file), { git: "Git tools.", long: "x".repeat(250) });
+  });
+
   it("records after a run without throwing, even when the file cannot be written", () => {
     const mcp = yamlFile("servers:\n  git: { command: g }\n");
     const file = tmp();
@@ -222,6 +242,19 @@ describe("remembered server summaries (ticket 303)", () => {
     assert.deepEqual(loadSummaries(file), { git: "Git tools." });
     const blocked = path.join(yamlFile(""), "under-a-file", "s.json");
     assert.doesNotThrow(() => recordSummaries(blocked, mcp, [tool("mcp__git__git_read", "git", "Git tools.")]));
+  });
+
+  it("keeps the stored summaries when mcp.yaml loads with problems, so a broken edit cannot wipe them", () => {
+    const file = tmp();
+    saveSummaries(file, { git: "Git tools.", gdb: "GDB tools." });
+    // a parse error: no servers at all, so every summary would look gone
+    recordSummaries(file, yamlFile("servers: [oops\n"), [tool("mcp__git__git_read", "git", "Different.")]);
+    assert.deepEqual(loadSummaries(file), { git: "Git tools.", gdb: "GDB tools." });
+    // an entry with a problem is left out and the rest still loads: what is visible is learned, nothing is pruned
+    const partial = yamlFile("servers:\n  git: { command: g }\n  bad: { unknown: 1 }\n");
+    assert.match(loadServers(partial).problems.join(" "), /"bad"/);
+    recordSummaries(file, partial, [tool("mcp__git__git_read", "git", "Git tools. 2")]);
+    assert.deepEqual(loadSummaries(file), { git: "Git tools. 2", gdb: "GDB tools." });
   });
 
   it("the extension registers with the remembered summary at start and records new ones at the end of each run", async () => {
