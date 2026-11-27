@@ -238,8 +238,8 @@ export class SwitcherActions {
     this.h.rebuildChat();
   }
 
-  /** Spawn a session; `firstMessage` is prompted once it is entered. */
-  async newSession(firstMessage?: string, name?: string, cwd = this.defaultCwd, agent?: string, model?: string): Promise<void> {
+  /** Spawn a session; `firstMessage` is prompted once it is entered. `restoreText` (default: `firstMessage`) is what a failed spawn puts back into the editor. */
+  async newSession(firstMessage?: string, name?: string, cwd = this.defaultCwd, agent?: string, model?: string, restoreText?: string): Promise<void> {
     try {
       const data = (await this.h.request({ type: "spawn", cwd, name: name ? this.h.uniqueSessionName(name) : name, agent, ...(model !== undefined ? { model } : {}) })) as { sessionId?: number };
       if (typeof data?.sessionId === "number") {
@@ -258,7 +258,7 @@ export class SwitcherActions {
       }
     } catch (err) {
       if (firstMessage) {
-        this.h.editor.setText(firstMessage);
+        this.h.editor.setText(restoreText ?? firstMessage);
       }
       this.h.switcher.hint = `spawn failed: ${errText(err)}`;
       this.h.tui.requestRender();
@@ -423,6 +423,36 @@ export class SwitcherActions {
     this.h.tui.requestRender();
   }
 
+  /** Quote a value for a rebuilt command line so it re-parses into the same word: bare only when it cannot be mistaken, escaped inside double quotes otherwise. */
+  private quoteValue(v: string): string {
+    if (/^[^\s"'\\]+$/.test(v)) {
+      return v;
+    }
+    return `"${v.replace(/["\\]/g, "\\$&")}"`;
+  }
+
+  /** The /new line that re-enters as the same spawn: only the options the user gave (in the /new spec order), each value quoted to re-parse, and `--` before a prompt that contains a word starting with -. */
+  private restoreNewLine(args: string[], name: string | undefined, cwd: string | undefined, agent: string | undefined, model: string | undefined): string {
+    const parts = ["/new"];
+    if (name !== undefined) {
+      parts.push(`-n ${this.quoteValue(name)}`);
+    }
+    if (model !== undefined) {
+      parts.push(`-m ${this.quoteValue(model)}`);
+    }
+    if (cwd !== undefined) {
+      parts.push(`-C ${this.quoteValue(cwd)}`);
+    }
+    if (agent !== undefined) {
+      parts.push(`-a ${this.quoteValue(agent)}`);
+    }
+    if (args.length > 0) {
+      const words = args.map((a) => this.quoteValue(a)).join(" ");
+      parts.push(args.some((a) => a.startsWith("-")) ? `-- ${words}` : words);
+    }
+    return parts.join(" ");
+  }
+
   /** The -C directory of /new and /init, `~` expanded: `{}` (the directory toriel started in) when not given, undefined (after saying why) when it is not a directory. */
   private startDir(verb: string, call: Invocation): { cwd?: string } | undefined {
     const dir = call.opts.cwd as string | undefined;
@@ -465,7 +495,11 @@ export class SwitcherActions {
       new: async (call) => {
         const dir = this.startDir("new", call);
         if (dir) {
-          await this.newSession(undefined, call.opts.name as string | undefined, dir.cwd, call.opts.agent as string | undefined, call.opts.model as string | undefined);
+          const prompt = call.args.join(" ").trim();
+          const name = call.opts.name as string | undefined;
+          const agent = call.opts.agent as string | undefined;
+          const model = call.opts.model as string | undefined;
+          await this.newSession(prompt || undefined, name, dir.cwd, agent, model, this.restoreNewLine(call.args, name, dir.cwd, agent, model));
         }
       },
       // a fresh session whose first message is the init prompt: /init is usually the first thing done in a project
