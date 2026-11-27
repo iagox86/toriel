@@ -115,3 +115,30 @@ describe("switcher row markers", () => {
     assert.ok(waitLine, `no row with the ! marker: ${JSON.stringify(raw.map(strip))}`);
   });
 });
+
+describe("switcher spawn anchor (ticket 326)", () => {
+  it("with no selection it anchors the first shown session (refresh defaults there)", () => {
+    assert.deepEqual(build([]).spawnAnchor(), { kind: "session", group: undefined });
+  });
+
+  it("an empty list has no anchor", () => {
+    assert.equal(new Switcher().spawnAnchor(), undefined);
+  });
+
+  it("a highlighted session row anchors its own group, an ungrouped one none", () => {
+    const sw = build([]);
+    sw.selectedKey = "b";
+    sw.refresh();
+    assert.deepEqual(sw.spawnAnchor(), { kind: "session", group: "Work" });
+    sw.selectedKey = "a";
+    sw.refresh();
+    assert.deepEqual(sw.spawnAnchor(), { kind: "session", group: undefined });
+  });
+
+  it("a highlighted group header anchors that group", () => {
+    const sw = build(["Work"]);
+    sw.selectedKey = "b";
+    sw.refresh(); // the hidden session's header stands in
+    assert.deepEqual(sw.spawnAnchor(), { kind: "header", title: "Work" });
+  });
+});
