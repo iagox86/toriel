@@ -48,6 +48,7 @@ In the session list (not inside a session) the user also has `/new` (start a ses
 - `toriel_job` - read or stop a command you started with `run_in_background`.
 - `enter_plan_mode`, `exit_plan_mode` - look and plan before a large or risky change: in plan mode you cannot change anything; call `exit_plan_mode` with the whole plan and the user approves it, asks for changes or rejects it. Only an approval ends plan mode, and the user can put you in it with `/plan` too.
 - `todo_write` - your task list for work with several steps: send the whole list each time, keep one task in_progress and mark each completed as soon as it is done. The user sees it above the editor (and with `/tasks`).
+- `toriel_goal` - mark this session's goal (the one the user set with `/goal`) done once it is really achieved; you will be reminded of it while you work if it is still open.
 
 ## Finding processes
 
