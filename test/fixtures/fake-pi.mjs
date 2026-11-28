@@ -367,6 +367,8 @@ async function handle(cmd) {
         commands: [
           { name: "skill:demo", description: "A demo skill", source: "skill" },
           { name: "compact", description: "Compact the context", source: "extension" },
+          // the toriel-mcp extension's command (ticket 346): every child toriel starts loads the extension
+          ...(process.env.FAKE_PI_NO_MCP === "1" ? [] : [{ name: "toriel-mcp-pending", description: "toriel internal: list the registered servers as connecting", source: "extension" }]),
           ...(process.env.FAKE_PI_JOBS === "1" ? [{ name: "toriel-background", description: "toriel: move the running foreground bash command(s) to the background", source: "extension" }] : []),
           ...(process.env.FAKE_PI_BRIDGE === "1" ? [{ name: "toriel-inject", description: "toriel internal: deliver a message from another session", source: "extension" }] : []),
         ],
@@ -465,8 +467,10 @@ async function handle(cmd) {
         return out({ type: "extension_ui_request", id: "question-1", method: "select", title: "Ship it now?", options: ["Yes", "No", "Type something else"] });
       }
       if (cmd.message.trim() === "/toriel-mcp-pending") {
-        // the toriel-mcp extension's at-once list (ticket 346)
+        // the toriel-mcp extension's at-once list (ticket 346); a call is recorded so tests can see whether the daemon
+        // judged the child to have the command (its get_commands above: FAKE_PI_NO_MCP takes it out of the list)
         ok(cmd.id, "prompt", { disposition: "started" });
+        appendFileSync(join(process.env.FAKE_PI_DIR ?? tmpdir(), "mcp-pending-calls"), "1\n");
         return out({ type: "extension_ui_request", id: "mcp-pending", method: "notify", message: "toriel-mcp-pending:\nmealie: connecting (direct)", notifyType: "info" });
       }
       if (cmd.message.trim() === "/mcp") {

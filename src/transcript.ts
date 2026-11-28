@@ -114,7 +114,6 @@ export function commandPromptRow(command: string, prompt: string): OtherItem {
   return { kind: "other", component: new Text(commandPromptText(commandPrompt, false), 1, 0), commandPrompt };
 }
 
-
 /** A dim row for something toriel did that the transcript would not otherwise say (a grant answered a prompt, a child exited). */
 export function noteRow(text: string): OtherItem {
   return { kind: "other", component: new Text(dim(`toriel: ${text}`), 1, 0) };

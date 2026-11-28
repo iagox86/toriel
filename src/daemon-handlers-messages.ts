@@ -7,7 +7,7 @@ import type { Cmd, DaemonContext, Responder } from "./daemon-context.ts";
 import { type FoundSession, findSession } from "./daemon-resolve.ts";
 import { deliverToSession } from "./daemon-handlers-bridge.ts";
 import { startOnce } from "./daemon-handlers-lifecycle.ts";
-import type { DaemonSession } from "./daemon-session.ts";
+import { heldQueueTexts, type DaemonSession } from "./daemon-session.ts";
 import { log } from "./log.ts";
 import { formatReceived } from "./received.ts";
 
@@ -42,7 +42,7 @@ export async function deliverToTarget(ctx: DaemonContext, target: FoundSession, 
   if (s.held) {
     // compacting: pi refuses prompts, so it waits with the others, in order
     s.held.push({ text: body, injected: true });
-    ctx.hub.announceQueue(s.id, s.held.map((h) => h.text));
+    ctx.hub.announceQueue(s.id, heldQueueTexts(s.held));
     return { delivered: true, disposition: "queued until compaction ends", to: target.name, toId: target.uuid, session: s.id };
   }
   if (!s.child) {

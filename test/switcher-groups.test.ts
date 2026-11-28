@@ -147,7 +147,7 @@ describe("/init in the switcher", () => {
     const { actions, host, requests } = spawning();
     await actions.runCommand(`/init -C ${dir}`, undefined);
     assert.deepEqual(requests, [{ type: "spawn", cwd: dir, name: `init ${path.basename(dir)}`, agent: undefined }]);
-    assert.equal((host as { pendingPrompt?: string | null }).pendingPrompt, INIT_PROMPT);
+    assert.equal((host as { pendingPrompt?: { text: string; command?: string } | null }).pendingPrompt?.text, INIT_PROMPT);
     assert.equal((host as { pendingEnterId?: number }).pendingEnterId, 5);
   });
 
@@ -192,7 +192,7 @@ describe("/cd in the switcher", () => {
     assert.equal(requests[0]?.type, "spawn");
     assert.equal(requests[0]?.name, "import");
     assert.equal(requests[0]?.cwd, process.cwd());
-    assert.equal((host as { pendingPrompt?: string | null }).pendingPrompt, "finish the mealie import");
+    assert.equal((host as { pendingPrompt?: { text: string; command?: string } | null }).pendingPrompt?.text, "finish the mealie import");
     assert.equal((host as { pendingEnterId?: number }).pendingEnterId, 5);
   });
 

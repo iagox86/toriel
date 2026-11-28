@@ -47,6 +47,10 @@ import { log } from "./log.ts";
 
 const COMPACT_TIMEOUT_MS = 10 * 60_000;
 
+/** How long a controller waits for the daemon's /mcp answer: past the daemon's own wait (its cap is 75s, `MCP_STATUS_CAP_MS` in
+ *  `daemon-children.ts`), so the daemon's honest "not answered yet" error reaches the screen instead of the request timing out first. */
+export const MCP_STATUS_TIMEOUT_MS = 80_000;
+
 /** The name of the review session /performance opens: `performance review <YYYY-MM-DD HH:MM>`, local time. */
 export function performanceReviewName(now: Date = new Date()): string {
   const p = (n: number) => String(n).padStart(2, "0");
@@ -653,7 +657,7 @@ export class SessionCommands {
         }
       } else {
         this.h.pendingEnterId = r.sessionId;
-        this.h.pendingPrompt = prompt || null;
+        this.h.pendingPrompt = prompt ? { text: prompt } : null;
       }
       this.h.notify(`forked${note} - you are in the copy; the original is unchanged`);
     } catch (err) {
@@ -914,7 +918,7 @@ export class SessionCommands {
     }
     try {
       this.h.notify("asking the MCP servers...");
-      const r = (await this.h.request({ type: "mcp_status", session: meta.id }, 60_000)) as { text: string };
+      const r = (await this.h.request({ type: "mcp_status", session: meta.id }, MCP_STATUS_TIMEOUT_MS)) as { text: string };
       const skillsDirs = piSkillsDirs(piAgentDir());
       this.h.infoPanel.show(["MCP servers", "", ...mcpListLines(r.text, skillsDirs), "", "/mcp reconnect <server> - tab completes the names"].join("\n"));
       this.h.notify("");
@@ -1206,7 +1210,7 @@ export class SessionCommands {
     }
     try {
       this.h.notify("checking the MCP servers...");
-      const r = (await this.h.request({ type: "mcp_status", session: meta.id }, 60_000)) as { text: string };
+      const r = (await this.h.request({ type: "mcp_status", session: meta.id }, MCP_STATUS_TIMEOUT_MS)) as { text: string };
       const parsed = parseStatusDetailed(r.text);
       const configs = readConfigs([mcpConfigFile()]);
       // probe only what needs it: the named server, or every one that is not connected
@@ -1245,7 +1249,7 @@ export class SessionCommands {
       return;
     }
     try {
-      const r = (await this.h.request({ type: "mcp_status", session: meta.id }, 60_000)) as { text: string };
+      const r = (await this.h.request({ type: "mcp_status", session: meta.id }, MCP_STATUS_TIMEOUT_MS)) as { text: string };
       if (!mcpServerConnected(r.text, server)) {
         this.h.notify(`"${server}" is ${mcpNotConnectedNote(r.text, server)} (or /mcp status for the details)`);
         return;
@@ -1266,7 +1270,7 @@ export class SessionCommands {
     }
     let text: string;
     try {
-      const r = (await this.h.request({ type: "mcp_status", session: meta.id }, 60_000)) as { text: string };
+      const r = (await this.h.request({ type: "mcp_status", session: meta.id }, MCP_STATUS_TIMEOUT_MS)) as { text: string };
       text = r.text;
     } catch (err) {
       this.fail("mcp", err);

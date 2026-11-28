@@ -43,6 +43,8 @@ const isAnswerKey = (dialog: DialogRequest, data: string): boolean => matchesKey
 export class SessionActions {
   /** Armed: prompting a recently-modified external session (fork warning). */
   armedFork: string | null = null;
+  /** What was armed with it (L1): the enter that confirms the fork re-sends the same text, and a generated prompt's command comes back with it. */
+  private armedSend: { text: string; command?: string } | null = null;
   /** Prompts sent to sleeping sessions (by file) whose answer is still pending, with the text sent. */
   private readonly startingPrompts = new Map<string, string>();
   /** Session whose `!command` is running, so esc can stop it. */
@@ -73,6 +75,7 @@ export class SessionActions {
 
   resetArmed(): void {
     this.armedFork = null;
+    this.armedSend = null;
   }
 
   /** Keys in the chat view (the switcher is closed). */
@@ -81,6 +84,7 @@ export class SessionActions {
       // esc = interrupt the running agent (pi muscle memory); also
       // cancels an armed fork-confirm
       this.armedFork = null;
+      this.armedSend = null;
       const meta = this.h.viewing ? this.h.metaForPath(this.h.viewing) : undefined;
       const view = this.h.viewing ? this.h.views.get(this.h.viewing) : undefined;
       // A prompt just sent is working before the daemon reports streaming
@@ -683,9 +687,10 @@ export class SessionActions {
   }
 
   /** /adopt the given session file, then deliver `text` to the fork once
-   * entered. The prompt replays from pendingPrompt if the session metadata
-   * has not arrived yet. */
-  private async adoptAndPrompt(key: string, cwd: string, text: string): Promise<void> {
+   * entered. A generated prompt's command goes with it (ticket 302), so the
+   * send stays a command prompt. The prompt replays from pendingPrompt if the
+   * session metadata has not arrived yet. */
+  private async adoptAndPrompt(key: string, cwd: string, text: string, command?: string): Promise<void> {
     try {
       const data = (await this.h.request({ type: "adopt", path: key, cwd })) as {
         sessionId?: number;
@@ -696,14 +701,19 @@ export class SessionActions {
       const meta = this.h.sessions.get(data.sessionId);
       if (meta) {
         this.h.viewing = this.h.keyFor(meta);
-        await this.prompt(text);
+        await this.prompt(text, command);
       } else {
         this.h.pendingEnterId = data.sessionId;
-        this.h.pendingPrompt = text;
+        this.h.pendingPrompt = { text, command };
       }
     } catch (err) {
-      this.h.notify(`fork failed: ${errText(err)}`);
-      this.h.editor.setText(text);
+      if (command === undefined) {
+        this.h.notify(`fork failed: ${errText(err)}`);
+        this.h.editor.setText(text);
+      } else {
+        // a generated prompt is nobody's typing: back in the editor it would be re-posted as a plain prompt (echo and history)
+        this.h.notify(`fork failed: ${errText(err)} - the prompt ${command} generated did not send; run ${command} again`);
+      }
     }
   }
 
@@ -718,8 +728,13 @@ export class SessionActions {
     if (!key) {
       return false;
     }
+    // An enter that confirms a fork re-sends what was armed: the editor holds only the text, so a generated prompt's
+    // command is read back from the armed record and the confirmed send stays a command prompt (ticket 302)
+    if (command === undefined && this.armedFork === key && this.armedSend?.text === text) {
+      command = this.armedSend.command;
+    }
     const meta = this.h.metaForPath(key);
-    const blocked = this.blockedByOtherWriter(key, meta, text);
+    const blocked = this.blockedByOtherWriter(key, meta, text, command);
     if (blocked !== undefined) {
       return blocked;
     }
@@ -750,9 +765,14 @@ export class SessionActions {
       return true;
     } catch (err) {
       this.h.dropEcho(key, out.sent);
-      this.h.notify(`prompt failed: ${errText(err)}`);
-      // give the images back, under fresh markers, so the message can be sent again
-      this.giveBack([out.message, ...out.images.map((image) => this.h.attachments.put(image))].join(" "));
+      if (out.command === undefined) {
+        this.h.notify(`prompt failed: ${errText(err)}`);
+        // give the images back, under fresh markers, so the message can be sent again
+        this.giveBack([out.message, ...out.images.map((image) => this.h.attachments.put(image))].join(" "));
+      } else {
+        // a generated prompt must not go back as edit text: the next send would re-post it as a typed plain prompt (echo, history)
+        this.h.notify(`the prompt ${out.command} generated failed to send (${errText(err)}) - run ${out.command} again`);
+      }
       return false;
     } finally {
       if (starting) {
@@ -763,9 +783,10 @@ export class SessionActions {
 
   /**
    * Another controller or a plain pi process has the session. Returns what `prompt`
-   * should return, or undefined when nothing stands in the way.
+   * should return, or undefined when nothing stands in the way. A generated prompt's
+   * command goes with the text into both arming and the confirmed retry (ticket 302).
    */
-  private blockedByOtherWriter(key: string, meta: SessionMeta | undefined, text: string): boolean | undefined {
+  private blockedByOtherWriter(key: string, meta: SessionMeta | undefined, text: string, command?: string): boolean | undefined {
     if (meta?.attachedElsewhere) {
       this.h.notify("view-only: this session is attached in another controller");
       return false;
@@ -773,6 +794,11 @@ export class SessionActions {
     if (meta?.externallyLive && meta.active) {
       // double-open: toriel owns a live child AND a plain pi has the same
       // file open - forking cannot help, two writers would diverge
+      if (command !== undefined) {
+        // a generated prompt must not go back as edit text: the next send would re-post it as a typed plain prompt (echo, history)
+        this.h.notify("open in both toriel and another pi - close one before prompting here (run the command again)");
+        return false;
+      }
       this.h.notify("open in both toriel and another pi - close one before prompting here");
       this.h.editor.setText(text);
       return false;
@@ -780,6 +806,7 @@ export class SessionActions {
     if (meta?.externallyLive) {
       if (this.armedFork !== key) {
         this.armedFork = key;
+        this.armedSend = { text, ...(command === undefined ? {} : { command }) };
         this.h.notify(
           "live in another pi - continuing here FORKS the conversation (pi keeps its copy). enter again to fork and continue here, esc to cancel",
         );
@@ -787,7 +814,8 @@ export class SessionActions {
         return false;
       }
       this.armedFork = null;
-      void this.adoptAndPrompt(key, meta.cwd || path.dirname(key), text);
+      this.armedSend = null;
+      void this.adoptAndPrompt(key, meta.cwd || path.dirname(key), text, command);
       return true;
     }
     return undefined;
@@ -874,6 +902,7 @@ export class SessionActions {
     if (data?.confirmFork) {
       this.h.dropEcho(key, out.sent);
       this.armedFork = key;
+      this.armedSend = { text, ...(out.command === undefined ? {} : { command: out.command }) };
       this.h.notify(
         `changed ${fmtAge(data.ageMs ?? 0)} ago - may be open in another pi; enter again to continue here (the conversation may fork), esc to cancel`,
       );
@@ -881,6 +910,7 @@ export class SessionActions {
       return false;
     }
     this.armedFork = null;
+    this.armedSend = null;
     // the request above already delivered; after a confirmed fork it only
     // returns once the child is up, so the box is cleared late (by prompt) rather
     // than sending again

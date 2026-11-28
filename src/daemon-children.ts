@@ -9,7 +9,8 @@ import { answerablePrompt, exemptPaths, protectedPaths, touchesProtected } from 
 import { type GrantStore, ruleFor, withSuggestion } from "./permissions.ts";
 import { type BridgeTracker, INJECT_COMMAND, injectedId, mergedQueueTexts, parseBridgeReport } from "./daemon-bridge.ts";
 import type { ClientHub } from "./daemon-hub.ts";
-import { autoOn, type DaemonSession } from "./daemon-session.ts";
+import { autoOn, heldQueueTexts, type DaemonSession } from "./daemon-session.ts";
+import { McpQueries, type McpQueriesEnv } from "./mcp-query.ts";
 import { randomUUID } from "node:crypto";
 import { type AgentProfile, loadAgents, mcpServersOf, profileArgs, profileHasMcp, withResolvedModel } from "./agents.ts";
 import { recordHandled } from "./handled-files.ts";
@@ -91,10 +92,26 @@ export class ChildManager {
   private readonly usage: Map<string, UsageReport>;
   /** Newest slash-command list any child reported; serves sessions with no child. */
   private lastCommands: SlashCommand[] = [];
-  /** Sessions waiting for the notice pi's /mcp prints, by daemon session id (see mcpStatus). */
-  private readonly noticeTaps = new Map<number, (text: string) => boolean>();
-  /** The /mcp question in flight per session, until pi's own answer arrives (see mcpStatus). */
-  private readonly mcpQueries = new Map<number, Promise<string>>();
+  /** The /mcp questions of the sessions, with the taps that swallow their answers (see mcpStatus). */
+  private readonly mcp = new McpQueries({
+    prompt: async (child, text) => {
+      await child.prompt(text);
+    },
+    // the pending command may only go to a child whose command list has it: pi without the toriel-mcp extension would
+    // hear the slash text as a message instead (and the list the child reports is cached for sessions with no child)
+    hasPendingCommand: async (child) => {
+      try {
+        const commands = await child.getCommands();
+        this.lastCommands = commands;
+        return commands.some((c) => c.name === MCP_PENDING_COMMAND);
+      } catch (err) {
+        log(`could not ask a child's commands while waiting for /mcp: ${errText(err)}`);
+        return false;
+      }
+    },
+    capError: "no answer from /mcp yet: the MCP servers may still be connecting (pi waits up to 60s for each); try again shortly",
+    dropError: "the session stopped before /mcp was answered",
+  });
   /** Injects handed to session bridges and not yet seen in a transcript, so strip re-syncs keep them visible. */
   private readonly bridges: BridgeTracker;
   /** Called when a session's run settles or its compaction ends (the daemon uses it to wake waiting schedules). */
@@ -348,6 +365,7 @@ export class ChildManager {
     this.clearDialog(s); // was a bare pendingDialog = false, which left a deny-after timer armed on the stopped session
     s.streaming = false;
     s.compacting = false;
+    this.dropMcpQuery(s); // the query's tap outlives nothing: a replaced child keeps its own notices
     this.dropBridge(s, "the session was stopped");
     try {
       await child.stop();
@@ -415,7 +433,7 @@ export class ChildManager {
         this.hub.announceQueue(
           s.id,
           [
-            ...(s.held ?? []).map((h) => h.text),
+            ...heldQueueTexts(s.held ?? []),
             ...this.bridges.texts(s.id),
           ],
         );
@@ -441,6 +459,7 @@ export class ChildManager {
     s.streaming = false;
     s.compacting = false;
     this.clearDialog(s); // a dead child cannot answer its open prompt, and the deny-after timer must not fire on it (review of batch 7)
+    this.dropMcpQuery(s);
     this.dropBridge(s, reason);
     this.onStopped?.(s, crash);
   }
@@ -460,9 +479,9 @@ export class ChildManager {
     return s.sessionBridge === true;
   }
 
-  /** The strip: compaction-held messages first, then injects the bridge has not confirmed yet. */
+  /** The strip: compaction-held messages first (a command's prompt shows its command), then injects the bridge has not confirmed yet. */
   private announceQueue(s: DaemonSession): void {
-    this.hub.announceQueue(s.id, mergedQueueTexts((s.held ?? []).map((h) => h.text), this.bridges.texts(s.id)));
+    this.hub.announceQueue(s.id, mergedQueueTexts(heldQueueTexts(s.held ?? []), this.bridges.texts(s.id)));
   }
 
   /** Injects that never reached a transcript are gone with the process: say so rather than let the sender believe they landed. */
@@ -527,53 +546,12 @@ export class ChildManager {
     if (!child) {
       throw new Error("session is not active");
     }
-    // one question at a time per session: a second asker shares the first's answer instead of overwriting its tap
-    const asking = this.mcpQueries.get(s.id);
-    if (asking) {
-      return asking;
-    }
-    const query = new Promise<string>((resolve, reject) => {
-      let settled = false;
-      const answer = (settle: () => void) => {
-        if (!settled) {
-          settled = true;
-          settle();
-        }
-      };
-      const finish = () => {
-        clearTimeout(grace);
-        clearTimeout(cap);
-        this.noticeTaps.delete(s.id);
-        this.mcpQueries.delete(s.id);
-      };
-      // pi's /mcp waits for every server's connect before it answers (ticket 346): when it is slow, the extension lists the
-      // registered servers as connecting at once, and the tap stays to swallow pi's late answer, so it never flashes at a controller
-      const grace = setTimeout(() => {
-        child.prompt(`/${MCP_PENDING_COMMAND}`).catch((err: unknown) => log(`${MCP_PENDING_COMMAND} failed: ${errText(err)}`));
-      }, graceMs);
-      const cap = setTimeout(() => {
-        finish();
-        answer(() => reject(new Error("no answer from /mcp yet: the MCP servers may still be connecting (pi waits up to 60s for each); try again shortly")));
-      }, capMs);
-      this.noticeTaps.set(s.id, (text) => {
-        if (text.startsWith(MCP_PENDING_MARK)) {
-          answer(() => resolve(text.slice(MCP_PENDING_MARK.length)));
-          return true;
-        }
-        if (text.startsWith("MCP ") || text.startsWith("mcp.yaml ")) {
-          return false; // pi's (or toriel-mcp's) own report of a problem, not the answer: let it through
-        }
-        finish();
-        answer(() => resolve(text));
-        return true;
-      });
-      child.prompt("/mcp").catch((err: unknown) => {
-        finish();
-        answer(() => reject(err));
-      });
-    });
-    this.mcpQueries.set(s.id, query);
-    return query;
+    return this.mcp.ask(s.id, child, graceMs, capMs);
+  }
+
+  /** The /mcp question and its swallow tap of a stopped or dead child are gone with it: a new ask meets the new child (and keeps its notices), an asker in flight reads why. */
+  private dropMcpQuery(s: DaemonSession): void {
+    this.mcp.drop(s.id);
   }
 
   /** Keep a "toriel-usage" status record from a child's usage extension; true if it was one. */
@@ -823,8 +801,13 @@ export class ChildManager {
       if (this.takeUsageReport(event) || this.takeBridgeReport(s, event) || this.takeTasksReport(s, event) || this.takePlanReport(s, event)) {
         return; // for the daemon, not for controllers
       }
-      const tap = this.noticeTaps.get(s.id);
-      if (tap && event.method === "notify" && tap(String(event.message ?? ""))) {
+      const tapText = event.method === "notify" ? String(event.message ?? "") : "";
+      if (this.mcp.accept(s.id, s.child, tapText)) {
+        return;
+      }
+      // the pending list can also arrive when no tap for this child holds it (the wait already answered, or the child was
+      // stopped): it is toriel's own plumbing, never a controller's text
+      if (event.method === "notify" && tapText.startsWith(MCP_PENDING_MARK)) {
         return;
       }
       // a select dialog may carry the grant the toriel-grants link saw for it
@@ -917,6 +900,9 @@ export class ChildManager {
       this.onSettled?.(s);
       // no tool can still be asking once the turn is over
       this.clearDialog(s);
+      // the settle and the streaming flag land together: a list picked up beside the settle's events must not flag a run
+      // that just ended (it was the case that kept a reconnect replay from seeing the truth)
+      this.hub.broadcastSessions();
       void this.refreshMeta(s).then(() => this.hub.broadcastSessions());
       void this.announceDigest(s);
     } else if (type === "compaction_start") {

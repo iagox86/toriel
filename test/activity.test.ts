@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { viewFromHistory } from "../src/resync.ts";
 import { type Activity, type ActivityState, activityLines, floorActivity, formatElapsed, reduceActivity } from "../src/activity.ts";
 
 const fresh = (): ActivityState => ({ queue: [] });
@@ -151,5 +152,26 @@ describe("floorActivity (ticket 352)", () => {
     assert.equal(state.activity, undefined);
     floorActivity(state, { streaming: false }, false, 1000);
     assert.equal(state.activity, undefined);
+  });
+
+  it("clears a spinner that outlived its run when the flag turns off, leaving the queue alone", () => {
+    const state: ActivityState = { queue: ["kept"], activity: { label: "working", since: 5 } };
+    floorActivity(state, { streaming: false }, true, 1000);
+    assert.equal(state.activity, undefined, "a crash mid-run sends no agent_settled to clear it");
+    assert.deepEqual(state.queue, ["kept"], "activity only; the queued messages are not a floor's business");
+  });
+
+  it("the falling edge is a no-op without anything to clear", () => {
+    const state: ActivityState = { queue: [] };
+    floorActivity(state, { streaming: false }, true, 1000);
+    assert.equal(state.activity, undefined);
+  });
+
+  it("the floor the replay after a reconnect rebuilt is reapplied while the run still streams (ticket 352)", () => {
+    // the composition onHistory does: the replay's fresh view starts clean, and the daemon's streaming flag re-says "working"
+    const fresh = viewFromHistory(undefined, [], true, 0);
+    assert.equal(fresh.activity, undefined, "a reconnect replay starts clean");
+    floorActivity(fresh, { streaming: true }, false, 9000);
+    assert.deepEqual(fresh.activity, { label: "working", since: 9000 });
   });
 });

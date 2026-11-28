@@ -604,6 +604,112 @@ describe("the bridge: input", () => {
   });
 });
 
+describe("the chat echo of a command prompt (ticket 302 review)", () => {
+  const PROMPT = "That interruption was accidental, please continue where you left off. now";
+  const COMMAND = "/continue now";
+  /** The command prompt the model reads back, as pi reports it. */
+  const commandPrompt = (text: string) => ({ type: "message_end", message: { role: "custom", customType: "toriel-command-prompt", content: text, details: { command: COMMAND, id: "b1" } } });
+
+  it("reads legacy: true as the plain-prompt path: the prompt waits in echoes, so pi's user message is not posted", async () => {
+    const t = await setup();
+    const room = await openSession(t);
+    t.daemon.answers.set("prompt", { disposition: "started", legacy: true });
+    t.chat.say(room.id, "!continue now");
+    await t.bridge.idle();
+    const sent = t.daemon.of("prompt")[0] as { message: string; command?: string };
+    assert.equal(sent.command, COMMAND, "the command rode along");
+    t.daemon.push({ type: "event", session: 1, event: { type: "message_end", message: { role: "user", content: sent.message } } });
+    await t.bridge.idle();
+    assert.equal(t.chat.postsIn(room.id).length, 2, "the echo was waiting in echoes, so the user message is not quoted");
+    t.daemon.push({ type: "event", session: 1, event: commandPrompt(sent.message) });
+    await t.bridge.idle();
+    const body = t.chat.postsIn(room.id).at(-1)?.body ?? "";
+    assert.match(body, /typed in toriel[\s\S]*\/continue now/, "the command prompt is quoted instead: nothing held the command in commandEchoes");
+    assert.doesNotMatch(body, /interruption was accidental/, "and it shows the command, never the prompt");
+  });
+
+  it("reads a queued reply (a compaction holds the queue) as not settled: one release spends one echo, its partner is pruned", async () => {
+    const t = await setup();
+    const room = await openSession(t);
+    t.daemon.answers.set("prompt", { disposition: "queued" });
+    t.chat.say(room.id, "!continue now");
+    await t.bridge.idle();
+    const sent = t.daemon.of("prompt")[0] as { message: string; command?: string };
+    assert.equal(sent.command, COMMAND);
+    t.daemon.push({ type: "event", session: 1, event: commandPrompt(sent.message) });
+    await t.bridge.idle();
+    assert.equal(t.chat.postsIn(room.id).length, 2, "the release went out through the bridge: the command echo was still armed, the command prompt is not quoted");
+    t.daemon.push({ type: "event", session: 1, event: { type: "message_end", message: { role: "user", content: sent.message } } });
+    await t.bridge.idle();
+    const body = t.chat.postsIn(room.id).at(-1)?.body ?? "";
+    assert.match(body, /typed in toriel[\s\S]*interruption was accidental/, "the unfired half of the pair was pruned: the leftover echo does not survive its release");
+  });
+
+  it("a queued command released by the fallback path spends the text echo and prunes the command (review round 4)", async () => {
+    const t = await setup();
+    const room = await openSession(t);
+    t.daemon.answers.set("prompt", { disposition: "queued" });
+    t.chat.say(room.id, "!continue now");
+    await t.bridge.idle();
+    const sent = t.daemon.of("prompt")[0] as { message: string; command?: string };
+    t.daemon.push({ type: "event", session: 1, event: { type: "message_end", message: { role: "user", content: sent.message } } });
+    await t.bridge.idle();
+    assert.equal(t.chat.postsIn(room.id).length, 2, "the fallback release spent the text echo: not quoted");
+    t.daemon.push({ type: "event", session: 1, event: commandPrompt(sent.message) });
+    await t.bridge.idle();
+    const later = t.chat.postsIn(room.id).at(-1)?.body ?? "";
+    assert.match(later, /typed in toriel[\s\S]*\/continue now/, "its partner was pruned with it: a later identical command prompt is a different prompt and shows");
+  });
+
+  it("two queued plain prompts released as user messages each spend their own echo, with nothing and nobody pruned (review round 4)", async () => {
+    const t = await setup();
+    const room = await openSession(t);
+    t.daemon.answers.set("prompt", { disposition: "queued" });
+    t.chat.say(room.id, "ok");
+    t.chat.say(room.id, "ok");
+    await t.bridge.idle();
+    t.daemon.push({ type: "event", session: 1, event: { type: "message_end", message: { role: "user", content: "ok" } } });
+    await t.bridge.idle();
+    t.daemon.push({ type: "event", session: 1, event: { type: "message_end", message: { role: "user", content: "ok" } } });
+    await t.bridge.idle();
+    const quoted = t.chat.postsIn(room.id).map((p: { body?: string }) => p.body ?? "").filter((body) => /typed in toriel/.test(body));
+    assert.equal(quoted.length, 0, "each release spent its own echo: neither is quoted back");
+  });
+
+  it("reads legacy: false as the bridge-delivered path: the command waits in commandEchoes, never the prompt text in echoes", async () => {
+    const t = await setup();
+    const room = await openSession(t);
+    t.daemon.answers.set("prompt", { disposition: "started", legacy: false });
+    t.chat.say(room.id, "!continue now");
+    await t.bridge.idle();
+    const sent = t.daemon.of("prompt")[0] as { message: string; command?: string };
+    assert.equal(sent.command, COMMAND);
+    t.daemon.push({ type: "event", session: 1, event: commandPrompt(sent.message) });
+    await t.bridge.idle();
+    assert.equal(t.chat.postsIn(room.id).length, 2, "the command prompt was waiting in commandEchoes and is not quoted");
+    t.daemon.push({ type: "event", session: 1, event: { type: "message_end", message: { role: "user", content: sent.message } } });
+    await t.bridge.idle();
+    const body = t.chat.postsIn(room.id).at(-1)?.body ?? "";
+    assert.match(body, /typed in toriel:/, "the prompt text was not a plain echo, so a user message of it is quoted as usual");
+    assert.match(body, /please continue where you left off\. now/);
+  });
+
+  it("a reply without a legacy field (an older daemon) reads as legacy: the prompt waits in echoes, and a command prompt naming it is quoted", async () => {
+    const t = await setup();
+    const room = await openSession(t);
+    t.chat.say(room.id, "!continue now");
+    await t.bridge.idle();
+    const sent = t.daemon.of("prompt")[0] as { message: string; command?: string };
+    assert.equal(sent.command, COMMAND);
+    t.daemon.push({ type: "event", session: 1, event: { type: "message_end", message: { role: "user", content: sent.message } } });
+    await t.bridge.idle();
+    assert.equal(t.chat.postsIn(room.id).length, 2, "the echo waited in echoes, so the user message is not posted");
+    t.daemon.push({ type: "event", session: 1, event: commandPrompt(sent.message) });
+    await t.bridge.idle();
+    assert.match(t.chat.postsIn(room.id).at(-1)?.body ?? "", /typed in toriel[\s\S]*\/continue now/, "the command was not in commandEchoes: the custom message is quoted");
+  });
+});
+
 describe("the bridge: dialogs", () => {
   const select = { id: "d1", method: "select", title: "Permission Required\ntool: bash", options: ["Yes", "Yes, for this session", "No"] };
 

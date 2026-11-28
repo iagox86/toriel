@@ -6,7 +6,7 @@ import { findAgent } from "./agents.ts";
 import { TRASH_DIR } from "./config.ts";
 import type { Cmd, DaemonContext, Responder } from "./daemon-context.ts";
 import { historyOf, sendHistory } from "./daemon-history.ts";
-import type { DaemonSession } from "./daemon-session.ts";
+import { heldQueueTexts, type DaemonSession } from "./daemon-session.ts";
 import { forkSnapshot } from "./fork-snapshot.ts";
 import { forkNote, recordFork } from "./lineage.ts";
 import { matchModel, modelName, modelProblem } from "./model-match.ts";
@@ -76,8 +76,9 @@ export async function handlePrompt(
     await s.starting;
   }
   if (s.held) {
-    s.held.push({ text: cmd.message, images: cmd.images });
-    ctx.hub.announceQueue(s.id, s.held.map((h) => h.text));
+    // a generated prompt held mid-compaction stays one (its images guard is the live path's: command refused with images)
+    s.held.push({ text: cmd.message, images: cmd.images, ...(cmd.command && !cmd.images?.length ? { command: cmd.command } : {}) });
+    ctx.hub.announceQueue(s.id, heldQueueTexts(s.held));
     res(true, undefined, { disposition: "queued" });
     return;
   }
@@ -115,8 +116,10 @@ export async function handlePrompt(
   if (cmd.command && !cmd.images?.length) {
     // a generated prompt (ticket 302): the model reads it, everything else shows the command; deliverToSession starts a turn or
     // waits for the running one's boundary, and falls back to the plain prompt below for a session without the bridge extension
-    await deliverToSession(ctx, s, cmd.message, { type: COMMAND_PROMPT_TYPE, data: { command: cmd.command }, label: cmd.command });
-    res(true, undefined, { disposition: "started" });
+    const via = await deliverToSession(ctx, s, cmd.message, { type: COMMAND_PROMPT_TYPE, data: { command: cmd.command }, label: cmd.command });
+    // the reply's path is how the chat bridge records the echo waiting for pi's: `legacy` is the plain-prompt fallback,
+    // whose echo is a user message; an absent field (an older daemon) reads the same to it
+    res(true, undefined, { disposition: "started", legacy: via === "legacy" });
     return;
   }
   // "steer" covers both cases: executes immediately when idle, and is

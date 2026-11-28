@@ -271,7 +271,7 @@ export class SwitcherActions {
           }
         } else {
           this.h.pendingEnterId = data.sessionId;
-          this.h.pendingPrompt = firstMessage ?? null;
+          this.h.pendingPrompt = firstMessage ? { text: firstMessage } : null;
           this.h.switcher.hint = "starting session...";
         }
       }

@@ -175,6 +175,9 @@ export class Bridge {
   private readonly echoes: string[] = [];
   /** The commands whose generated prompt this bridge sent (`!init`; ticket 302): their command prompt is not posted again. */
   private readonly commandEchoes: string[] = [];
+  /** Prompt pairs whose delivery is still undecided (held by a compaction: the release goes through either path), so the echo
+   *  the release does NOT spend is pruned from its list; bounded like the lists themselves (review round 4). */
+  private readonly queuedEchoes: Array<{ command: string; text: string }> = [];
   /** A session started from chat that has no UUID yet: publish it (and bind a channel, when one exists) once it has. */
   private readonly awaiting = new Map<number, { roomId?: string; channelName?: string; inbox?: boolean; /** The first message, when the prompt that should have carried it failed: sent once the session is listed. */ retryText?: string }>();
   /** Sessions whose channel was bound before the daemon listed them as published. */
@@ -910,6 +913,22 @@ export class Bridge {
     }
   }
 
+  /** A released command prompt's echo pair (queued echoes above): the release spent its own entry; only its partner goes.
+   *  Pairs match by value, so a stale partner can prune one extra same-valued entry - bounded, and rarer than the leak it fixes. */
+  private forgetQueuedPartner(kind: "command" | "text", value: string): void {
+    const at = this.queuedEchoes.findIndex((pair) => (kind === "command" ? pair.command === value : pair.text === value));
+    if (at < 0) {
+      return;
+    }
+    // the release already spent its own entry: only the other half goes (the same value twice must survive its own release)
+    const pair = this.queuedEchoes.splice(at, 1)[0] as { command: string; text: string };
+    const [list, echo] = kind === "command" ? [this.echoes, pair.text] : [this.commandEchoes, pair.command];
+    const atEcho = list.indexOf(echo);
+    if (atEcho >= 0) {
+      list.splice(atEcho, 1);
+    }
+  }
+
   /** A `!command` result (the custom message toriel injects): shown as the command and its output, unless chat ran it and said so itself. */
   private async showLocalCommand(roomId: string, m: { customType?: string; details?: unknown } | undefined): Promise<void> {
     const command = promptCommandOf(m);
@@ -918,6 +937,7 @@ export class Bridge {
       const mine = this.commandEchoes.indexOf(command);
       if (mine >= 0) {
         this.commandEchoes.splice(mine, 1);
+        this.forgetQueuedPartner("command", command); // the release went out through the bridge path (review round 4)
       } else {
         await this.postLong(roomId, quoteUser(command, "typed in toriel"));
       }
@@ -977,6 +997,7 @@ export class Bridge {
         const echo = this.echoes.indexOf(text);
         if (echo >= 0) {
           this.echoes.splice(echo, 1);
+          this.forgetQueuedPartner("text", text); // the release of a queued pair went out as the fallback (review round 4)
         } else if (!text.startsWith("[") || parseLocalCommand(text)) {
           const local = parseLocalCommand(text);
           const mine = local ? this.shellCommands.indexOf(local.command) : -1;
@@ -1493,25 +1514,57 @@ export class Bridge {
   }
 
   private async prompt(meta: SessionMeta, text: string, m: ChatMessage, command?: string): Promise<void> {
-    // what pi sends back is not posted again: the user message, or for a command's prompt the command prompt naming it (ticket 302)
-    const echoes = command === undefined ? this.echoes : this.commandEchoes;
-    const echo = command ?? text;
-    echoes.push(echo);
-    if (echoes.length > 20) {
-      echoes.shift();
-    }
+    // what pi sends back is not posted again: the user message, or for a command's prompt the command prompt naming it
+    // (ticket 302). The echo is recorded before the request goes out: the reply and the child's events can share a stdout
+    // chunk, and a reply resolves in the middle of one, so pi's message_end of the user message can be broadcast before the
+    // reply settles - an echo recorded only after it would miss it, and the user would see their own message quoted back.
+    // For a command the echo depends on the delivery path, which only the reply's `legacy` names (`legacy` is the
+    // plain-prompt fallback, whose echo is a user message; silence, an older daemon, reads the same way), so both possible
+    // echoes wait until the reply: the prompt in `echoes`, the command in `commandEchoes`, and the reply takes the spent one.
+    const forget = (list: string[], echo: string): void => {
+      const at = list.indexOf(echo);
+      if (at >= 0) {
+        list.splice(at, 1);
+      }
+    };
     try {
+      this.echoes.push(text);
+      if (this.echoes.length > 20) {
+        this.echoes.shift();
+      }
+      if (command !== undefined) {
+        this.commandEchoes.push(command);
+        if (this.commandEchoes.length > 20) {
+          this.commandEchoes.shift();
+        }
+      }
+      let reply: unknown;
       if (meta.active && !meta.dead) {
-        await this.daemon.request({ type: "prompt", session: meta.id, message: text, source: "chatto", ...(command === undefined ? {} : { command }) });
+        reply = await this.daemon.request({ type: "prompt", session: meta.id, message: text, source: "chatto", ...(command === undefined ? {} : { command }) });
       } else if (meta.sessionFile) {
-        await this.daemon.request({ type: "prompt", sessionFile: meta.sessionFile, cwd: meta.cwd, message: text, source: "chatto", ...(command === undefined ? {} : { command }) });
+        reply = await this.daemon.request({ type: "prompt", sessionFile: meta.sessionFile, cwd: meta.cwd, message: text, source: "chatto", ...(command === undefined ? {} : { command }) });
       } else {
         throw new Error("the session has no file to resume");
       }
+      const r = reply as { legacy?: boolean; disposition?: string } | undefined;
+      if (r?.disposition === "queued" && command !== undefined) {
+        // a compaction holds the queue: the release goes out later through either path, and only one echo is spent -
+        // the pair is kept so the release prunes the other half too (a plain prompt has one list and no partner to prune)
+        this.queuedEchoes.push({ command, text });
+        if (this.queuedEchoes.length > 20) {
+          this.queuedEchoes.shift();
+        }
+      } else if (r?.legacy === false) {
+        // the bridge's own delivery echoed only the command prompt: the text entry goes, the command waits on
+        forget(this.echoes, text);
+      } else if (command !== undefined) {
+        // the plain-prompt fallback echoed the prompt as a user message: the command entry goes, the text waits on
+        forget(this.commandEchoes, command);
+      }
     } catch (err) {
-      const at = echoes.indexOf(echo);
-      if (at >= 0) {
-        echoes.splice(at, 1);
+      forget(this.echoes, text);
+      if (command !== undefined) {
+        forget(this.commandEchoes, command);
       }
       await this.adapter.post(m.roomId, `⚠ could not send that: ${err instanceof Error ? err.message : String(err)}`, { replyTo: m.id });
     }

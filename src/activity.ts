@@ -143,11 +143,19 @@ function runElapsed(state: ActivityState, a: Activity, now: number): { ms: numbe
  * The daemon's word as a floor under the events (ticket 352): when a session's run begins (`streaming` turns on) and its view shows
  * no activity, it is working, whatever the events said - a view rebuilt after a reconnect, or a run whose start the view missed,
  * would otherwise sit still until its first thinking, text or tool event, which with thinking off can be a long wait. Only the
- * rising edge counts: the flag lags behind agent_settled, so trusting its level would bring a finished run's spinner back.
+ * rising edge sets one: the flag lags behind agent_settled, so trusting its level there would bring a finished run's spinner back.
+ * The falling edge clears instead: a run that ended without the view seeing an agent_settled (a crash mid-run, a settle lost with
+ * the connection) would leave its spinner hanging on a session that settled long ago. The queue is untouched either way.
  */
 export function floorActivity(state: ActivityState | undefined, meta: { streaming?: boolean }, wasStreaming: boolean, now: number): void {
-  if (state && meta.streaming && !wasStreaming && !state.activity) {
-    state.activity = { label: "working", since: now };
+  if (meta.streaming && !wasStreaming) {
+    if (state && !state.activity) {
+      state.activity = { label: "working", since: now };
+    }
+    return;
+  }
+  if (!meta.streaming && wasStreaming && state && state.activity) {
+    state.activity = undefined;
   }
 }
 

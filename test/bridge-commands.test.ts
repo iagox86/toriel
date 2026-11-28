@@ -376,6 +376,8 @@ describe("the typing indicator follows the session list (ticket 284)", () => {
 describe("a command's generated prompt in chat (ticket 302)", () => {
   it("!init sends the prompt with its command, and the command prompt pi sends back is not posted again", async () => {
     const t = await setup();
+    // the daemon's reply says which path carried it: legacy: false for the command prompt the bridge delivered
+    t.daemon.answers.set("prompt", { disposition: "started", legacy: false });
     await t.write("!init");
     const sent = t.daemon.of("prompt")[0] as { command?: string; message: string };
     assert.equal(sent.command, "/init");

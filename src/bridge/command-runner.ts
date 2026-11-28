@@ -145,7 +145,7 @@ async function runShell(cmd: ChatCommand, env: CommandEnv): Promise<void> {
       const status = res?.cancelled ? "stopped" : res?.exitCode === undefined ? "done" : res.exitCode === 0 ? "exit 0" : `exit ${res.exitCode}`;
       await env.say(`${status}${res?.truncated ? " (output cut)" : ""}${out ? `\n\`\`\`\n${clip(out.replaceAll("```", "ˋˋˋ"))}\n\`\`\`` : ""}`);
     })
-    .catch((err: unknown) => env.say(`⚠ \`${command}\` failed: ${errText(err)}`))
+    .catch((err: unknown) => env.say(`⚠ \`${command}\` failed: ${scrubSecrets(errText(err))}`))
     .catch(() => undefined);
 }
 

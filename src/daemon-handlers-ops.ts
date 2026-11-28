@@ -9,12 +9,12 @@ import { bangEnv } from "./child-env.ts";
 import { PLAN_DIR, SOCK, TRASH_DIR } from "./config.ts";
 import { planOn, setPlanOn } from "../pi/extensions/lib/plan-mode.ts";
 import { type Cmd, type DaemonContext, requireNotInPi, type Responder } from "./daemon-context.ts";
-import { LOCAL_COMMAND_TYPE } from "./daemon-bridge.ts";
+import { COMMAND_PROMPT_TYPE, LOCAL_COMMAND_TYPE } from "./daemon-bridge.ts";
 import { deliverToSession } from "./daemon-handlers-bridge.ts";
 import { digestHistory, readHistoryOf, sendHistory } from "./daemon-history.ts";
 import { answerText, recordDecision } from "./decision-log.ts";
 import type { GoalRecord } from "./goals.ts";
-import { autoOn, type DaemonSession, type HeldPrompt, requireIdle } from "./daemon-session.ts";
+import { autoOn, heldQueueTexts, type DaemonSession, type HeldPrompt, requireIdle } from "./daemon-session.ts";
 import { formatLocalCommand, type LocalResult, runLocal } from "./local-command.ts";
 import { log } from "./log.ts";
 import { matchModel, modelName } from "./model-match.ts";
@@ -408,15 +408,18 @@ export async function handleThink(
   res(true, undefined, { level: match.level });
 }
 
-/** Send what was typed during a compaction, now that pi accepts prompts again. */
+/** Send what was typed during a compaction, now that pi accepts prompts again. A command's held prompt is released the way it
+ *  was delivered live (ticket 302): as its custom message, never back as the user's own text. */
 async function releaseHeld(ctx: DaemonContext, s: DaemonSession, held: HeldPrompt[]): Promise<void> {
   ctx.hub.announceQueue(s.id, []);
-  for (const { text, images, injected } of held) {
+  for (const { text, images, injected, command } of held) {
     try {
       if (!s.child) {
         throw new Error("the session stopped before the message could be sent");
       }
-      if (injected) {
+      if (command !== undefined) {
+        await deliverToSession(ctx, s, text, { type: COMMAND_PROMPT_TYPE, data: { command }, label: command });
+      } else if (injected) {
         await deliverToSession(ctx, s, text);
       } else {
         await s.child.prompt(text, images, "steer");
