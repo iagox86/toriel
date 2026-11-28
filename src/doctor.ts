@@ -591,10 +591,12 @@ export function runDoctor(opts: DoctorOptions = {}): Check[] {
   // a machine without the chat bridge has nothing to ask the chat server about: its check is ok, not skipped
   const chatOn = () => loadSettings(opts.settingsFile ?? settingsFile(opts.env ?? process.env)).settings.chatto !== undefined;
   const known = new Set(CATALOG.map((c) => c.id));
+  // a check whose findings are all advisory is advice, not a problem: it keeps its findings (the report prints them as notes) but does not render as an actionable problem
+  const stateOf = (mine: Finding[]): Check["state"] => (mine.every((f) => f.advisory) ? "ok" : "problem");
   const checks: Check[] = CATALOG.map((entry) => {
     const mine = findings.filter((f) => f.id === entry.id);
     if (mine.length > 0) {
-      return { ...entry, state: "problem", findings: mine };
+      return { ...entry, state: stateOf(mine), findings: mine };
     }
     if (noPackage && entry.needsPermissionPackage) {
       return { ...entry, state: "skipped", findings: [], note: "needs pi-permission-system (see above)" };
@@ -630,7 +632,7 @@ export function runDoctor(opts: DoctorOptions = {}): Check[] {
     return { ...entry, state: "ok", findings: [] };
   });
   for (const f of findings.filter((x) => !known.has(x.id))) {
-    checks.push({ id: f.id, level: f.level, title: f.id, state: "problem", findings: [f] });
+    checks.push({ id: f.id, level: f.level, title: f.id, state: stateOf([f]), findings: [f] });
   }
   return checks;
 }
@@ -658,37 +660,43 @@ export const ANSI_STYLE: DoctorStyle = {
 
 /**
  * The report: a section per level, an OK or PROBLEM line per check, the fix under each problem.
- * `compact` (the in-app panel, which cannot scroll) leaves the passing checks out and counts them.
+ * `compact` (the in-app panel, which cannot scroll) leaves the passing checks out and counts them; a check carrying
+ * an advisory finding always appears with its note, since advice that never reaches the panel is no advice.
  */
 export function renderDoctor(checks: readonly Check[], opts: { compact?: boolean; style?: DoctorStyle } = {}): string {
   const st = opts.style ?? PLAIN_STYLE;
+  // a plain passing check: not a problem, and not a check that silently carries an advisory note
+  const plainOk = (c: Check) => c.state === "ok" && !c.findings.some((f) => f.advisory === true);
   const lines = [st.heading("toriel doctor")];
   for (const { level, heading } of LEVELS) {
     const inLevel = checks.filter((c) => c.level === level);
     if (inLevel.length === 0) {
       continue;
     }
-    const passing = inLevel.filter((c) => c.state === "ok").length;
+    const passing = inLevel.filter(plainOk).length;
     if (opts.compact && passing === inLevel.length) {
       lines.push("", `${st.heading(heading.split(" (")[0] as string)}: ${st.ok(`all ${passing} ok`)}`);
       continue;
     }
     lines.push("", st.heading(heading));
-    for (const c of opts.compact ? inLevel.filter((x) => x.state !== "ok") : inLevel) {
+    for (const c of opts.compact ? inLevel.filter((x) => !plainOk(x)) : inLevel) {
       const tag = c.state === "ok" ? st.ok("ok     ") : c.state === "skipped" ? st.skipped("skipped") : st.problem("PROBLEM");
       lines.push(`  ${tag}  ${c.title}`);
       if (c.state === "skipped" && c.note) {
         lines.push(`           ${c.note}`);
       }
       for (const f of c.findings) {
-        lines.push(`           ${f.message}  ${f.fix ? `[fixable: ${f.fix.summary}]` : `[manual: ${f.manual}]`}`);
+        const prefix = f.advisory ? "note: " : "";
+        lines.push(`           ${prefix}${f.message}  ${f.fix ? `[fixable: ${f.fix.summary}]` : `[manual: ${f.manual}]`}`);
       }
     }
     if (opts.compact && passing > 0) {
       lines.push(st.dim(`  (${passing} ok)`));
     }
   }
-  const problems = checks.reduce((n, c) => n + c.findings.length, 0);
+  // advisory findings are notes, not problems: printed above, never counted (the fixable count follows plannedFixes, which leaves them out)
+  const counted = checks.flatMap((c) => c.findings).filter((f) => f.advisory !== true);
+  const problems = counted.length;
   const fixable = plannedFixes(checks).reduce((n, g) => n + g.fixes.length, 0);
   lines.push("");
   if (problems === 0) {
@@ -709,11 +717,11 @@ export function exitCode(checks: readonly Check[]): 0 | 1 {
   return checks.some((c) => c.level === "required" && c.state === "problem") ? 1 : 0;
 }
 
-/** The automatic fixes on offer, grouped by the file they edit. */
+/** The automatic fixes on offer, grouped by the file they edit. Advisory findings are never offered: advice is yours to act on (and their fixable suffix would be misleading for --fix to honor). */
 export function plannedFixes(checks: readonly Check[]): Array<{ file: string; fixes: Fix[] }> {
   const byFile = new Map<string, Fix[]>();
   for (const f of checks.flatMap((c) => c.findings)) {
-    if (f.fix) {
+    if (f.fix && !f.advisory) {
       byFile.set(f.fix.file, [...(byFile.get(f.fix.file) ?? []), f.fix]);
     }
   }

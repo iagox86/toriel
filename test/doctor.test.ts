@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { ANSI_STYLE, applyFixes, CATALOG, collectFindings, type DoctorOptions, exitCode, KITTY_SHIFT_ENTER, lineDiff, plannedFixes, previewFixes, readKittyConfig, renderDoctor, runDoctor } from "../src/doctor.ts";
+import { ANSI_STYLE, applyFixes, CATALOG, type Check, collectFindings, type DoctorOptions, exitCode, KITTY_SHIFT_ENTER, lineDiff, plannedFixes, previewFixes, readKittyConfig, renderDoctor, runDoctor } from "../src/doctor.ts";
 import { readMcpYaml } from "../src/mcp-config.ts";
 import { loadSettings } from "../src/settings.ts";
 import { renderSettings } from "../src/settings-file.ts";
@@ -324,12 +324,84 @@ describe("doctor checks", () => {
     assert.ok(quiet.every((f) => f.id !== "settings"), "the acceptance list itself parses cleanly");
   });
 
+  it("prints the scope-guard finding as an advisory note: the check is listed, the line is a note, the count is zero, the exit code is 0", () => {
+    const s = setup({ config: { authorizerChain: ["toriel-grants"], permission: { "*": "allow", path: { "*": "allow", [GRANTS_RULE]: "ask" } } } });
+    const checks = runDoctor(s.opts);
+    assert.deepEqual(collectFindings(s.opts).map((f) => f.id), ["scope-guard-short-circuit"], "this scenario fires only the scope-guard finding");
+    const report = renderDoctor(checks);
+    const line = report.split("\n").find((l) => l.includes("config allows outside-scope writes outright")) ?? "";
+    assert.match(line, /^\s+note: config allows outside-scope writes outright/, "the finding prints as a note");
+    assert.doesNotMatch(line, /PROBLEM/);
+    assert.match(line, /\[manual: /, "its manual suffix is printed as before");
+    assert.match(report, /\bok\s+no config allow short-circuits the scope guard/, "the check is listed in the report");
+    assert.match(report, /Everything checks out\./, "the note is not counted as a problem");
+    assert.equal(exitCode(checks), 0);
+    assert.deepEqual(plannedFixes(checks), [], "a note carries no fixable count");
+    const compact = renderDoctor(checks, { compact: true });
+    assert.match(compact, /no config allow short-circuits the scope guard/, "the panel lists the advisory check");
+    assert.match(compact, /note: config allows outside-scope writes outright/, "the panel shows the note");
+    assert.doesNotMatch(compact, /Hardening: all \d+ ok/, "the all-ok shortcut would hide the section's note");
+    const hardOk = checks.filter((c) => c.level === "hardening" && c.state === "ok").length;
+    assert.ok(compact.includes(`(${hardOk - 1} ok)`), "the dim (N ok) counter counts plain passing checks only");
+  });
+
+  it("a check mixing an advisory note with a real finding is a problem: the note line keeps its prefix, the real one is counted", () => {
+    const entry = CATALOG.find((c) => c.id === "scope-guard-short-circuit");
+    assert.ok(entry, "the catalog has the scope-guard entry");
+    const mixed: Check[] = [
+      {
+        ...entry,
+        state: "problem",
+        findings: [
+          { id: entry.id, level: entry.level, advisory: true, message: "an advisory note alongside", manual: "yours, by choice" },
+          { id: entry.id, level: entry.level, message: "a real problem alongside", manual: "yours, always" },
+        ],
+      },
+    ];
+    const report = renderDoctor(mixed);
+    const noteLine = report.split("\n").find((l) => l.includes("an advisory note alongside")) ?? "";
+    assert.match(noteLine, /note: an advisory note alongside/, "the advisory line keeps its note prefix");
+    const problemLine = report.split("\n").find((l) => l.includes("a real problem alongside")) ?? "";
+    assert.doesNotMatch(problemLine, /note: /, "the real finding has no note prefix");
+    assert.match(report, /1 problem/, "only the real finding is counted");
+    const compact = renderDoctor(mixed, { compact: true });
+    assert.match(compact, /PROBLEM/, "the mixed check is listed as a problem in the panel");
+    assert.match(compact, /note: an advisory note alongside/, "the panel still prints the note under it");
+  });
+
+  it("an advisory finding with a fix is not counted, and --fix does not offer it", () => {
+    const entry = CATALOG.find((c) => c.id === "scope-guard-short-circuit");
+    assert.ok(entry, "the catalog has the scope-guard entry");
+    const notes: Check[] = [
+      {
+        ...entry,
+        state: "ok",
+        findings: [
+          {
+            id: entry.id,
+            level: entry.level,
+            advisory: true,
+            message: "an advisory note that someone gave a fix",
+            fix: { file: "/tmp/nowhere.json", summary: "an edit --fix would make if the finding were not advisory", edit: (config) => config },
+          },
+        ],
+      },
+    ];
+    assert.deepEqual(plannedFixes(notes), [], "the advisory fix is not offered");
+    assert.match(renderDoctor(notes), /Everything checks out\./, "the note is not counted as a problem");
+    assert.match(renderDoctor(notes), /\[fixable: /, "the line still prints the suffix the finding carries");
+  });
+
   it("grades what it finds, and exits 1 only for a required problem", () => {
     const grants = runDoctor(setup({ config: {} }).opts);
     assert.deepEqual(grants.filter((c) => c.state === "problem").map((c) => [c.id, c.level]), [["grants-chain", "feature"], ["grants-path-rule", "hardening"]]);
     assert.equal(exitCode(grants), 0);
     const allows = runDoctor(setup({ config: { authorizerChain: ["toriel-grants"], permission: { "*": "allow", path: { "*": "allow", [GRANTS_RULE]: "ask" } } } }).opts);
-    assert.deepEqual(allows.filter((c) => c.state === "problem").map((c) => [c.id, c.level]), [["scope-guard-short-circuit", "hardening"]]);
+    const advisory = allows.find((c) => c.id === "scope-guard-short-circuit");
+    assert.equal(advisory?.state, "ok", "an all-advisory check is a note, not an actionable problem");
+    assert.equal(advisory?.findings.length, 1);
+    assert.equal(advisory?.findings[0]?.advisory, true);
+    assert.equal(advisory?.level, "hardening");
     assert.equal(exitCode(allows), 0);
     const noPackage = runDoctor(setup({ noPackage: true }).opts);
     assert.deepEqual(noPackage.filter((c) => c.state === "problem").map((c) => [c.id, c.level]), [["permission-package", "recommended"]]);
