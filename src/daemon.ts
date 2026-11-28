@@ -251,14 +251,14 @@ async function main(): Promise<void> {
   // the start-up self-check: every finding is logged, the controller's notice line shows the ones that matter most
   const startupAudit = { permissionSystem: loadSettings().settings.warnNoPermissionSystem !== false, startup: [], litellmCacheFile: LITELLM_CACHE_FILE };
   for (const f of collectFindings(startupAudit)) {
-    log(`WARNING [${f.level}]: ${f.message}`);
+    log(`${f.advisory ? "NOTE" : "WARNING"} [${f.level}]: ${f.message}`);
   }
   // ticket 221: ask litellm once about its routes, after the socket is serving and off the event loop; the answer is cached, the controller's
   // notice line and /doctor read it from there (once per daemon start: models.json changes are caught by the next start or `toriel doctor`)
   checkGatewaysAtStart(piAgentDir(), LITELLM_CACHE_FILE)
     .then((cached) => {
       for (const f of cached ? collectFindings(startupAudit).filter((x) => x.id === "litellm-models" || x.id === "bifrost-models") : []) {
-        log(`WARNING [${f.level}]: ${f.message}`);
+        log(`${f.advisory ? "NOTE" : "WARNING"} [${f.level}]: ${f.message}`);
       }
     })
     .catch((err: unknown) => log(`litellm check failed: ${errText(err)}`));

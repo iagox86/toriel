@@ -252,10 +252,11 @@ describe("permission grants audit", () => {
 describe("scope guard audit", () => {
   const ids = (config: unknown) => scopeGuardFindings(config).map((f) => f.id);
 
-  it("fires for an external_directory_write allow, as a hardening problem with no automatic fix", () => {
+  it("fires for an external_directory_write allow, as a hardening note with no automatic fix", () => {
     const [f] = scopeGuardFindings({ permission: { external_directory_write: { "*": "allow" } } });
     assert.equal(f?.id, "scope-guard-short-circuit");
     assert.equal(f?.level, "hardening");
+    assert.equal(f?.advisory, true, "advice, not a problem: the report prints it as a note and never counts it");
     assert.equal(f?.fix, undefined);
     assert.match(f?.message ?? "", /^config allows outside-scope writes outright \(external_directory_write: "\*"\): an ask these match is allowed before the authorizer chain runs/);
     assert.match(f?.message ?? "", /; set them to "ask" - an explicit "\*": "ask" on external_directory_write also makes the "\*" fallback unreachable - if you want directory scoping to hold \(deliberate allows can be recorded in the toriel settings as scopeGuardAcceptedAllows so they are not flagged\)$/);

@@ -48,6 +48,11 @@ export type Finding = {
   id: string;
   level: Level;
   message: string;
+  /**
+   * Advice, not a problem: the doctor report prints the finding as a note, never counts it toward the problem count,
+   * and it cannot fail the report (the exit code ignores it). The fix-or-manual requirement still applies.
+   */
+  advisory?: boolean;
 } & Resolution;
 
 export interface Resource {
@@ -408,6 +413,7 @@ export function scopeGuardFindings(config: unknown, accepted?: Array<{ surface: 
     {
       id: "scope-guard-short-circuit",
       level: "hardening",
+      advisory: true,
       message: `config allows outside-scope writes outright (${[...new Set(labels)].join(", ")}): an ask these match is allowed before the authorizer chain runs, so the scope guard cannot deny it for directory-scoped sessions (TORIEL_SCOPE_ROOT); set them to "ask" - an explicit "*": "ask" on external_directory_write also makes the "*" fallback unreachable - if you want directory scoping to hold (deliberate allows can be recorded in the toriel settings as scopeGuardAcceptedAllows so they are not flagged)`,
       manual: "narrowing your allow rules changes the security posture you chose, so doctor will not do it; either edit them or record the deliberate ones as scopeGuardAcceptedAllows",
     },
