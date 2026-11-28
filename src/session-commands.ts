@@ -12,7 +12,7 @@ import { ModeNoticeDebounce, modeOf, nextMode, switches } from "./mode-cycle.ts"
 import { probeEntry, parseStatusDetailed, readConfigs, statusReport } from "./mcp-doctor.ts";
 import { addMcpServer, readMcpYaml, removeMcpServer, setMcpServerHeaders } from "./mcp-config.ts";
 import { loadExploreRecords } from "../pi/extensions/lib/mcp-config.ts";
-import { bearerEnvHeader, bearerTokenHeader, MCP_ACTIONS, type McpAuthOptions, type McpEntry, mcpConfigFile, mcpEntry, mcpListLines, mcpServerConnected, parseHeaderArg, piSkillsDirs, skillForServer, withHeaders } from "./mcp.ts";
+import { bearerEnvHeader, bearerTokenHeader, MCP_ACTIONS, type McpAuthOptions, type McpEntry, mcpConfigFile, mcpEntry, mcpListLines, mcpNotConnectedNote, mcpServerConnected, parseHeaderArg, piSkillsDirs, skillForServer, withHeaders } from "./mcp.ts";
 import { mcpExploreAllPrompt, mcpExplorePrompt } from "./mcp-explore-prompt.ts";
 import { stalenessReason, stalenessVerdict, type StalenessInput } from "./mcp-staleness.ts";
 import { gatewayKind, probeLitellmAsync } from "./litellm-models.ts";
@@ -1247,7 +1247,7 @@ export class SessionCommands {
     try {
       const r = (await this.h.request({ type: "mcp_status", session: meta.id }, 60_000)) as { text: string };
       if (!mcpServerConnected(r.text, server)) {
-        this.h.notify(`"${server}" is not connected - /mcp reconnect ${server} (or /mcp status for the details)`);
+        this.h.notify(`"${server}" is ${mcpNotConnectedNote(r.text, server)} (or /mcp status for the details)`);
         return;
       }
     } catch (err) {
@@ -1290,7 +1290,7 @@ export class SessionCommands {
         continue;
       }
       if (!mcpServerConnected(text, name)) {
-        skipped.push(`${name}: not connected - /mcp reconnect ${name}`);
+        skipped.push(`${name}: ${mcpNotConnectedNote(text, name)}`);
         continue;
       }
       names.push(name);

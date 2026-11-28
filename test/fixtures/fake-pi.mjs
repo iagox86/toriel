@@ -249,6 +249,8 @@ async function slowPrompt(first) {
 let bashStop;
 let abortSettled = false;
 let readCalls = 0;
+// when the fake's MCP servers have finished connecting: /mcp answers no earlier (FAKE_PI_MCP_CONNECT_MS after start)
+const mcpConnectedAt = Date.now() + Number(process.env.FAKE_PI_MCP_CONNECT_MS ?? 0);
 
 async function handle(cmd) {
   if (!started) {
@@ -462,9 +464,19 @@ async function handle(cmd) {
         ok(cmd.id, "prompt", { disposition: "started" });
         return out({ type: "extension_ui_request", id: "question-1", method: "select", title: "Ship it now?", options: ["Yes", "No", "Type something else"] });
       }
-      if (cmd.message.trim() === "/mcp") {
-        // like pi's extension command: answered as a notice, never entering the conversation
+      if (cmd.message.trim() === "/toriel-mcp-pending") {
+        // the toriel-mcp extension's at-once list (ticket 346)
         ok(cmd.id, "prompt", { disposition: "started" });
+        return out({ type: "extension_ui_request", id: "mcp-pending", method: "notify", message: "toriel-mcp-pending:\nmealie: connecting (direct)", notifyType: "info" });
+      }
+      if (cmd.message.trim() === "/mcp") {
+        // like pi's extension command: answered as a notice, never entering the conversation; FAKE_PI_MCP_CONNECT_MS holds the
+        // answer back the way pi's waits for its servers' connects, and FAKE_PI_MCP_PROBLEM first reports a problem the way pi does
+        ok(cmd.id, "prompt", { disposition: "started" });
+        if (process.env.FAKE_PI_MCP_PROBLEM === "1") {
+          out({ type: "extension_ui_request", id: "mcp-problem", method: "notify", message: "MCP servers need attention:\n  freecad: failed\nRun /mcp to fix.", notifyType: "warning" });
+        }
+        await sleep(Math.max(0, mcpConnectedAt - Date.now()));
         return out({
           type: "extension_ui_request",
           id: "mcp-status",

@@ -35,6 +35,12 @@ import { errText } from "./util.ts";
 import { skillNameFromPath } from "./skill-notice.ts";
 import { parseReport as parseTasksReport, STATUS_KEY as TASKS_KEY } from "../pi/extensions/lib/tasks.ts";
 import { STATUS_KEY as PLAN_KEY } from "../pi/extensions/lib/plan-mode.ts";
+import { MCP_PENDING_COMMAND, MCP_PENDING_MARK } from "../pi/extensions/lib/mcp-config.ts";
+
+/** How long pi's own /mcp gets before the servers are listed as connecting instead (ticket 346). */
+export const MCP_STATUS_GRACE_MS = 3_000;
+/** How long an /mcp question waits at all: past pi's 60s connect timeout, so a stuck connect has failed by then. */
+export const MCP_STATUS_CAP_MS = 75_000;
 
 export interface SlashCommand {
   name: string;
@@ -86,7 +92,9 @@ export class ChildManager {
   /** Newest slash-command list any child reported; serves sessions with no child. */
   private lastCommands: SlashCommand[] = [];
   /** Sessions waiting for the notice pi's /mcp prints, by daemon session id (see mcpStatus). */
-  private readonly noticeTaps = new Map<number, (text: string) => void>();
+  private readonly noticeTaps = new Map<number, (text: string) => boolean>();
+  /** The /mcp question in flight per session, until pi's own answer arrives (see mcpStatus). */
+  private readonly mcpQueries = new Map<number, Promise<string>>();
   /** Injects handed to session bridges and not yet seen in a transcript, so strip re-syncs keep them visible. */
   private readonly bridges: BridgeTracker;
   /** Called when a session's run settles or its compaction ends (the daemon uses it to wake waiting schedules). */
@@ -514,24 +522,58 @@ export class ChildManager {
    * The server list pi's /mcp prints. pi shows it as a notice, which we catch
    * here instead of passing on, so asking does not flash it at every controller.
    */
-  async mcpStatus(s: DaemonSession, timeoutMs = 20_000): Promise<string> {
+  async mcpStatus(s: DaemonSession, graceMs = MCP_STATUS_GRACE_MS, capMs = MCP_STATUS_CAP_MS): Promise<string> {
     const child = s.child;
     if (!child) {
       throw new Error("session is not active");
     }
-    return new Promise<string>((resolve, reject) => {
-      const done = (settle: () => void) => {
-        clearTimeout(timer);
-        this.noticeTaps.delete(s.id);
-        settle();
+    // one question at a time per session: a second asker shares the first's answer instead of overwriting its tap
+    const asking = this.mcpQueries.get(s.id);
+    if (asking) {
+      return asking;
+    }
+    const query = new Promise<string>((resolve, reject) => {
+      let settled = false;
+      const answer = (settle: () => void) => {
+        if (!settled) {
+          settled = true;
+          settle();
+        }
       };
-      const timer = setTimeout(
-        () => done(() => reject(new Error("no answer from /mcp - is the MCP extension loaded?"))),
-        timeoutMs,
-      );
-      this.noticeTaps.set(s.id, (text) => done(() => resolve(text)));
-      child.prompt("/mcp").catch((err: unknown) => done(() => reject(err)));
+      const finish = () => {
+        clearTimeout(grace);
+        clearTimeout(cap);
+        this.noticeTaps.delete(s.id);
+        this.mcpQueries.delete(s.id);
+      };
+      // pi's /mcp waits for every server's connect before it answers (ticket 346): when it is slow, the extension lists the
+      // registered servers as connecting at once, and the tap stays to swallow pi's late answer, so it never flashes at a controller
+      const grace = setTimeout(() => {
+        child.prompt(`/${MCP_PENDING_COMMAND}`).catch((err: unknown) => log(`${MCP_PENDING_COMMAND} failed: ${errText(err)}`));
+      }, graceMs);
+      const cap = setTimeout(() => {
+        finish();
+        answer(() => reject(new Error("no answer from /mcp yet: the MCP servers may still be connecting (pi waits up to 60s for each); try again shortly")));
+      }, capMs);
+      this.noticeTaps.set(s.id, (text) => {
+        if (text.startsWith(MCP_PENDING_MARK)) {
+          answer(() => resolve(text.slice(MCP_PENDING_MARK.length)));
+          return true;
+        }
+        if (text.startsWith("MCP ") || text.startsWith("mcp.yaml ")) {
+          return false; // pi's (or toriel-mcp's) own report of a problem, not the answer: let it through
+        }
+        finish();
+        answer(() => resolve(text));
+        return true;
+      });
+      child.prompt("/mcp").catch((err: unknown) => {
+        finish();
+        answer(() => reject(err));
+      });
     });
+    this.mcpQueries.set(s.id, query);
+    return query;
   }
 
   /** Keep a "toriel-usage" status record from a child's usage extension; true if it was one. */
@@ -782,8 +824,7 @@ export class ChildManager {
         return; // for the daemon, not for controllers
       }
       const tap = this.noticeTaps.get(s.id);
-      if (tap && event.method === "notify") {
-        tap(String(event.message ?? ""));
+      if (tap && event.method === "notify" && tap(String(event.message ?? ""))) {
         return;
       }
       // a select dialog may carry the grant the toriel-grants link saw for it

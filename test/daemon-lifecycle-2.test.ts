@@ -142,6 +142,26 @@ describe("daemon: lifecycle (2/3)", () => {
     assert.ok(!after.some((m) => m.type === "event" && m.event?.type === "message_start"), "no message enters the conversation");
   });
 
+  it("lists the servers as connecting while pi's /mcp waits for a connect, and keeps pi's late answer from the controllers", async () => {
+    harness = await startDaemon({ FAKE_PI_MCP_CONNECT_MS: "4500", FAKE_PI_MCP_PROBLEM: "1" });
+    const c = await harness.connect();
+    const { sessionId } = await c.request({ type: "spawn", cwd: harness.dir });
+    await c.waitFor((m) => m.type === "history");
+    const seen = c.messages.length;
+    const started = Date.now();
+    const [a, b] = await Promise.all([c.request({ type: "mcp_status", session: sessionId }), c.request({ type: "mcp_status", session: sessionId })]);
+    assert.ok(Date.now() - started < 4_500, "answered before the connect finished");
+    assert.equal(a.text, "mealie: connecting (direct)");
+    assert.equal(b.text, a.text, "a second asker shares the answer");
+    // pi's own problem report is not the answer: it reaches the controllers as before
+    await c.waitFor((m) => m.type === "ui_request" && m.request?.id === "mcp-problem");
+    await new Promise((r) => setTimeout(r, 3_000));
+    const after = c.messages.slice(seen);
+    assert.ok(!after.some((m) => m.type === "ui_request" && (m.request?.id === "mcp-status" || m.request?.id === "mcp-pending")), "neither answer reaches controllers");
+    const r = await c.request({ type: "mcp_status", session: sessionId });
+    assert.match(r.text, /^mealie: connected, 12 tools/, "once connected, a new question gets pi's own answer");
+  });
+
   it("sends the waiting dialog again when asked, and forgets it once pi has timed it out", async () => {
     harness = await startDaemon();
     const c = await harness.connect();

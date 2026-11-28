@@ -23,7 +23,7 @@
 // reader can tell when a server's skill was last written and whether its tools changed since.
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { canonicalize, computeToolHashes, explorePromptServerNames, learnSummaries, loadExploreRecords, MCP_DIRECT_ENV, MCP_FILE_ENV, MCP_RECORDS_ENV, MCP_SUMMARIES_ENV, type McpServerConfig, mergeExploreRecords, parseDirectServers, parseMcpYaml, piConfig, probeUrl, redactUrl, saveExploreRecords, summaryLine, type ToolNamespaceInfo, toolServerName } from "./lib/mcp-config.ts";
+import { canonicalize, computeToolHashes, explorePromptServerNames, learnSummaries, loadExploreRecords, MCP_DIRECT_ENV, MCP_FILE_ENV, MCP_PENDING_COMMAND, MCP_RECORDS_ENV, MCP_SUMMARIES_ENV, type McpServerConfig, mergeExploreRecords, parseDirectServers, parseMcpYaml, pendingStatus, piConfig, probeUrl, redactUrl, saveExploreRecords, summaryLine, type ToolNamespaceInfo, toolServerName } from "./lib/mcp-config.ts";
 
 // Only the slice of pi's extension API this file uses (see toriel-usage.ts).
 interface Ctx {
@@ -36,7 +36,7 @@ interface Pi {
   getAllTools?(): ToolNamespaceInfo[];
   getActiveTools?(): string[];
   registerMcpServer?(name: string, config: Record<string, unknown>): void;
-  getMcpServers?(): Array<{ name: string }>;
+  getMcpServers?(): Array<{ name: string; config?: { exposure?: unknown; enabled?: unknown } }>;
   registerCommand?(name: string, options: { description: string; handler: (args: string, ctx: Ctx) => Promise<void> | void }): void;
 }
 
@@ -256,6 +256,13 @@ export default function (pi: Pi): void {
       lastOutcome = undefined;
     });
   }
+  // answers at once, while pi's own /mcp waits out the connects (ticket 346): the daemon asks this when /mcp is slow
+  pi.registerCommand?.(MCP_PENDING_COMMAND, {
+    description: "toriel internal: the registered MCP servers, without waiting for them to connect",
+    handler: (_args, ctx) => {
+      ctx.ui?.notify?.(pendingStatus(pi.getMcpServers?.() ?? []), "info");
+    },
+  });
   pi.registerCommand?.(UP_COMMAND, {
     description: "toriel: connect the mcp.yaml servers marked whenUp that are running now (name one to check only it)",
     handler: async (args, ctx) => {
