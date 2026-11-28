@@ -443,3 +443,20 @@ export function probeUrl(url: string, timeoutMs = PROBE_TIMEOUT_MS): Promise<boo
     socket.once("error", () => done(false));
   });
 }
+
+/**
+ * The command the toriel-mcp extension answers at once with the registered servers (ticket 346). pi's own `/mcp` waits for every
+ * server's connect (up to 60s each) before it answers, so while one is still connecting the daemon asks this instead and shows the
+ * servers as connecting. Its notice starts with MCP_PENDING_MARK so the daemon can tell it from pi's answer.
+ */
+export const MCP_PENDING_COMMAND = "toriel-mcp-pending";
+export const MCP_PENDING_MARK = "toriel-mcp-pending:\n";
+
+/** The registered servers as /mcp status lines (`name: connecting (exposure)`, the shape parseMcpStatus reads), behind the mark. */
+export function pendingStatus(servers: ReadonlyArray<{ name: string; config?: { exposure?: unknown; enabled?: unknown } }>): string {
+  const lines = servers.map(({ name, config }) => {
+    const exposure = typeof config?.exposure === "string" ? config.exposure : "codemode";
+    return `${name}: ${config?.enabled === false ? "disabled" : "connecting"} (${exposure})`;
+  });
+  return `${MCP_PENDING_MARK}${lines.length > 0 ? lines.join("\n") : "No MCP servers registered yet."}`;
+}

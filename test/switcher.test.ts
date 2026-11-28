@@ -171,6 +171,11 @@ describe("switcher marker precedence (ticket 258)", () => {
     const frame = markerOf(session("s", undefined, "streaming"));
     assert.ok(FRAMES.has(frame), `a streaming row spins (got ${JSON.stringify(frame)})`);
   });
+
+  it("a sleeping session whose child is being started spins though it is not active yet (ticket 352)", () => {
+    const frame = markerOf({ ...session("st", undefined, "inactive"), starting: true });
+    assert.ok(FRAMES.has(frame), `a starting row spins (got ${JSON.stringify(frame)})`);
+  });
 });
 
 describe("switcher row alignment (ticket 258)", () => {

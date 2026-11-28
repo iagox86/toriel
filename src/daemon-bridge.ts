@@ -95,9 +95,21 @@ export const INJECT_TYPE = "toriel-inject";
 /** The custom message type of a `!command` result (`details`: command, output, exitCode, cancelled, truncated); see local-command.ts. */
 export const LOCAL_COMMAND_TYPE = "toriel-local-command";
 
+/**
+ * The custom message type of a prompt a toriel command generated (`/init`, `/continue`, `/mcp explore`; ticket 302): the model reads
+ * the prompt, `details.command` is what the user typed, which is all history, the transcript and chat show. Never a user message.
+ */
+export const COMMAND_PROMPT_TYPE = "toriel-command-prompt";
+
+/** What the command of a `toriel-command-prompt` message is, or undefined for any other message. */
+export function promptCommandOf(m: { customType?: string; details?: unknown } | undefined): string | undefined {
+  const command = m?.customType === COMMAND_PROMPT_TYPE ? (m.details as { command?: unknown } | undefined)?.command : undefined;
+  return typeof command === "string" ? command : undefined;
+}
+
 /** What an inject is beyond text: its custom message type and the fields the extension puts in `details`. */
 export interface InjectKind {
-  type: typeof LOCAL_COMMAND_TYPE;
+  type: typeof LOCAL_COMMAND_TYPE | typeof COMMAND_PROMPT_TYPE;
   data: Record<string, unknown>;
   label?: string;
 }
@@ -107,7 +119,7 @@ export function injectedId(event: Record<string, unknown>): string | undefined {
   const entry = event.type === "entry_appended" ? (event.entry as Record<string, unknown> | undefined) : undefined;
   const message = event.type === "message_end" ? (event.message as Record<string, unknown> | undefined) : undefined;
   const found = entry ?? message;
-  if (!found || (found.customType !== INJECT_TYPE && found.customType !== LOCAL_COMMAND_TYPE)) {
+  if (!found || (found.customType !== INJECT_TYPE && found.customType !== LOCAL_COMMAND_TYPE && found.customType !== COMMAND_PROMPT_TYPE)) {
     return undefined;
   }
   const id = (found.details as { id?: unknown } | undefined)?.id;

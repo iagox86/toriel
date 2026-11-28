@@ -68,7 +68,7 @@ import { collectFindings } from "./doctor.ts";
 import { summarizeFindings } from "./resources.ts";
 import { clearTransient, viewFromHistory } from "./resync.ts";
 import { buildStatusLine, fleetStats, bridgeNotice, settingsNotice } from "./status.ts";
-import { ActivityLine } from "./activity.ts";
+import { ActivityLine, floorActivity } from "./activity.ts";
 import { Dimmed } from "./components.ts";
 import { WindowedContainer } from "./windowed-container.ts";
 import { ChoicePanel } from "./choice-panel.ts";
@@ -184,8 +184,8 @@ class Controller {
   session: SessionActions;
   /** Spawn/adopt resolved by the daemon's next session list: enter it then. */
   pendingEnterId: number | null = null;
-  /** Text to send once pendingEnterId resolves (adopt-then-prompt flow). */
-  pendingPrompt: string | null = null;
+  /** Prompt to send once pendingEnterId resolves, with a generated command, if any (ticket 302). */
+  pendingPrompt: { text: string; command?: string } | null = null;
   /** pi's slash commands for the viewed session (from the daemon). */
   piCommands: Array<{ name: string; description?: string }> = [];
   private commandsFor: string | null = null;
@@ -480,6 +480,7 @@ class Controller {
 
   private onSessions(metas: SessionMeta[]): void {
     this.sessionsLoaded = true;
+    const wasStreaming = new Set([...this.sessions.values()].filter((m) => m.streaming).map((m) => m.id));
     this.sessions.clear();
     for (const meta of metas) {
       this.sessions.set(meta.id, meta);
@@ -504,12 +505,13 @@ class Controller {
       this.pendingPrompt = null;
       this.viewing = this.keyFor(meta);
       if (queuedPrompt) {
-        void this.session.prompt(queuedPrompt);
+        void this.session.prompt(queuedPrompt.text, queuedPrompt.command);
       }
       this.switching.close();
     }
     for (const meta of metas) {
       this.syncDialog(meta);
+      floorActivity(this.views.get(this.keyFor(meta)), meta, wasStreaming.has(meta.id), Date.now());
     }
     if (this.switching.isOpen) {
       this.switching.refresh();
@@ -541,8 +543,14 @@ class Controller {
     timing.time("history", { messages: messages.length, session: key, viewed: key === this.viewing }, () => {
       const old = this.views.get(key);
       const items = itemsFromMessages(messages, this.tui, this.metaForPath(key)?.cwd ?? "");
-      const fresh = viewFromHistory(old, items, this.staleViews.delete(key), messages.length);
+      const afterReconnect = this.staleViews.delete(key);
+      const fresh = viewFromHistory(old, items, afterReconnect, messages.length);
       this.views.set(key, fresh);
+      // a reconnect replay rebuilds the view clean, so a run still in flight would sit without its strip; the daemon's
+      // word gives it its spinner back (ticket 352)
+      if (afterReconnect) {
+        floorActivity(fresh, { streaming: this.metaForPath(key)?.streaming }, false, Date.now());
+      }
       this.goalLines(key);
       if (key === this.viewing) {
         this.rebuildChat();
@@ -945,7 +953,7 @@ class Controller {
     }
     this.activityLine.state = view ?? { queue: [] };
     // the transcript spinner, or (switcher open) the spinner on streaming rows
-    const switcherBusy = this.switching.isOpen && [...this.sessions.values()].some((m) => m.streaming);
+    const switcherBusy = this.switching.isOpen && [...this.sessions.values()].some((m) => m.streaming || m.starting);
     const animate = (Boolean(view?.activity) && !this.switching.isOpen) || switcherBusy;
     if (animate && !this.activityTimer) {
       this.activityTimer = setInterval(() => this.tui.requestRender(), 100);

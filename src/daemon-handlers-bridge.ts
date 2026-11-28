@@ -5,13 +5,14 @@
 // here; the user's own prompts stay ordinary user messages.
 import { INJECT_COMMAND, type InjectKind, mergedQueueTexts } from "./daemon-bridge.ts";
 import type { DaemonContext } from "./daemon-context.ts";
+import { heldQueueTexts } from "./daemon-session.ts";
 import type { DaemonSession } from "./daemon-session.ts";
 import { log } from "./log.ts";
 import { errText } from "./util.ts";
 
-/** Tell controllers what the strip should show: compaction-held messages, then the bridge's pending. */
+/** Tell controllers what the strip should show: compaction-held messages (a command's prompt shows its command), then the bridge's pending. */
 export function announceBridgeQueue(ctx: DaemonContext, s: DaemonSession): void {
-  ctx.hub.announceQueue(s.id, mergedQueueTexts((s.held ?? []).map((h) => h.text), ctx.bridges.texts(s.id)));
+  ctx.hub.announceQueue(s.id, mergedQueueTexts(heldQueueTexts(s.held ?? []), ctx.bridges.texts(s.id)));
 }
 
 /**

@@ -17,6 +17,7 @@ describe("continuePrompt", () => {
 describe("/continue", () => {
   it("sends the prompt through the ordinary prompt path and clears the editor", async () => {
     const sent: string[] = [];
+    const commands: Array<string | undefined> = [];
     let text = "/continue and focus on the tests";
     const host = {
       editor: {
@@ -26,11 +27,12 @@ describe("/continue", () => {
       },
       tui: { requestRender: () => {} },
       notify: () => {},
-      session: { prompt: async (p: string) => void sent.push(p) },
+      session: { prompt: async (p: string, command?: string) => void (sent.push(p), commands.push(command)) },
     };
     assert.equal(new SessionCommands(host as unknown as Host).run("/continue and focus on the tests"), true);
     await settle();
     assert.deepEqual(sent, [continuePrompt("and focus on the tests")]);
+    assert.deepEqual(commands, ["/continue and focus on the tests"], "sent as a command prompt (ticket 302)");
     assert.equal(text, "");
   });
 });

@@ -6,6 +6,8 @@ import { continuePrompt } from "../continue-prompt.ts";
 import { INIT_PROMPT } from "../init-prompt.ts";
 import { grantListing } from "../permission-format.ts";
 import type { SessionMeta } from "../shared.ts";
+import { touchesProtected } from "../daemon-permissions.ts";
+import { scrubSecrets } from "../subagent-exit.ts";
 import { errText } from "../util.ts";
 import { fmtClock, fmtDuration } from "../when.ts";
 import { CHAT_COMMANDS, type ChatCommand, chatCommandNamed, chatHelp, torielCommandNames } from "./chat-commands.ts";
@@ -20,12 +22,14 @@ export interface CommandEnv {
   say(text: string): Promise<void>;
   /** A numbered question with the first rows as number reactions; `onPick` gets the chosen row. */
   pick(title: string, rows: string[], onPick: (row: string) => Promise<void>): Promise<void>;
-  /** Send the session a prompt as if the user had written it. */
-  prompt(text: string): Promise<void>;
+  /** Send the session a prompt as if the user had written it; `command` marks one a command generated (ticket 302). */
+  prompt(text: string, command?: string): Promise<void>;
   /** The sessions (daemon numbers) with a `!!` shell command running, kept by the bridge. */
   shells: Set<number>;
   /** The `!!` command lines the bridge ran: the result message toriel injects is told apart from a console `!` by this. */
   shellCommands: string[];
+  /** Whether a command line names a protected file (`touchesProtected` with toriel's protected paths unless a test injects one). */
+  touchesProtected?: (text: string) => boolean;
 }
 
 /** The longest a `!!` command may run (the desktop's limit for `!`). */
@@ -36,11 +40,18 @@ const MAX_REPLY = 7500;
 
 const clip = (text: string): string => (text.length > MAX_REPLY ? `${text.slice(0, MAX_REPLY)}\n… (${text.length - MAX_REPLY} more characters; the desktop shows all)` : text);
 
-function state(m: SessionMeta): string {
+/** What a session is doing, in chat's words: `!list`, `!status` and the channel description all say it this way (ticket 289). */
+export function chatStateLabel(m: SessionMeta): string {
   if (m.pendingDialog) {
     return "waiting for you";
   }
-  return m.streaming ? "working" : m.active && !m.dead ? "idle" : "stopped";
+  if (!m.active) {
+    return m.starting ? "starting" : "asleep";
+  }
+  if (m.dead) {
+    return "crashed";
+  }
+  return m.streaming ? "working" : "idle";
 }
 
 /** Run a command typed in chat. A command the registry does not have is answered, never passed on. */
@@ -98,6 +109,16 @@ async function runShell(cmd: ChatCommand, env: CommandEnv): Promise<void> {
     return;
   }
   const command = cmd.args;
+  if (!command) {
+    await env.say("`!!` needs a command after it, e.g. `!!git status`.");
+    return;
+  }
+  // best effort, like the grant gates' check (ticket 289): a command line that names toriel's grants, pi's config, the chat token or
+  // the MCP files is not run from chat, where nobody is asked; the desktop console can still run it
+  if ((env.touchesProtected ?? touchesProtected)(command)) {
+    await env.say("I don't run a `!!` command that touches a protected file (toriel's grants, pi's config, the chat token, the MCP files): run it in toriel on the desktop.");
+    return;
+  }
   if (env.shells.has(m.id)) {
     await env.say("A `!!` command is already running here: `!abort` stops it.");
     return;
@@ -112,18 +133,20 @@ async function runShell(cmd: ChatCommand, env: CommandEnv): Promise<void> {
   await env.say(`Running \`${command}\` (\`!abort\` stops it)…`);
   void env.daemon
     .request({ type: "bash", session, command }, SHELL_TIMEOUT_MS)
+    .finally(() => {
+      // the command is over: free the session for the next !! now, not after the post below, which a hung chat server could hold forever
+      env.shells.delete(session);
+      env.shells.delete(m.id);
+    })
     .then(async (r) => {
       const res = r as { output?: string; exitCode?: number; cancelled?: boolean; truncated?: boolean } | undefined;
-      const out = (res?.output ?? "").trimEnd();
+      // the chat server keeps what is posted: a credential the command printed is masked in this copy (the agent's copy is the daemon's)
+      const out = scrubSecrets((res?.output ?? "").trimEnd());
       const status = res?.cancelled ? "stopped" : res?.exitCode === undefined ? "done" : res.exitCode === 0 ? "exit 0" : `exit ${res.exitCode}`;
       await env.say(`${status}${res?.truncated ? " (output cut)" : ""}${out ? `\n\`\`\`\n${clip(out.replaceAll("```", "ˋˋˋ"))}\n\`\`\`` : ""}`);
     })
-    .catch((err: unknown) => env.say(`⚠ \`${command}\` failed: ${errText(err)}`))
-    .catch(() => undefined)
-    .finally(() => {
-      env.shells.delete(session);
-      env.shells.delete(m.id);
-    });
+    .catch((err: unknown) => env.say(`⚠ \`${command}\` failed: ${scrubSecrets(errText(err))}`))
+    .catch(() => undefined);
 }
 
 const busy = (env: CommandEnv): boolean => Boolean(env.meta?.streaming);
@@ -134,14 +157,14 @@ const RUN: Record<string, Run> = {
   help: async (_a, env) => env.say(chatHelp(Boolean(env.meta))),
 
   list: async (_a, env) => {
-    const rows = env.metas.slice(0, 40).map((m) => `- **${m.sessionName ?? `(unnamed, ${m.cwd.split("/").pop()})`}** — ${state(m)}${m.published ? " · in chat" : ""}`);
+    const rows = env.metas.slice(0, 40).map((m) => `- **${m.sessionName ?? `(unnamed, ${m.cwd.split("/").pop()})`}** — ${chatStateLabel(m)}${m.published ? " · in chat" : ""}`);
     await env.say(rows.length === 0 ? "toriel has no sessions." : clip(`${env.metas.length} session${env.metas.length === 1 ? "" : "s"}:\n${rows.join("\n")}${env.metas.length > 40 ? `\n… and ${env.metas.length - 40} more` : ""}`));
   },
 
   status: async (_a, env) => {
     const m = env.meta as SessionMeta;
     const mode = m.plan ? "plan mode" : m.auto ? `auto mode${m.autoUntil !== undefined ? ` until ${fmtClock(m.autoUntil, new Date())}` : ""}` : "normal mode";
-    await env.say([`**${m.sessionName ?? "(unnamed)"}** — ${state(m)}`, `- model: ${m.model}`, `- directory: ${m.cwd}`, `- ${mode}`, ...(m.tasks?.length ? [`- ${m.tasks.length} task${m.tasks.length === 1 ? "" : "s"} (!tasks)`] : [])].join("\n"));
+    await env.say([`**${m.sessionName ?? "(unnamed)"}** — ${chatStateLabel(m)}`, `- model: ${m.model}`, `- directory: ${m.cwd}`, `- ${mode}`, ...(m.tasks?.length ? [`- ${m.tasks.length} task${m.tasks.length === 1 ? "" : "s"} (!tasks)`] : [])].join("\n"));
   },
 
   abort: async (_a, env) => {
@@ -159,7 +182,7 @@ const RUN: Record<string, Run> = {
     await env.say("Interrupted.");
   },
 
-  continue: async (args, env) => env.prompt(continuePrompt(args)),
+  continue: async (args, env) => env.prompt(continuePrompt(args), `/continue${args.trim() ? ` ${args.trim()}` : ""}`),
 
   background: async (_a, env) => {
     const m = env.meta as SessionMeta;
@@ -296,7 +319,7 @@ const RUN: Record<string, Run> = {
     await env.say(clip(`\`\`\`\n${r.text}\n\`\`\``));
   },
 
-  init: async (_a, env) => env.prompt(INIT_PROMPT),
+  init: async (_a, env) => env.prompt(INIT_PROMPT, "/init"),
 
   compact: async (args, env) => {
     if (busy(env)) {

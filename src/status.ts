@@ -18,7 +18,7 @@ export interface FleetStats {
 export function fleetStats(metas: Iterable<SessionMeta>): FleetStats {
   const stats: FleetStats = { running: 0, waiting: 0, tokens: 0, cost: 0 };
   for (const m of metas) {
-    if (m.streaming || m.compacting) {
+    if (m.streaming || m.compacting || (m.starting && !m.active)) {
       stats.running++;
     }
     if (m.pendingDialog) {
@@ -30,9 +30,10 @@ export function fleetStats(metas: Iterable<SessionMeta>): FleetStats {
   return stats;
 }
 
-export function stateLabel(meta: SessionMeta | undefined): "inactive" | "working" | "crashed" | "idle" {
+export function stateLabel(meta: SessionMeta | undefined): "inactive" | "starting" | "working" | "crashed" | "idle" {
   if (!meta?.active) {
-    return "inactive";
+    // a sleeping session being woken takes seconds before it is active (ticket 352)
+    return meta?.starting ? "starting" : "inactive";
   }
   if (meta.streaming || meta.compacting) {
     return "working";

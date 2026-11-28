@@ -131,7 +131,8 @@ describe("daemon: sessions", () => {
     await c.waitFor((m) => m.type === "history");
     await c.request({ type: "prompt", session: sessionId, message: "hi" });
     await c.waitFor(isSettled);
-    await c.waitFor((m) => m.type === "sessions" && m.sessions.some((s: Msg) => s.id === sessionId && s.tokens > 0));
+    // the settle's own list may still carry the running sum (5010); the meta refresh that follows it sends pi's whole-session figures (10)
+    await c.waitFor((m) => m.type === "sessions" && m.sessions.some((s: Msg) => s.id === sessionId && s.tokens === 10));
     const meta = c.sessions().find((s) => s.id === sessionId);
     assert.equal(meta?.tokens, 10);
   });

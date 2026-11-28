@@ -262,3 +262,11 @@ export function mcpServerConnected(text: string, name: string): boolean {
   const server = parseMcpStatus(text).find((s) => s.name === name);
   return server !== undefined && /^connected/i.test(server.detail);
 }
+
+/** Why `name` cannot be used yet, with what to do, for a server that is not connected: still connecting (ticket 346) or not connected. */
+export function mcpNotConnectedNote(text: string, name: string): string {
+  const server = parseMcpStatus(text).find((s) => s.name === name);
+  return server !== undefined && /^(connecting|starting)/i.test(server.detail)
+    ? `still connecting - try again in a moment (pi waits up to 60s for a connect)`
+    : `not connected - /mcp reconnect ${name}`;
+}

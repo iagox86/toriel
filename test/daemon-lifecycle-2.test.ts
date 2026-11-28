@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { type Harness, type Msg, startDaemon } from "./helpers.ts";
 
@@ -19,10 +20,11 @@ describe("daemon: lifecycle (2/3)", () => {
     const { sessionId } = await c.request({ type: "spawn", cwd: harness.dir });
     await c.waitFor((m) => m.type === "history");
     const live = await c.request({ type: "commands", session: sessionId });
-    assert.deepEqual(live.map((x: { name: string }) => x.name), ["skill:demo", "compact"]);
+    // the toriel-mcp extension's pending command rides along on every child (ticket 346), so the live list names it too
+    assert.deepEqual(live.map((x: { name: string }) => x.name), ["skill:demo", "compact", "toriel-mcp-pending"]);
     await c.request({ type: "deactivate", session: sessionId });
     const cached = await c.request({ type: "commands", session: sessionId });
-    assert.equal(cached.length, 2);
+    assert.equal(cached.length, 3);
   });
 
   it("lists models, switches to a unique match, and refuses an ambiguous or unknown one", async () => {
@@ -142,6 +144,115 @@ describe("daemon: lifecycle (2/3)", () => {
     assert.ok(!after.some((m) => m.type === "event" && m.event?.type === "message_start"), "no message enters the conversation");
   });
 
+  it("reports a sleeping session as starting while its child comes up, and not once it is up (ticket 352)", async () => {
+    harness = await startDaemon({ FAKE_PI_STARTUP_MS: "600" });
+    const c = await harness.connect();
+    const file = path.join(harness.dir, "asleep.jsonl");
+    fs.writeFileSync(file, `${JSON.stringify({ type: "session", id: "asleep" })}\n`);
+    const mark = c.messages.length;
+    await c.request({ type: "prompt", sessionFile: file, cwd: harness.dir, message: "wake up", confirmFork: true });
+    const seen = c.messages.slice(mark).filter((m) => m.type === "sessions").map((m) => m.sessions.find((x: Msg) => x.sessionFile === file));
+    assert.ok(seen.some((x: Msg) => x?.starting === true && !x.active), "a list while it starts says so");
+    assert.ok(seen.every((x: Msg) => !(x?.starting && x.active)), "never starting and active at once");
+    assert.equal(seen.at(-1)?.starting, undefined, "not starting once it is up");
+  });
+
+  it("lists the servers as connecting while pi's /mcp waits for a connect, and keeps pi's late answer from the controllers", async () => {
+    harness = await startDaemon({ FAKE_PI_MCP_CONNECT_MS: "4500", FAKE_PI_MCP_PROBLEM: "1" });
+    const c = await harness.connect();
+    const spawnAt = Date.now();
+    const { sessionId } = await c.request({ type: "spawn", cwd: harness.dir });
+    await c.waitFor((m) => m.type === "history");
+    const seen = c.messages.length;
+    const started = Date.now();
+    const [a, b] = await Promise.all([c.request({ type: "mcp_status", session: sessionId }), c.request({ type: "mcp_status", session: sessionId })]);
+    assert.ok(Date.now() - started < 4_500, "answered before the connect finished");
+    assert.equal(a.text, "mealie: connecting (direct)");
+    assert.equal(b.text, a.text, "a second asker shares the answer");
+    // pi's own problem report is not the answer: it reaches the controllers as before
+    await c.waitFor((m) => m.type === "ui_request" && m.request?.id === "mcp-problem");
+    await new Promise((r) => setTimeout(r, 3_000));
+    const after = c.messages.slice(seen);
+    assert.ok(!after.some((m) => m.type === "ui_request" && (m.request?.id === "mcp-status" || m.request?.id === "mcp-pending")), "neither answer reaches controllers");
+    const r = await c.request({ type: "mcp_status", session: sessionId });
+    assert.match(r.text, /^mealie: connected, 12 tools/, "once connected, a new question gets pi's own answer");
+    // both /mcp prompts of the child (the first ask's, and the new question's, which joined the armed tap) are answered at the
+    // connect: past that, the last /mcp answer must still never have reached the controllers (review round 2)
+    await new Promise((resolve) => setTimeout(resolve, Math.max(0, spawnAt + 6_500 - Date.now())));
+    assert.ok(!c.messages.slice(seen).some((m) => m.type === "ui_request" && m.request?.id === "mcp-status"), "pi's extra answer never reached the controllers either");
+  });
+
+  it("answers /mcp with pi's own notice inside the grace, and never asks the pending command then (mcp review)", async () => {
+    // pi's answer arrives well before the 3s grace: the tap recognizes its shape and takes the whole wait down with it
+    harness = await startDaemon({ FAKE_PI_MCP_CONNECT_MS: "400" });
+    const c = await harness.connect();
+    const { sessionId } = await c.request({ type: "spawn", cwd: harness.dir });
+    await c.waitFor((m) => m.type === "history");
+    const started = Date.now();
+    const r = await c.request({ type: "mcp_status", session: sessionId });
+    assert.ok(Date.now() - started < 3_000, "answered by pi's own notice, inside the grace");
+    assert.match(r.text, /^mealie: connected, 12 tools/, "the real list, not the connecting placeholder");
+    await new Promise((resolve) => setTimeout(resolve, 3_400)); // past the grace: nothing may fire it now
+    assert.ok(!fs.existsSync(path.join(harness.sessionsDir, "mcp-pending-calls")), "the grace never fired a pending prompt");
+  });
+
+  it("asks an extensionless child /mcp and answers only when pi itself finally does, with no pending command ever sent (mcp review round 2)", async () => {
+    // no toriel-mcp-pending in the child's command list: the grace's gate (get_commands at src/daemon-children.ts) must keep
+    // the pending command back, and the ask must wait out pi's own connect-driven answer instead of any grace-borne list
+    harness = await startDaemon({ FAKE_PI_NO_MCP: "1", FAKE_PI_MCP_CONNECT_MS: "5000" });
+    const c = await harness.connect();
+    const { sessionId } = await c.request({ type: "spawn", cwd: harness.dir });
+    await c.waitFor((m) => m.type === "history");
+    const r = await c.request({ type: "mcp_status", session: sessionId });
+    assert.match(r.text, /^mealie: connected, 12 tools/, "pi's own answer resolved the wait, not the pending list a grace would have asked for");
+    assert.doesNotMatch(r.text, /connecting \(direct\)/, "not the connecting placeholder");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.ok(!fs.existsSync(path.join(harness.sessionsDir, "mcp-pending-calls")), "the grace never sent the pending command: get_commands had no toriel-mcp-pending to gate on");
+  });
+
+  it("a replaced child is asked /mcp anew, and the stopped child's in-flight asker reads why (mcp review)", async () => {
+    harness = await startDaemon({ FAKE_PI_MCP_CONNECT_MS: "8000" });
+    const c = await harness.connect();
+    const { sessionId } = await c.request({ type: "spawn", cwd: harness.dir });
+    await c.waitFor((m) => m.type === "history");
+    const first = assert.rejects(c.request({ type: "mcp_status", session: sessionId }), /the session stopped before \/mcp was answered/);
+    await new Promise((resolve) => setTimeout(resolve, 200)); // the question is in flight, its grace armed, when the child goes
+    await c.request({ type: "deactivate", session: sessionId });
+    await first;
+    await c.request({ type: "prompt", session: sessionId, message: "wake" });
+    const r = await c.request({ type: "mcp_status", session: sessionId });
+    assert.equal(r.text, "mealie: connecting (direct)", "the new child was asked fresh and answered at its grace");
+    const calls = fs.readFileSync(path.join(harness.sessionsDir, "mcp-pending-calls"), "utf8").split("\n").filter(Boolean);
+    assert.equal(calls.length, 1, "only the new child was asked the pending command; the stopped question's grace went with it");
+  });
+
+  it("an unrelated notice passes through the swallow window, and a pending notify no tap holds is dropped, never shown (mcp review)", async () => {
+    harness = await startDaemon({ FAKE_PI_MCP_CONNECT_MS: "8000" });
+    const c = await harness.connect();
+    const spawnAt = Date.now();
+    const { sessionId } = await c.request({ type: "spawn", cwd: harness.dir });
+    await c.waitFor((m) => m.type === "history");
+    // the extension's list arriving with no question's tap waiting behind it is toriel's plumbing, not a controller's text
+    await c.request({ type: "prompt", session: sessionId, message: "/toriel-mcp-pending" });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.ok(!c.messages.some((m) => m.type === "ui_request" && JSON.stringify(m.request ?? {}).includes("toriel-mcp-pending")), "no tap holds it, and it is still dropped");
+    // the swallow window of a live question takes only its answer: another extension's notice is shown as usual
+    const status = c.request({ type: "mcp_status", session: sessionId });
+    await c.request({ type: "prompt", session: sessionId, message: "/toriel-background" });
+    await c.waitFor((m) => m.type === "ui_request" && m.request?.message === "Moved to the background: j1 (fake)");
+    const r = await status;
+    assert.equal(r.text, "mealie: connecting (direct)", "the question itself was answered by the grace's pending list");
+    const calls = fs.readFileSync(path.join(harness.sessionsDir, "mcp-pending-calls"), "utf8").split("\n").filter(Boolean);
+    assert.equal(calls.length, 2, "one call for the ask without a tap, one for the grace");
+    assert.ok(!c.messages.some((m) => m.type === "ui_request" && (m.request?.id === "mcp-status" || m.request?.id === "mcp-pending")), "neither mcp answer reached controllers as a notice");
+    // pi's real /mcp answer lands (spawn + FAKE_PI_MCP_CONNECT_MS, plus a margin): its tap was still armed, and it is never shown
+    await new Promise((resolve) => setTimeout(resolve, Math.max(0, spawnAt + 10_000 - Date.now())));
+    assert.ok(!c.messages.some((m) => m.type === "ui_request" && m.request?.id === "mcp-status"), "pi's late answer stayed with the armed tap, never the controllers");
+    // the answer spent the tap's last outstanding shot and retired it: the child's next answer is the child's own text again
+    await c.request({ type: "prompt", session: sessionId, message: "/mcp" });
+    await c.waitFor((m) => m.type === "ui_request" && m.request?.id === "mcp-status");
+  });
+
   it("sends the waiting dialog again when asked, and forgets it once pi has timed it out", async () => {
     harness = await startDaemon();
     const c = await harness.connect();
@@ -170,6 +281,28 @@ describe("daemon: lifecycle (2/3)", () => {
     assert.equal(told.event.message.role, "custom");
     assert.deepEqual({ ...told.event.message.details, id: undefined }, { command: "echo hi; exit 3", output: "hi\n", exitCode: 3, cancelled: false, truncated: false, id: undefined });
     assert.match(told.event.message.content, /<local-command>echo hi; exit 3<\/local-command>/, "the model still reads the wrapper text");
+  });
+
+  it("delivers a command's generated prompt as a toriel-command-prompt message naming the command, never a user message (ticket 302)", async () => {
+    harness = await startDaemon({ FAKE_PI_BRIDGE: "1" });
+    const c = await harness.connect();
+    const { sessionId } = await c.request({ type: "spawn", cwd: harness.dir });
+    await c.waitFor((m) => m.type === "history");
+    await c.request({ type: "prompt", session: sessionId, message: "Please write AGENTS.md", command: "/init" });
+    const told = await c.waitFor((m) => m.type === "event" && m.event?.type === "message_start" && m.event.message?.customType === "toriel-command-prompt");
+    assert.equal(told.event.message.role, "custom");
+    assert.equal(told.event.message.details.command, "/init");
+    assert.equal(told.event.message.content, "Please write AGENTS.md", "the model reads the prompt");
+    assert.ok(!c.messages.some((m) => m.type === "event" && m.event?.type === "message_start" && m.event.message?.role === "user"), "no user message");
+  });
+
+  it("without the session bridge, a command's prompt is a plain prompt, as before (ticket 302)", async () => {
+    harness = await startDaemon();
+    const c = await harness.connect();
+    const { sessionId } = await c.request({ type: "spawn", cwd: harness.dir });
+    await c.waitFor((m) => m.type === "history");
+    await c.request({ type: "prompt", session: sessionId, message: "Please write AGENTS.md", command: "/init" });
+    await c.waitFor((m) => m.type === "event" && m.event?.type === "message_start" && m.event.message?.role === "user" && m.event.message.content === "Please write AGENTS.md");
   });
 
   it("runs a !command, tells the agent the result at once, and can stop a long one", async () => {
@@ -225,6 +358,29 @@ describe("daemon: lifecycle (2/3)", () => {
       (m) => m.type === "event" && m.event?.type === "message_end" && m.event.message?.content?.[0]?.text?.startsWith("echo: later"),
     );
     assert.match(reply.event.message.content[0].text, /\[1 image\(s\): image\/jpeg\]/);
+  });
+
+  it("holds a command prompt mid-compaction as a command: the strip names it and the release delivers it as the command prompt (ticket 302)", async () => {
+    // slow mode so the second injection is delivered at the first run's turn boundary, like the bridge does mid-run
+    harness = await startDaemon({ FAKE_PI_COMPACT_MS: "600", FAKE_PI_BRIDGE: "1", FAKE_PI_SLOW: "1", FAKE_PI_STEP_MS: "40" });
+    const c = await harness.connect();
+    const { sessionId } = await c.request({ type: "spawn", cwd: harness.dir });
+    await c.waitFor((m) => m.type === "history");
+    const compact = c.request({ type: "compact", session: sessionId });
+    await c.waitFor((m) => m.type === "sessions" && (m.sessions as Msg[]).some((s) => s.id === sessionId && s.compacting === true));
+    const heldText = await c.request({ type: "prompt", session: sessionId, message: "one" });
+    assert.equal(heldText.disposition, "queued");
+    const heldCommand = await c.request({ type: "prompt", session: sessionId, message: "Please write AGENTS.md", command: "/init" });
+    assert.equal(heldCommand.disposition, "queued");
+    const strip = c.messages.filter((m) => m.type === "event" && m.event?.type === "queue_update").map((m) => m.event.steering as string[]);
+    assert.deepEqual(strip.at(-1), ["one", "/init"], "the strip shows the command that was typed, never the generated prompt");
+    await compact;
+    const told = await c.waitFor((m) => m.type === "event" && m.event?.type === "entry_appended" && m.event.entry?.customType === "toriel-command-prompt");
+    assert.equal(told.event.entry.details.command, "/init");
+    assert.equal(told.event.entry.content, "Please write AGENTS.md", "the model reads the prompt");
+    assert.ok(!c.messages.some((m) => m.type === "event" && m.event?.type === "message_start" && m.event.message?.role === "user" && m.event.message?.content === "Please write AGENTS.md"), "the held command prompt is never released as the user's plain text");
+    const plain = c.messages.find((m) => m.type === "event" && m.event?.type === "message_start" && m.event.message?.role === "user" && m.event.message?.content === "one");
+    assert.ok(plain, "the held plain prompt is still released as a user message");
   });
 
   it("reloads a session onto a fresh child with the same file and history", async () => {

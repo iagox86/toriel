@@ -37,8 +37,8 @@ export interface Host {
   viewing: string | null;
   /** Spawn/adopt resolved by the daemon's next session list: enter it then. */
   pendingEnterId: number | null;
-  /** Text to send once pendingEnterId resolves (adopt-then-prompt flow). */
-  pendingPrompt: string | null;
+  /** Prompt to send once pendingEnterId resolves, with a generated command, if any (ticket 302). */
+  pendingPrompt: { text: string; command?: string } | null;
   rewindPicker: RewindPicker;
   dialogPanel: DialogPanel;
   infoPanel: InfoPanel;

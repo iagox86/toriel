@@ -46,6 +46,11 @@ describe("stateLabel", () => {
     assert.equal(stateLabel(meta({ dead: true })), "crashed");
     assert.equal(stateLabel(meta()), "idle");
   });
+
+  it("says starting while a sleeping session's child is being started, and counts it as running (ticket 352)", () => {
+    assert.equal(stateLabel(meta({ active: false, starting: true })), "starting");
+    assert.equal(fleetStats([meta({ active: false, starting: true })]).running, 1);
+  });
 });
 
 describe("buildStatusLine", () => {

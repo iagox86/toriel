@@ -97,6 +97,13 @@ export interface HeldPrompt {
   images?: PromptImage[];
   /** A message from another session (delivered through the session bridge when released); the rest are the user's own prompts and stay user messages. */
   injected?: boolean;
+  /** A message a command generated (ticket 302): released the same way the live path delivers it - never as the user's own prompt. */
+  command?: string;
+}
+
+/** The texts a queue strip shows for held prompts: a command's command (what was typed), the text for everything else. */
+export function heldQueueTexts(held: readonly HeldPrompt[]): string[] {
+  return held.map((h) => h.command ?? h.text);
 }
 
 export type LiveSession = DaemonSession & { child: RpcClient };

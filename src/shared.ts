@@ -163,6 +163,8 @@ export interface SessionMeta {
   grantsSaved?: number;
   /** Subagent spawns this session asked for that wait for a free slot (ticket 345): they have no session yet, so the row counts them. */
   spawnsQueued?: number;
+  /** The session's child is being started (a prompt, message or schedule woke it; ticket 352): busy before it is active. */
+  starting?: boolean;
   /** A subagent this daemon run started: how it stands, and whether its parent has the result (the row greys out when it ended and was delivered). */
   subagent?: {
     state: string;
@@ -205,6 +207,11 @@ type ClientCommandBody =
       images?: PromptImage[];
       /** The kind of client that sent it ("chatto") when it is not a toriel controller; the daemon logs it. */
       source?: string;
+      /**
+       * The message is a prompt this command generated (`/mcp explore gdb`; ticket 302): the daemon delivers it as a
+       * `toriel-command-prompt` custom message, so history, the transcript and chat show the command, not the prompt.
+       */
+      command?: string;
       /** Live session to prompt. */
       session?: number;
       /** Inactive/dead session to (re)spawn and prompt: resume this file. */

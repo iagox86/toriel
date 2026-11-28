@@ -7,12 +7,14 @@ export type ChatCommand = { kind: "command" | "shell"; name: string; args: strin
 
 /**
  * `/word`, `!word` (or `!!word`, a shell command) as the first word is a command. A path (`/etc/hosts is wrong`) is not: its first
- * word has a second slash. A `!` followed by a space or nothing (`! really?`, `!!!`) is ordinary text.
+ * word has a second slash. A single `!` followed by a space or nothing (`! really?`) and `!!!` are ordinary text. `!! ls` (spaces
+ * after the `!!`) is the shell command `ls` and a bare `!!` a shell command with none (ticket 289: someone who typed `!!` wants a
+ * shell, never to have it prompted to the agent; the runner asks for the command).
  */
 export function parseChatCommand(text: string): ChatCommand | undefined {
-  const shell = /^!!([^\s!][\s\S]*)$/.exec(text.trim());
+  const shell = /^!!(?:\s*([^\s!][\s\S]*))?$/.exec(text.trim());
   if (shell) {
-    return { kind: "shell", name: "", args: shell[1].trim() }; // the whole rest is the command line: it may start with a path
+    return { kind: "shell", name: "", args: (shell[1] ?? "").trim() }; // the whole rest is the command line: it may start with a path
   }
   const m = /^([/!])([^\s/]+)(?:\s+([\s\S]*))?$/.exec(text.trim());
   if (!m || (m[1] === "!" && !/^[\w.-]/.test(m[2]))) {

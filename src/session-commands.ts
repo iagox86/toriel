@@ -12,7 +12,7 @@ import { ModeNoticeDebounce, modeOf, nextMode, switches } from "./mode-cycle.ts"
 import { probeEntry, parseStatusDetailed, readConfigs, statusReport } from "./mcp-doctor.ts";
 import { addMcpServer, readMcpYaml, removeMcpServer, setMcpServerHeaders } from "./mcp-config.ts";
 import { loadExploreRecords } from "../pi/extensions/lib/mcp-config.ts";
-import { bearerEnvHeader, bearerTokenHeader, MCP_ACTIONS, type McpAuthOptions, type McpEntry, mcpConfigFile, mcpEntry, mcpListLines, mcpServerConnected, parseHeaderArg, piSkillsDirs, skillForServer, withHeaders } from "./mcp.ts";
+import { bearerEnvHeader, bearerTokenHeader, MCP_ACTIONS, type McpAuthOptions, type McpEntry, mcpConfigFile, mcpEntry, mcpListLines, mcpNotConnectedNote, mcpServerConnected, parseHeaderArg, piSkillsDirs, skillForServer, withHeaders } from "./mcp.ts";
 import { mcpExploreAllPrompt, mcpExplorePrompt } from "./mcp-explore-prompt.ts";
 import { stalenessReason, stalenessVerdict, type StalenessInput } from "./mcp-staleness.ts";
 import { gatewayKind, probeLitellmAsync } from "./litellm-models.ts";
@@ -46,6 +46,10 @@ import { fmtClock, fmtDuration } from "./when.ts";
 import { log } from "./log.ts";
 
 const COMPACT_TIMEOUT_MS = 10 * 60_000;
+
+/** How long a controller waits for the daemon's /mcp answer: past the daemon's own wait (its cap is 75s, `MCP_STATUS_CAP_MS` in
+ *  `daemon-children.ts`), so the daemon's honest "not answered yet" error reaches the screen instead of the request timing out first. */
+export const MCP_STATUS_TIMEOUT_MS = 80_000;
 
 /** The name of the review session /performance opens: `performance review <YYYY-MM-DD HH:MM>`, local time. */
 export function performanceReviewName(now: Date = new Date()): string {
@@ -653,7 +657,7 @@ export class SessionCommands {
         }
       } else {
         this.h.pendingEnterId = r.sessionId;
-        this.h.pendingPrompt = prompt || null;
+        this.h.pendingPrompt = prompt ? { text: prompt } : null;
       }
       this.h.notify(`forked${note} - you are in the copy; the original is unchanged`);
     } catch (err) {
@@ -914,7 +918,7 @@ export class SessionCommands {
     }
     try {
       this.h.notify("asking the MCP servers...");
-      const r = (await this.h.request({ type: "mcp_status", session: meta.id }, 60_000)) as { text: string };
+      const r = (await this.h.request({ type: "mcp_status", session: meta.id }, MCP_STATUS_TIMEOUT_MS)) as { text: string };
       const skillsDirs = piSkillsDirs(piAgentDir());
       this.h.infoPanel.show(["MCP servers", "", ...mcpListLines(r.text, skillsDirs), "", "/mcp reconnect <server> - tab completes the names"].join("\n"));
       this.h.notify("");
@@ -953,16 +957,16 @@ export class SessionCommands {
     }
   }
 
-  /** /init: an ordinary prompt asking the agent to write the project's AGENTS.md. */
+  /** /init: a command prompt (ticket 302: the model gets the prompt, history and the transcript show /init) asking the agent to write the project's AGENTS.md. */
   private async init(): Promise<void> {
     this.h.editor.setText("");
-    await this.h.session.prompt(INIT_PROMPT);
+    await this.h.session.prompt(INIT_PROMPT, "/init");
   }
 
-  /** /continue: an ordinary prompt (it wakes a stopped session like any other) saying the interruption was a mistake. */
+  /** /continue: a command prompt (it wakes a stopped session like any prompt; ticket 302) saying the interruption was a mistake. */
   private async continueAfterAbort(extra: string): Promise<void> {
     this.h.editor.setText("");
-    await this.h.session.prompt(continuePrompt(extra));
+    await this.h.session.prompt(continuePrompt(extra), `/continue${extra.trim() ? ` ${extra.trim()}` : ""}`);
   }
 
   /** /mcp add: write the server into toriel's mcp.yaml, then reload so the session picks it up. */
@@ -1206,7 +1210,7 @@ export class SessionCommands {
     }
     try {
       this.h.notify("checking the MCP servers...");
-      const r = (await this.h.request({ type: "mcp_status", session: meta.id }, 60_000)) as { text: string };
+      const r = (await this.h.request({ type: "mcp_status", session: meta.id }, MCP_STATUS_TIMEOUT_MS)) as { text: string };
       const parsed = parseStatusDetailed(r.text);
       const configs = readConfigs([mcpConfigFile()]);
       // probe only what needs it: the named server, or every one that is not connected
@@ -1245,9 +1249,9 @@ export class SessionCommands {
       return;
     }
     try {
-      const r = (await this.h.request({ type: "mcp_status", session: meta.id }, 60_000)) as { text: string };
+      const r = (await this.h.request({ type: "mcp_status", session: meta.id }, MCP_STATUS_TIMEOUT_MS)) as { text: string };
       if (!mcpServerConnected(r.text, server)) {
-        this.h.notify(`"${server}" is not connected - /mcp reconnect ${server} (or /mcp status for the details)`);
+        this.h.notify(`"${server}" is ${mcpNotConnectedNote(r.text, server)} (or /mcp status for the details)`);
         return;
       }
     } catch (err) {
@@ -1255,7 +1259,7 @@ export class SessionCommands {
       return;
     }
     this.h.editor.setText("");
-    await this.h.session.prompt(mcpExplorePrompt(server));
+    await this.h.session.prompt(mcpExplorePrompt(server), `/mcp explore ${server}`);
   }
 
   /** Bare /mcp explore (ticket 330): re-explore every configured, connected server whose skill is stale (no skill yet, no explore record, the server's tools changed after the explore that wrote it, or the record is at least MCP_SKILL_STALE_DAYS old) and that the owner has not switched off in mcp.yaml (`enabled: false`). Needs a live child (liveMeta), like the named form; sends the combined prompt through the ordinary prompt path. */
@@ -1266,7 +1270,7 @@ export class SessionCommands {
     }
     let text: string;
     try {
-      const r = (await this.h.request({ type: "mcp_status", session: meta.id }, 60_000)) as { text: string };
+      const r = (await this.h.request({ type: "mcp_status", session: meta.id }, MCP_STATUS_TIMEOUT_MS)) as { text: string };
       text = r.text;
     } catch (err) {
       this.fail("mcp", err);
@@ -1290,7 +1294,7 @@ export class SessionCommands {
         continue;
       }
       if (!mcpServerConnected(text, name)) {
-        skipped.push(`${name}: not connected - /mcp reconnect ${name}`);
+        skipped.push(`${name}: ${mcpNotConnectedNote(text, name)}`);
         continue;
       }
       names.push(name);
@@ -1302,7 +1306,7 @@ export class SessionCommands {
     }
     this.h.notify([...plan, ...skipped, `re-exploring ${names.length} server(s)...`].join("\n"));
     this.h.editor.setText("");
-    await this.h.session.prompt(mcpExploreAllPrompt(names));
+    await this.h.session.prompt(mcpExploreAllPrompt(names), "/mcp explore");
   }
 
   /** /mcp remove: take the server out of toriel's mcp.yaml and reload this session so it disconnects. */

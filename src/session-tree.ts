@@ -6,6 +6,8 @@ import type { SwitcherSession } from "./switcher.ts";
 
 /** The row note a session blocked on a dialog gets (session-list.ts). */
 export const WAITING_NOTE = "waiting on permission";
+/** The note on the row of a sleeping session whose child is being started (ticket 352). */
+export const STARTING_NOTE = "starting";
 
 /** What the tree adds to a row. */
 export interface TreeFields {

@@ -143,6 +143,7 @@ describe("inject requests", () => {
 
   it("takes a custom message type and structured fields, from the known types only", () => {
     assert.deepEqual(ext.parseInject('{"id":"b1","text":"x","type":"toriel-local-command","data":{"command":"ls"}}'), { id: "b1", text: "x", type: "toriel-local-command", data: { command: "ls" } });
+    assert.deepEqual(ext.parseInject('{"id":"b2","text":"p","type":"toriel-command-prompt","data":{"command":"/init"}}'), { id: "b2", text: "p", type: "toriel-command-prompt", data: { command: "/init" } }, "a command prompt (ticket 302)");
     assert.equal(ext.parseInject('{"id":"b1","text":"x","type":"made-up"}'), undefined);
     assert.equal(ext.parseInject('{"id":"b1","text":"x","type":7}'), undefined);
     assert.deepEqual(ext.parseInject('{"id":"b1","text":"x","data":[1]}'), { id: "b1", text: "x" }, "data must be an object");

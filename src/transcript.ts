@@ -7,7 +7,7 @@ import { AssistantMessage, BashRow, CompactionRow, ToolRow, UserMessage } from "
 import { type ActivityState, reduceActivity } from "./activity.ts";
 import { messagesAdded } from "./drift.ts";
 import { repairFences } from "./fence-repair.ts";
-import { INJECT_TYPE, LOCAL_COMMAND_TYPE } from "./daemon-bridge.ts";
+import { COMMAND_PROMPT_TYPE, INJECT_TYPE, LOCAL_COMMAND_TYPE, promptCommandOf } from "./daemon-bridge.ts";
 import { binaryReadDisplay } from "./binary-view.ts";
 import { prettyError } from "./error-format.ts";
 import { toolDefinitionFor } from "./tool-defs.ts";
@@ -18,7 +18,7 @@ import { displayText } from "./received.ts";
 import { displayScheduled } from "./schedule-label.ts";
 import { type ImageBlock, imageBlocks, messageText, oneLineFlat } from "./format.ts";
 import { mdTheme } from "./pi-theme.ts";
-import { attention, dim } from "./theme.ts";
+import { accent, attention, dim } from "./theme.ts";
 import { SKILL_LOADED_NOTICE } from "./shared.ts";
 import { skillNameFromPath } from "./skill-notice.ts";
 
@@ -59,6 +59,8 @@ export interface OtherItem extends ItemBase {
   component: Text;
   /** Set on provider-error rows: the unprocessed text, shown instead of the tidy one while tools are expanded. */
   rawError?: string;
+  /** Set on a generated command prompt's row (ticket 302): the command, and the prompt it sent, shown while tools are expanded. */
+  commandPrompt?: { command: string; prompt: string };
 }
 export type Item = UserItem | AssistantItem | ToolItem | BashItem | OtherItem | CompactionItem;
 
@@ -91,11 +93,25 @@ export function errorRow(raw: string): OtherItem {
   return { kind: "other", component: new Text(errorText(raw, false), 1, 0), rawError: raw };
 }
 
-/** Switch an error row between the tidy and the original provider text. */
+/** Switch an error row between the tidy and the original provider text, and a command prompt's row between the command and the prompt. */
 export function showRawError(item: OtherItem, showRaw: boolean): void {
   if (item.rawError !== undefined) {
     item.component.setText(errorText(item.rawError, showRaw));
   }
+  if (item.commandPrompt !== undefined) {
+    item.component.setText(commandPromptText(item.commandPrompt, showRaw));
+  }
+}
+
+/** The row of a prompt a command generated: what the user typed; with tools expanded, the prompt the model got under it. */
+function commandPromptText(p: { command: string; prompt: string }, expanded: boolean): string {
+  return expanded ? `${accent(p.command)}\n${dim(p.prompt)}` : `${accent(p.command)} ${dim("(sent a generated prompt; ctrl-o shows it)")}`;
+}
+
+/** The transcript row for a `toriel-command-prompt` custom message (ticket 302), collapsed; applyDisplay expands it with the tools. */
+export function commandPromptRow(command: string, prompt: string): OtherItem {
+  const commandPrompt = { command, prompt };
+  return { kind: "other", component: new Text(commandPromptText(commandPrompt, false), 1, 0), commandPrompt };
 }
 
 /** A dim row for something toriel did that the transcript would not otherwise say (a grant answered a prompt, a child exited). */
@@ -335,7 +351,7 @@ const JOB_TYPE = "toriel-job";
 
 /** True for the custom message type of a session-bridge injection (current or pre-rename) or a background job's exit notice: all show like a received message. */
 export function isInjectType(customType: string | undefined): boolean {
-  return customType === INJECT_TYPE || customType === LEGACY_INJECT_TYPE || customType === JOB_TYPE || customType === LOCAL_COMMAND_TYPE;
+  return customType === INJECT_TYPE || customType === LEGACY_INJECT_TYPE || customType === JOB_TYPE || customType === LOCAL_COMMAND_TYPE || customType === COMMAND_PROMPT_TYPE;
 }
 
 /** A session-bridge injection: a custom message the daemon delivered, shown like a received user message. */
@@ -403,7 +419,8 @@ export function applyEvent(view: SessionView, ev: Record<string, unknown>, env: 
         effects.messageEnded = true;
         if (messageText(m).trim()) {
           const local = parseLocalCommand(messageText(m));
-          effects.summary = oneLineFlat(local ? `$ ${local.command}` : messageText(m), 80);
+          const command = promptCommandOf(m as { customType?: string; details?: unknown });
+          effects.summary = oneLineFlat(command ?? (local ? `$ ${local.command}` : messageText(m)), 80);
         }
       }
       if (m?.role === "assistant") {
@@ -495,7 +512,11 @@ function userItem(text: string, tui: TuiAltScreen, images: ImageBlock[] = []): U
 }
 
 /** A custom message of the inject kinds as shown: a `!command` result from its `details`, the others like a received message. */
-function injectItem(m: { customType?: string; content?: unknown; details?: unknown }, tui: TuiAltScreen): UserItem | BashItem {
+function injectItem(m: { customType?: string; content?: unknown; details?: unknown }, tui: TuiAltScreen): UserItem | BashItem | OtherItem {
+  const command = promptCommandOf(m);
+  if (command !== undefined) {
+    return commandPromptRow(command, messageText(m));
+  }
   if (m.customType === LOCAL_COMMAND_TYPE) {
     const d = m.details as { command?: unknown; output?: unknown; exitCode?: unknown; cancelled?: unknown } | undefined;
     if (typeof d?.command === "string") {

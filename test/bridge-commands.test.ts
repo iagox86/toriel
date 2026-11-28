@@ -7,6 +7,7 @@ import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { Bridge } from "../src/bridge/bridge.ts";
 import { CHAT_COMMANDS, CHAT_ONLY, chatHelp, parseChatCommand, torielCommandNames } from "../src/bridge/chat-commands.ts";
+import { chatStateLabel } from "../src/bridge/command-runner.ts";
 import { formatLocalCommand } from "../src/local-command.ts";
 import type { ChattoSettings } from "../src/settings.ts";
 import { FakeChat, FakeDaemon, meta, RON } from "./fake-chatto.ts";
@@ -48,6 +49,8 @@ describe("parseChatCommand", () => {
     assert.equal(parseChatCommand("/etc/hosts is wrong"), undefined, "a path");
     assert.equal(parseChatCommand("! really?"), undefined);
     assert.equal(parseChatCommand("!!!"), undefined);
+    assert.deepEqual(parseChatCommand("!!  git status"), { kind: "shell", name: "", args: "git status" }, "spaces after !! still mean a shell");
+    assert.deepEqual(parseChatCommand("!!"), { kind: "shell", name: "", args: "" }, "a bare !! is a shell command with none, never a prompt");
     assert.equal(parseChatCommand("/"), undefined);
     assert.equal(parseChatCommand("fix /abort please"), undefined, "not the first word");
   });
@@ -144,6 +147,47 @@ describe("commands never reach the agent", () => {
     finish({ output: "", exitCode: undefined, cancelled: true, truncated: false });
     await new Promise((r) => setImmediate(r));
     assert.match(t.last(), /stopped/);
+  });
+
+  it("asks for the command after a bare !!, and never prompts the agent with it (ticket 289)", async () => {
+    const t = await setup();
+    await t.write("!!   ");
+    assert.equal(t.daemon.of("bash").length, 0);
+    assert.equal(t.daemon.of("prompt").length, 0);
+    assert.match(t.last(), /`!!` needs a command after it/);
+  });
+
+  it("does not run a !! command that names a protected file, and masks a credential in the output it posts (ticket 289)", async () => {
+    const t = await setup();
+    await t.write("!!cat ~/.pi/agent/auth.json");
+    assert.equal(t.daemon.of("bash").length, 0);
+    assert.match(t.last(), /protected file/);
+    t.daemon.answers.set("bash", { output: "API_TOKEN=abc123secret\nAuthorization: Bearer zzz.yyy\n", exitCode: 0, cancelled: false, truncated: false });
+    await t.write("!!env");
+    await new Promise((r) => setImmediate(r));
+    await t.bridge.idle();
+    assert.doesNotMatch(t.last(), /abc123secret|zzz\.yyy/);
+    assert.match(t.last(), /API_TOKEN=\*\*\*/);
+  });
+
+  it("frees the session for the next !! as soon as a command ends, even while its result is still being posted (ticket 289)", async () => {
+    const t = await setup();
+    let finish: (v: unknown) => void = () => undefined;
+    t.daemon.answers.set("bash", () => new Promise((r) => { finish = r; }));
+    await t.write("!!sleep 1");
+    const post = t.chat.post.bind(t.chat);
+    let hold: () => void = () => undefined;
+    t.chat.post = (async (...args: Parameters<typeof post>) => {
+      await new Promise<void>((r) => { hold = r; });
+      return post(...args);
+    }) as typeof t.chat.post;
+    finish({ output: "", exitCode: 0, cancelled: false, truncated: false });
+    await new Promise((r) => setImmediate(r));
+    t.chat.post = post;
+    t.daemon.answers.set("bash", { output: "", exitCode: 0, cancelled: false, truncated: false });
+    await t.write("!!echo again");
+    assert.equal(t.daemon.of("bash").length, 2, "the second !! ran while the first one's result was still on its way");
+    hold();
   });
 
   it("a !! command in the inbox says where it works, and a failure is said", async () => {
@@ -326,5 +370,63 @@ describe("the typing indicator follows the session list (ticket 284)", () => {
     t.daemon.sessions([meta({ streaming: true })]);
     await t.bridge.idle();
     assert.ok(t.chat.typings.includes(t.room.id));
+  });
+});
+
+describe("a command's generated prompt in chat (ticket 302)", () => {
+  it("!init sends the prompt with its command, and the command prompt pi sends back is not posted again", async () => {
+    const t = await setup();
+    // the daemon's reply says which path carried it: legacy: false for the command prompt the bridge delivered
+    t.daemon.answers.set("prompt", { disposition: "started", legacy: false });
+    await t.write("!init");
+    const sent = t.daemon.of("prompt")[0] as { command?: string; message: string };
+    assert.equal(sent.command, "/init");
+    const before = t.chat.postsIn(t.room.id).length;
+    t.daemon.push({ type: "event", session: 1, event: { type: "message_end", message: { role: "custom", customType: "toriel-command-prompt", content: sent.message, details: { command: "/init", id: "b1" } } } });
+    await t.bridge.idle();
+    assert.equal(t.chat.postsIn(t.room.id).length, before);
+  });
+
+  it("a command prompt from the desktop shows as the command typed in toriel, never the prompt", async () => {
+    const t = await setup();
+    t.daemon.push({ type: "event", session: 1, event: { type: "message_end", message: { role: "custom", customType: "toriel-command-prompt", content: "Write a skill for the MCP server gdb", details: { command: "/mcp explore gdb", id: "b1" } } } });
+    await t.bridge.idle();
+    assert.match(t.last(), /typed in toriel[\s\S]*\/mcp explore gdb/);
+    assert.doesNotMatch(t.last(), /Write a skill/);
+  });
+});
+
+describe("chat's session state words (ticket 289)", () => {
+  it("are the same for !list, !status and the channel description", () => {
+    assert.equal(chatStateLabel(meta({ pendingDialog: true })), "waiting for you");
+    assert.equal(chatStateLabel(meta({ active: false })), "asleep");
+    assert.equal(chatStateLabel(meta({ active: false, starting: true })), "starting");
+    assert.equal(chatStateLabel(meta({ dead: true })), "crashed");
+    assert.equal(chatStateLabel(meta({ streaming: true })), "working");
+    assert.equal(chatStateLabel(meta()), "idle");
+  });
+});
+
+describe("a dialog and a picker in one channel (ticket 289)", () => {
+  it("a typed number answers the pending dialog, not the older !model question", async () => {
+    const t = await setup();
+    t.daemon.answers.set("model", (c: Record<string, unknown>) => (c.query ? { model: `prov/${String(c.query)}` } : { current: "prov/a", models: ["prov/a", "prov/b", "prov/c"] }));
+    await t.write("!model");
+    t.daemon.push({ type: "ui_request", session: 1, request: { id: "d1", method: "select", title: "Permission Required\ntool: bash", options: ["Yes", "Yes, for this session", "No"] } });
+    await t.bridge.idle();
+    await t.write("2");
+    assert.equal(((t.daemon.of("ui_response")[0] as { response: { value: string } }).response).value, "Yes, for this session");
+    assert.equal(t.daemon.of("model").filter((c) => (c as { query?: string }).query).length, 0, "the model was not switched");
+  });
+});
+
+describe("threads outside a session's channel (ticket 289)", () => {
+  it("a thread reply in the inbox starts nothing and says threads are not used", async () => {
+    const t = await setup();
+    t.chat.say(t.inbox.id, "start a session please", { threadRootId: "m1" });
+    await t.bridge.idle();
+    assert.equal(t.daemon.of("spawn").length, 0);
+    assert.equal(t.daemon.of("prompt").length, 0);
+    assert.match(t.last(t.inbox), /don't use threads/);
   });
 });

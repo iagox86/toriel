@@ -7,7 +7,7 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { canonicalize, checkEntry, computeToolHashes, explorePromptServerNames, loadExploreRecords, mcpExploreAllFirstLine, type McpExploreRecords, mergeExploreRecords, parseMcpYaml, piConfig, probeUrl, redactUrl, saveExploreRecords, serverUrl, type ToolInfoLike } from "../pi/extensions/lib/mcp-config.ts";
+import { canonicalize, checkEntry, computeToolHashes, explorePromptServerNames, loadExploreRecords, mcpExploreAllFirstLine, type McpExploreRecords, mergeExploreRecords, MCP_PENDING_MARK, parseMcpYaml, pendingStatus, piConfig, probeUrl, redactUrl, saveExploreRecords, serverUrl, type ToolInfoLike } from "../pi/extensions/lib/mcp-config.ts";
 import { mcpExplorePrompt } from "../src/mcp-explore-prompt.ts";
 import { mcpYamlFile } from "../src/config-dir.ts";
 import { addMcpServer, importMcpJson, readMcpYaml, redactEntry, removeMcpServer, renderMcpYaml, setMcpServerKey } from "../src/mcp-config.ts";
@@ -324,5 +324,20 @@ describe("the /mcp explore records (ticket 308)", () => {
       { explored: { git: { at: "2026-06-01T00:00:00.000Z", hash: "h9" }, gdb: { at: "2026-05-10T12:00:00.000Z", hash: "h2" } }, latest: { git: { at: "2026-05-10T13:00:00.000Z", hash: "h1" } } },
     );
     assert.deepEqual(current, { explored: { git: { at: "2026-05-10T12:00:00.000Z", hash: "h1" } }, latest: { git: { at: "2026-05-10T13:00:00.000Z", hash: "h1" } } }, "the inputs are unchanged");
+  });
+});
+
+describe("pendingStatus (ticket 346)", () => {
+  it("lists each registered server as connecting with its exposure, or disabled, in the shape /mcp's status uses", () => {
+    const text = pendingStatus([
+      { name: "mealie", config: { exposure: "direct" } },
+      { name: "gdb", config: { exposure: "deferred", enabled: false } },
+      { name: "plain" },
+    ]);
+    assert.equal(text, `${MCP_PENDING_MARK}mealie: connecting (direct)\ngdb: disabled (deferred)\nplain: connecting (codemode)`);
+  });
+
+  it("says so when no server is registered", () => {
+    assert.equal(pendingStatus([]), `${MCP_PENDING_MARK}No MCP servers registered yet.`);
   });
 });

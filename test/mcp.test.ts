@@ -3,7 +3,7 @@ import { after, describe, it } from "node:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { explainMcpFailure, mcpCompletions, mcpEntry, mcpListLines, mcpServerConnected, parseMcpStatus, skillForServer } from "../src/mcp.ts";
+import { explainMcpFailure, mcpCompletions, mcpEntry, mcpListLines, mcpNotConnectedNote, mcpServerConnected, parseMcpStatus, skillForServer } from "../src/mcp.ts";
 
 describe("explainMcpFailure", () => {
   it("says a proxy page is probably answering when the sign-in got HTML instead of JSON, and keeps pi's text", () => {
@@ -186,5 +186,14 @@ describe("mcpServerConnected", () => {
     assert.equal(mcpServerConnected(STATUS, "freecad"), false);
     assert.equal(mcpServerConnected(STATUS, "sentry"), false);
     assert.equal(mcpServerConnected(STATUS, "nosuch"), false);
+  });
+});
+
+describe("mcpNotConnectedNote (ticket 346)", () => {
+  it("says a connecting server is still connecting, and any other is not connected with the fix", () => {
+    const text = "gdb: connecting (deferred)\nfreecad: failed (direct)";
+    assert.match(mcpNotConnectedNote(text, "gdb"), /^still connecting - try again/);
+    assert.equal(mcpNotConnectedNote(text, "freecad"), "not connected - /mcp reconnect freecad");
+    assert.equal(mcpNotConnectedNote(text, "nosuch"), "not connected - /mcp reconnect nosuch");
   });
 });
