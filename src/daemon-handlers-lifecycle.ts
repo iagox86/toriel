@@ -16,6 +16,8 @@ import { profileOfSession } from "./session-agents.ts";
 import { log } from "./log.ts";
 import { restoreTrashedSession, trashSessionFile } from "./trash.ts";
 import { cleanSource, errText } from "./util.ts";
+import { COMMAND_PROMPT_TYPE } from "./daemon-bridge.ts";
+import { deliverToSession } from "./daemon-handlers-bridge.ts";
 
 export async function handlePrompt(
   ctx: DaemonContext,
@@ -109,6 +111,13 @@ export async function handlePrompt(
       ctx.hub.broadcastSessions();
       await sendHistory(ctx, socket, target);
     });
+  }
+  if (cmd.command && !cmd.images?.length) {
+    // a generated prompt (ticket 302): the model reads it, everything else shows the command; deliverToSession starts a turn or
+    // waits for the running one's boundary, and falls back to the plain prompt below for a session without the bridge extension
+    await deliverToSession(ctx, s, cmd.message, { type: COMMAND_PROMPT_TYPE, data: { command: cmd.command }, label: cmd.command });
+    res(true, undefined, { disposition: "started" });
+    return;
   }
   // "steer" covers both cases: executes immediately when idle, and is
   // queued as a steering message when a run is already in flight.

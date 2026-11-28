@@ -132,3 +132,16 @@ describe("prompt to a session that was deleted while on screen", () => {
     assert.match(fh.notices.join(" "), /cannot start this session \(no session file\)/);
   });
 });
+
+describe("a prompt a command generated (ticket 302)", () => {
+  it("is sent with its command, not echoed as typed text, and leaves the up-arrow history alone", async () => {
+    const fh = fakeHost([{}]);
+    const sa = new SessionActions(fh.host);
+    assert.equal(await sa.prompt("Write a skill for the MCP server gdb ...", "/mcp explore gdb"), true);
+    assert.equal(fh.requests.length, 1);
+    assert.equal(fh.requests[0].command, "/mcp explore gdb");
+    assert.equal(fh.requests[0].message, "Write a skill for the MCP server gdb ...");
+    assert.deepEqual(fh.history, [], "the editor already recorded the command; the prompt never enters history");
+    assert.ok(!fh.sequence.includes("echo"), "no user-message echo: the command prompt row comes from pi");
+  });
+});

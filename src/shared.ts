@@ -207,6 +207,11 @@ type ClientCommandBody =
       images?: PromptImage[];
       /** The kind of client that sent it ("chatto") when it is not a toriel controller; the daemon logs it. */
       source?: string;
+      /**
+       * The message is a prompt this command generated (`/mcp explore gdb`; ticket 302): the daemon delivers it as a
+       * `toriel-command-prompt` custom message, so history, the transcript and chat show the command, not the prompt.
+       */
+      command?: string;
       /** Live session to prompt. */
       session?: number;
       /** Inactive/dead session to (re)spawn and prompt: resume this file. */

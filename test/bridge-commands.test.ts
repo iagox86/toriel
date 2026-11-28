@@ -373,6 +373,27 @@ describe("the typing indicator follows the session list (ticket 284)", () => {
   });
 });
 
+describe("a command's generated prompt in chat (ticket 302)", () => {
+  it("!init sends the prompt with its command, and the command prompt pi sends back is not posted again", async () => {
+    const t = await setup();
+    await t.write("!init");
+    const sent = t.daemon.of("prompt")[0] as { command?: string; message: string };
+    assert.equal(sent.command, "/init");
+    const before = t.chat.postsIn(t.room.id).length;
+    t.daemon.push({ type: "event", session: 1, event: { type: "message_end", message: { role: "custom", customType: "toriel-command-prompt", content: sent.message, details: { command: "/init", id: "b1" } } } });
+    await t.bridge.idle();
+    assert.equal(t.chat.postsIn(t.room.id).length, before);
+  });
+
+  it("a command prompt from the desktop shows as the command typed in toriel, never the prompt", async () => {
+    const t = await setup();
+    t.daemon.push({ type: "event", session: 1, event: { type: "message_end", message: { role: "custom", customType: "toriel-command-prompt", content: "Write a skill for the MCP server gdb", details: { command: "/mcp explore gdb", id: "b1" } } } });
+    await t.bridge.idle();
+    assert.match(t.last(), /typed in toriel[\s\S]*\/mcp explore gdb/);
+    assert.doesNotMatch(t.last(), /Write a skill/);
+  });
+});
+
 describe("chat's session state words (ticket 289)", () => {
   it("are the same for !list, !status and the channel description", () => {
     assert.equal(chatStateLabel(meta({ pendingDialog: true })), "waiting for you");

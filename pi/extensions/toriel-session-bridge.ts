@@ -28,7 +28,9 @@ export const STATUS_KEY = "toriel-bridge";
 /** The `!command` result message: `details` carries the command, output and exit status, so nothing has to parse `content`. */
 export const LOCAL_COMMAND_TYPE = "toriel-local-command";
 /** The custom message types a request may ask for (the daemon is trusted, but a typo should fail loudly, not invent a type). */
-export const REQUEST_TYPES: ReadonlySet<string> = new Set([CUSTOM_TYPE, LOCAL_COMMAND_TYPE]);
+/** A prompt a toriel command generated (/init, /continue, /mcp explore; ticket 302): `details.command` is what the user typed. */
+export const COMMAND_PROMPT_TYPE = "toriel-command-prompt";
+export const REQUEST_TYPES: ReadonlySet<string> = new Set([CUSTOM_TYPE, LOCAL_COMMAND_TYPE, COMMAND_PROMPT_TYPE]);
 
 interface Pending {
   id: string;

@@ -21,6 +21,7 @@ import { oneLine } from "../util.ts";
 import { parseChatCommand } from "./chat-commands.ts";
 import { chatStateLabel, runChatCommand } from "./command-runner.ts";
 import { HISTORY_TURNS, quoteUser, renderHistory } from "./history.ts";
+import { promptCommandOf } from "../daemon-bridge.ts";
 import { parseLocalCommand } from "../local-command.ts";
 import { localCommandOf, localCommandPost } from "./local-command-post.ts";
 
@@ -172,6 +173,8 @@ export class Bridge {
   private readonly toolsRun = new Map<number, number>(); // by session number, since the last post
   /** Prompts this bridge sent, so the user message pi echoes back is not posted a second time. */
   private readonly echoes: string[] = [];
+  /** The commands whose generated prompt this bridge sent (`!init`; ticket 302): their command prompt is not posted again. */
+  private readonly commandEchoes: string[] = [];
   /** A session started from chat that has no UUID yet: publish it (and bind a channel, when one exists) once it has. */
   private readonly awaiting = new Map<number, { roomId?: string; channelName?: string; inbox?: boolean; /** The first message, when the prompt that should have carried it failed: sent once the session is listed. */ retryText?: string }>();
   /** Sessions whose channel was bound before the daemon listed them as published. */
@@ -909,6 +912,17 @@ export class Bridge {
 
   /** A `!command` result (the custom message toriel injects): shown as the command and its output, unless chat ran it and said so itself. */
   private async showLocalCommand(roomId: string, m: { customType?: string; details?: unknown } | undefined): Promise<void> {
+    const command = promptCommandOf(m);
+    if (command !== undefined) {
+      // a prompt a toriel command generated (ticket 302): chat shows the command, as typed, never the prompt
+      const mine = this.commandEchoes.indexOf(command);
+      if (mine >= 0) {
+        this.commandEchoes.splice(mine, 1);
+      } else {
+        await this.postLong(roomId, quoteUser(command, "typed in toriel"));
+      }
+      return;
+    }
     const local = localCommandOf(m);
     if (!local) {
       return;
@@ -1420,9 +1434,9 @@ export class Bridge {
       shells: this.shells,
       shellCommands: this.shellCommands,
       pick: (title, rows, onPick) => this.askPick(m.roomId, title, rows, onPick),
-      prompt: async (t) => {
+      prompt: async (t, command) => {
         if (where.meta) {
-          await this.prompt(where.meta, t, m);
+          await this.prompt(where.meta, t, m, command);
         }
       },
     });
@@ -1478,23 +1492,26 @@ export class Bridge {
     return true;
   }
 
-  private async prompt(meta: SessionMeta, text: string, m: ChatMessage): Promise<void> {
-    this.echoes.push(text);
-    if (this.echoes.length > 20) {
-      this.echoes.shift();
+  private async prompt(meta: SessionMeta, text: string, m: ChatMessage, command?: string): Promise<void> {
+    // what pi sends back is not posted again: the user message, or for a command's prompt the command prompt naming it (ticket 302)
+    const echoes = command === undefined ? this.echoes : this.commandEchoes;
+    const echo = command ?? text;
+    echoes.push(echo);
+    if (echoes.length > 20) {
+      echoes.shift();
     }
     try {
       if (meta.active && !meta.dead) {
-        await this.daemon.request({ type: "prompt", session: meta.id, message: text, source: "chatto" });
+        await this.daemon.request({ type: "prompt", session: meta.id, message: text, source: "chatto", ...(command === undefined ? {} : { command }) });
       } else if (meta.sessionFile) {
-        await this.daemon.request({ type: "prompt", sessionFile: meta.sessionFile, cwd: meta.cwd, message: text, source: "chatto" });
+        await this.daemon.request({ type: "prompt", sessionFile: meta.sessionFile, cwd: meta.cwd, message: text, source: "chatto", ...(command === undefined ? {} : { command }) });
       } else {
         throw new Error("the session has no file to resume");
       }
     } catch (err) {
-      const at = this.echoes.indexOf(text);
+      const at = echoes.indexOf(echo);
       if (at >= 0) {
-        this.echoes.splice(at, 1);
+        echoes.splice(at, 1);
       }
       await this.adapter.post(m.roomId, `⚠ could not send that: ${err instanceof Error ? err.message : String(err)}`, { replyTo: m.id });
     }

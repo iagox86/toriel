@@ -206,6 +206,28 @@ describe("daemon: lifecycle (2/3)", () => {
     assert.match(told.event.message.content, /<local-command>echo hi; exit 3<\/local-command>/, "the model still reads the wrapper text");
   });
 
+  it("delivers a command's generated prompt as a toriel-command-prompt message naming the command, never a user message (ticket 302)", async () => {
+    harness = await startDaemon({ FAKE_PI_BRIDGE: "1" });
+    const c = await harness.connect();
+    const { sessionId } = await c.request({ type: "spawn", cwd: harness.dir });
+    await c.waitFor((m) => m.type === "history");
+    await c.request({ type: "prompt", session: sessionId, message: "Please write AGENTS.md", command: "/init" });
+    const told = await c.waitFor((m) => m.type === "event" && m.event?.type === "message_start" && m.event.message?.customType === "toriel-command-prompt");
+    assert.equal(told.event.message.role, "custom");
+    assert.equal(told.event.message.details.command, "/init");
+    assert.equal(told.event.message.content, "Please write AGENTS.md", "the model reads the prompt");
+    assert.ok(!c.messages.some((m) => m.type === "event" && m.event?.type === "message_start" && m.event.message?.role === "user"), "no user message");
+  });
+
+  it("without the session bridge, a command's prompt is a plain prompt, as before (ticket 302)", async () => {
+    harness = await startDaemon();
+    const c = await harness.connect();
+    const { sessionId } = await c.request({ type: "spawn", cwd: harness.dir });
+    await c.waitFor((m) => m.type === "history");
+    await c.request({ type: "prompt", session: sessionId, message: "Please write AGENTS.md", command: "/init" });
+    await c.waitFor((m) => m.type === "event" && m.event?.type === "message_start" && m.event.message?.role === "user" && m.event.message.content === "Please write AGENTS.md");
+  });
+
   it("runs a !command, tells the agent the result at once, and can stop a long one", async () => {
     harness = await startDaemon();
     const c = await harness.connect();

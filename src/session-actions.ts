@@ -31,6 +31,8 @@ interface Outgoing {
   sent: string;
   /** Show it in the transcript at once. */
   echo: boolean;
+  /** The command that generated the text (ticket 302): sent along, so the daemon delivers it as a command prompt. */
+  command?: string;
 }
 /** The daemon stops a command after 10 minutes; wait a little longer than that for its answer. */
 const BANG_TIMEOUT_MS = 11 * 60_000;
@@ -708,8 +710,10 @@ export class SessionActions {
   /**
    * Send `text` to the viewed session. False when it was not sent (the reason is
    * on screen, and the text is back in the box when the user should retry it).
+   * `command` marks `text` as the prompt that command generated (`/init`, `/mcp explore gdb`; ticket 302): it goes to the model as a
+   * command prompt, and the up-arrow history and the transcript keep the command (the editor already recorded it), never the prompt.
    */
-  async prompt(text: string): Promise<boolean> {
+  async prompt(text: string, command?: string): Promise<boolean> {
     const key = this.h.viewing;
     if (!key) {
       return false;
@@ -719,7 +723,7 @@ export class SessionActions {
     if (blocked !== undefined) {
       return blocked;
     }
-    const out = this.outgoing(text, meta);
+    const out = command !== undefined ? { message: text, images: [], sent: text, echo: false, command } : this.outgoing(text, meta);
     if (!out) {
       return false;
     }
@@ -735,7 +739,9 @@ export class SessionActions {
       if (!sent) {
         return false;
       }
-      this.h.editor.addToHistory(out.message);
+      if (out.command === undefined) {
+        this.h.editor.addToHistory(out.message);
+      }
       // starting a sleeping session takes seconds: only clear the box if it still holds what was sent,
       // not something typed meanwhile
       if (this.h.editor.getText() === text) {
@@ -825,7 +831,7 @@ export class SessionActions {
     if (out.echo) {
       this.h.echoPrompt(key, out.sent, out.images);
     }
-    await this.h.request({ type: "prompt", session: meta.id, message: out.sent, images: out.images.length > 0 ? out.images : undefined });
+    await this.h.request({ type: "prompt", session: meta.id, message: out.sent, images: out.images.length > 0 ? out.images : undefined, command: out.command });
     return true;
   }
 
@@ -862,6 +868,7 @@ export class SessionActions {
       cwd: info.cwd || path.dirname(key),
       message: out.sent,
       images: out.images.length > 0 ? out.images : undefined,
+      command: out.command,
       confirmFork: this.armedFork === key,
     })) as { confirmFork?: boolean; ageMs?: number } | undefined;
     if (data?.confirmFork) {

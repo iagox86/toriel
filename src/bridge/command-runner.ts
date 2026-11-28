@@ -22,8 +22,8 @@ export interface CommandEnv {
   say(text: string): Promise<void>;
   /** A numbered question with the first rows as number reactions; `onPick` gets the chosen row. */
   pick(title: string, rows: string[], onPick: (row: string) => Promise<void>): Promise<void>;
-  /** Send the session a prompt as if the user had written it. */
-  prompt(text: string): Promise<void>;
+  /** Send the session a prompt as if the user had written it; `command` marks one a command generated (ticket 302). */
+  prompt(text: string, command?: string): Promise<void>;
   /** The sessions (daemon numbers) with a `!!` shell command running, kept by the bridge. */
   shells: Set<number>;
   /** The `!!` command lines the bridge ran: the result message toriel injects is told apart from a console `!` by this. */
@@ -182,7 +182,7 @@ const RUN: Record<string, Run> = {
     await env.say("Interrupted.");
   },
 
-  continue: async (args, env) => env.prompt(continuePrompt(args)),
+  continue: async (args, env) => env.prompt(continuePrompt(args), `/continue${args.trim() ? ` ${args.trim()}` : ""}`),
 
   background: async (_a, env) => {
     const m = env.meta as SessionMeta;
@@ -319,7 +319,7 @@ const RUN: Record<string, Run> = {
     await env.say(clip(`\`\`\`\n${r.text}\n\`\`\``));
   },
 
-  init: async (_a, env) => env.prompt(INIT_PROMPT),
+  init: async (_a, env) => env.prompt(INIT_PROMPT, "/init"),
 
   compact: async (args, env) => {
     if (busy(env)) {

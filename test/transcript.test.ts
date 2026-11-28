@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { describe, it } from "node:test";
 import { resetCapabilitiesCache, setCapabilities } from "@earendil-works/pi-tui";
 import { formatLocalCommand } from "../src/local-command.ts";
-import { applyDelta, applyEvent, attachCallNote, reapplyCallNotes, type AssistantItem, dropEcho, echoUser, type Item, itemsFromFile, itemsFromMessages, errorRow, softFailure, lengthNotice, showRawError, messagesFromFile, newView, isInjectType } from "../src/transcript.ts";
+import { applyDelta, applyEvent, attachCallNote, reapplyCallNotes, type AssistantItem, dropEcho, echoUser, type Item, itemsFromFile, itemsFromMessages, errorRow, softFailure, lengthNotice, showRawError, messagesFromFile, newView, isInjectType, commandPromptRow } from "../src/transcript.ts";
 
 function assistant(content: unknown[] = []): AssistantItem {
   return { kind: "assistant", component: undefined as never, partial: { content }, text: new Map(), thinking: new Map() };
@@ -527,5 +527,34 @@ describe("isInjectType", () => {
     assert.equal(isInjectType("toriel-local-command"), true, "a !command result is shown too");
     assert.equal(isInjectType("something-else"), false);
     assert.equal(isInjectType(undefined), false);
+  });
+});
+
+describe("a command's generated prompt in the transcript (ticket 302)", () => {
+  const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
+  const text = (item: Item) => strip((item.component as unknown as { render(w: number): string[] }).render(120).join("\n"));
+  const message = { role: "custom", customType: "toriel-command-prompt", content: "Write a skill for the MCP server gdb, step by step", display: true, details: { command: "/mcp explore gdb", id: "b1" } };
+
+  it("shows the command live, with the prompt only when expanded, and the summary is the command", () => {
+    const view = newView();
+    const items: Item[] = [];
+    applyEvent(view, { type: "message_start", message }, { addItem: (i: Item) => items.push(i), tui: {} as never } as never);
+    const effects = applyEvent(view, { type: "message_end", message }, { addItem: (i: Item) => items.push(i), tui: {} as never } as never);
+    assert.equal(items.length, 1);
+    const row = items[0] as Item & { kind: "other" };
+    assert.match(text(row), /\/mcp explore gdb/);
+    assert.doesNotMatch(text(row), /step by step/, "the prompt is folded away");
+    showRawError(row, true);
+    assert.match(text(row), /step by step/, "ctrl-o shows the prompt");
+    assert.equal(effects.summary, "/mcp explore gdb");
+  });
+
+  it("replays from the file the same way, as no user message", () => {
+    const items = itemsFromMessages([message], {} as never, "/w");
+    assert.equal(items.length, 1);
+    assert.equal(items[0]?.kind, "other");
+    assert.match(text(items[0] as Item), /\/mcp explore gdb/);
+    assert.equal(isInjectType("toriel-command-prompt"), true);
+    assert.match(text(commandPromptRow("/init", "p")), /\/init/);
   });
 });
