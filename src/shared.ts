@@ -163,6 +163,8 @@ export interface SessionMeta {
   grantsSaved?: number;
   /** Subagent spawns this session asked for that wait for a free slot (ticket 345): they have no session yet, so the row counts them. */
   spawnsQueued?: number;
+  /** The session's child is being started (a prompt, message or schedule woke it; ticket 352): busy before it is active. */
+  starting?: boolean;
   /** A subagent this daemon run started: how it stands, and whether its parent has the result (the row greys out when it ended and was delivered). */
   subagent?: {
     state: string;

@@ -8,7 +8,7 @@ import { ARCHIVE_GROUP, type GroupsFile, isParked, resolveGroup } from "./groups
 import type { SessionMeta } from "./shared.ts";
 import { budgetText } from "./subagent-budget.ts";
 import { badEnd, endedPrefix } from "./subagent-exit.ts";
-import { WAITING_NOTE } from "./session-tree.ts";
+import { STARTING_NOTE, WAITING_NOTE } from "./session-tree.ts";
 import type { SessionState, SwitcherSession } from "./switcher.ts";
 
 /** A session known from its file on disk (SessionManager.listAll). */
@@ -84,6 +84,8 @@ export function buildSessionList(inp: ListInputs): SwitcherSession[] {
       note = "view-only";
     } else if (state === "dead") {
       note = "crashed - prompt respawns";
+    } else if (meta?.starting && !meta.active) {
+      note = STARTING_NOTE;
     }
     const modified = info?.modified ?? 0;
     let description =
@@ -112,6 +114,7 @@ export function buildSessionList(inp: ListInputs): SwitcherSession[] {
       finished: meta?.subagent ? meta.subagent.state !== "running" && meta.subagent.delivered : undefined,
       subagentFail,
       spawnsQueued: meta?.spawnsQueued,
+      starting: meta?.starting && !meta.active ? true : undefined,
       daemonId: meta?.id,
       sessionId,
       cwd,

@@ -98,6 +98,8 @@ export interface SwitcherSession {
   descendantsWaiting?: number;
   /** Subagent spawns this session asked for that wait for a free slot (ticket 345): counted on the row, never rows of their own. */
   spawnsQueued?: number;
+  /** Its child is being started (ticket 352): the row spins though the session is not active yet. */
+  starting?: boolean;
   /** First user message, shown in the description column when idle-ish. */
   description?: string;
 }
@@ -425,7 +427,7 @@ export class Switcher extends Container implements Focusable {
       }
       const s = row.s;
       const isSel = s.key === this.selectedKey;
-      const marker = s.note === WAITING_NOTE || s.descendantsWaiting ? attention("!") : s.subagentFail ? attention("x") : s.goalDone ? success("\u2713") : s.state === "streaming" ? streamingStyle(spinnerFrame(Date.now())) : MARKERS[s.state];
+      const marker = s.note === WAITING_NOTE || s.descendantsWaiting ? attention("!") : s.subagentFail ? attention("x") : s.goalDone ? success("\u2713") : s.state === "streaming" || s.starting ? streamingStyle(spinnerFrame(Date.now())) : MARKERS[s.state];
       const markerText = isSel ? marker : dim(marker);
       const displayName = this.treePrefix(s) + (s.muted ? `[pi] ${oneLine(s.name)}` : oneLine(s.name));
       const badge = rowBadge(s, new Date());

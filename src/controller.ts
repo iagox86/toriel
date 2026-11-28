@@ -68,7 +68,7 @@ import { collectFindings } from "./doctor.ts";
 import { summarizeFindings } from "./resources.ts";
 import { clearTransient, viewFromHistory } from "./resync.ts";
 import { buildStatusLine, fleetStats, bridgeNotice, settingsNotice } from "./status.ts";
-import { ActivityLine } from "./activity.ts";
+import { ActivityLine, floorActivity } from "./activity.ts";
 import { Dimmed } from "./components.ts";
 import { WindowedContainer } from "./windowed-container.ts";
 import { ChoicePanel } from "./choice-panel.ts";
@@ -480,6 +480,7 @@ class Controller {
 
   private onSessions(metas: SessionMeta[]): void {
     this.sessionsLoaded = true;
+    const wasStreaming = new Set([...this.sessions.values()].filter((m) => m.streaming).map((m) => m.id));
     this.sessions.clear();
     for (const meta of metas) {
       this.sessions.set(meta.id, meta);
@@ -510,6 +511,7 @@ class Controller {
     }
     for (const meta of metas) {
       this.syncDialog(meta);
+      floorActivity(this.views.get(this.keyFor(meta)), meta, wasStreaming.has(meta.id), Date.now());
     }
     if (this.switching.isOpen) {
       this.switching.refresh();
@@ -945,7 +947,7 @@ class Controller {
     }
     this.activityLine.state = view ?? { queue: [] };
     // the transcript spinner, or (switcher open) the spinner on streaming rows
-    const switcherBusy = this.switching.isOpen && [...this.sessions.values()].some((m) => m.streaming);
+    const switcherBusy = this.switching.isOpen && [...this.sessions.values()].some((m) => m.streaming || m.starting);
     const animate = (Boolean(view?.activity) && !this.switching.isOpen) || switcherBusy;
     if (animate && !this.activityTimer) {
       this.activityTimer = setInterval(() => this.tui.requestRender(), 100);

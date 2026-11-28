@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { type Harness, type Msg, startDaemon } from "./helpers.ts";
 
@@ -140,6 +141,19 @@ describe("daemon: lifecycle (2/3)", () => {
     const after = c.messages.slice(seen);
     assert.ok(!after.some((m) => m.type === "ui_request"), "the notice must not reach controllers");
     assert.ok(!after.some((m) => m.type === "event" && m.event?.type === "message_start"), "no message enters the conversation");
+  });
+
+  it("reports a sleeping session as starting while its child comes up, and not once it is up (ticket 352)", async () => {
+    harness = await startDaemon({ FAKE_PI_STARTUP_MS: "600" });
+    const c = await harness.connect();
+    const file = path.join(harness.dir, "asleep.jsonl");
+    fs.writeFileSync(file, `${JSON.stringify({ type: "session", id: "asleep" })}\n`);
+    const mark = c.messages.length;
+    await c.request({ type: "prompt", sessionFile: file, cwd: harness.dir, message: "wake up", confirmFork: true });
+    const seen = c.messages.slice(mark).filter((m) => m.type === "sessions").map((m) => m.sessions.find((x: Msg) => x.sessionFile === file));
+    assert.ok(seen.some((x: Msg) => x?.starting === true && !x.active), "a list while it starts says so");
+    assert.ok(seen.every((x: Msg) => !(x?.starting && x.active)), "never starting and active at once");
+    assert.equal(seen.at(-1)?.starting, undefined, "not starting once it is up");
   });
 
   it("lists the servers as connecting while pi's /mcp waits for a connect, and keeps pi's late answer from the controllers", async () => {

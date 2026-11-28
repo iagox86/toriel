@@ -139,6 +139,18 @@ function runElapsed(state: ActivityState, a: Activity, now: number): { ms: numbe
   return { ms: now - a.since - paused, waiting };
 }
 
+/**
+ * The daemon's word as a floor under the events (ticket 352): when a session's run begins (`streaming` turns on) and its view shows
+ * no activity, it is working, whatever the events said - a view rebuilt after a reconnect, or a run whose start the view missed,
+ * would otherwise sit still until its first thinking, text or tool event, which with thinking off can be a long wait. Only the
+ * rising edge counts: the flag lags behind agent_settled, so trusting its level would bring a finished run's spinner back.
+ */
+export function floorActivity(state: ActivityState | undefined, meta: { streaming?: boolean }, wasStreaming: boolean, now: number): void {
+  if (state && meta.streaming && !wasStreaming && !state.activity) {
+    state.activity = { label: "working", since: now };
+  }
+}
+
 const MAX_QUEUED_LINES = 3;
 
 /** Lines for the strip under the transcript: queued messages, then the spinner. */

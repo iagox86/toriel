@@ -146,6 +146,14 @@ describe("buildSessionList", () => {
     assert.equal(rows[0].key, "daemon:3");
   });
 
+  it("notes a sleeping session whose child is being started, and flags its row as starting until it is active (ticket 352)", () => {
+    const [row] = build({ daemon: [meta({ sessionFile: "/a", active: false, starting: true })], files: [local("/a")] });
+    assert.equal(row?.note, "starting");
+    assert.equal(row?.starting, true);
+    const [up] = build({ daemon: [meta({ sessionFile: "/a", active: true, streaming: true })], files: [local("/a")] });
+    assert.equal(up?.starting, undefined);
+  });
+
   it("prioritizes a permission wait over other notes", () => {
     const rows = build({ daemon: [meta({ sessionFile: "/a", pendingDialog: true, attachedElsewhere: true })], files: [local("/a")] });
     assert.equal(rows[0].note, "waiting on permission");

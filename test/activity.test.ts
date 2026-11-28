@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { type Activity, type ActivityState, activityLines, formatElapsed, reduceActivity } from "../src/activity.ts";
+import { type Activity, type ActivityState, activityLines, floorActivity, formatElapsed, reduceActivity } from "../src/activity.ts";
 
 const fresh = (): ActivityState => ({ queue: [] });
 
@@ -129,5 +129,27 @@ describe("activity timer while a dialog is open", () => {
     reduceActivity(s, { type: "agent_start" }, 0);
     reduceActivity(s, { type: "tool_execution_start", toolName: "toriel_agent" }, 1000);
     assert.match(strip(s, 5000), /running toriel_agent 5s\s+ctrl-b: run in background/);
+  });
+});
+
+describe("floorActivity (ticket 352)", () => {
+  it("shows working when a run begins and the view has seen no event of it yet", () => {
+    const state: ActivityState = { queue: [] };
+    floorActivity(state, { streaming: true }, false, 1000);
+    assert.deepEqual(state.activity, { label: "working", since: 1000 });
+  });
+
+  it("keeps what the events already say", () => {
+    const state: ActivityState = { queue: [], activity: { label: "running bash", since: 5 } };
+    floorActivity(state, { streaming: true }, false, 1000);
+    assert.equal(state.activity?.label, "running bash");
+  });
+
+  it("trusts only the rising edge: a flag still on after the run settled brings no spinner back", () => {
+    const state: ActivityState = { queue: [] };
+    floorActivity(state, { streaming: true }, true, 1000);
+    assert.equal(state.activity, undefined);
+    floorActivity(state, { streaming: false }, false, 1000);
+    assert.equal(state.activity, undefined);
   });
 });

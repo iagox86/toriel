@@ -158,7 +158,14 @@ header carries aggregate token/cost rollups tracked by the daemon; "age"
 is time since the session file was last written - pi appends on every
 request/response). Row marker: an animated spinner while streaming, `c`
 while compacting, `·` idle, `-` inactive, `x` crashed; a compacting row's
-summary column says `compacting`:
+summary column says `compacting`. A sleeping session that something woke (a
+prompt, a message from another session, a schedule, the chat bridge) spins
+with the note `starting` while its child comes up, and the status line says
+`starting` (`SessionMeta.starting`, ticket 352). The activity strip under the
+transcript also takes the daemon's word as a floor: when a session's run
+begins and its view has seen no event of it yet, it shows `working` at once
+rather than waiting for the first thinking, text or tool event, which with
+thinking off can be long (`floorActivity` in `activity.ts`):
 - `up`/`down` select, `enter`/`right` open, `esc` cancels a typed command
   (no-op otherwise), `left` no-op
 - `left`/`right`/`enter` on a group header fold/unfold it (`left` folds, `right` unfolds, `enter` toggles; remembered across runs; dragging a session into a folded group unfolds it): a folded group shows `▸`, hides its sessions and gives a one-line summary (count, working/idle, newest age); a filter unfolds everything while it is on
