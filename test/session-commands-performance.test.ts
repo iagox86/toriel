@@ -117,4 +117,23 @@ describe("/performance review session", () => {
     assert.match(delivery ?? "", /session gone/);
     assert.ok(delivery?.includes("saved to") ?? false, "the notice must point at the saved report");
   });
+
+  it("still delivers the report when saving it fails, and says it was not saved (ticket 343)", async () => {
+    clearReports();
+    // a file where the report directory should be: mkdir fails like a read-only or full disk would
+    fs.mkdirSync(path.dirname(reportDir()), { recursive: true });
+    fs.writeFileSync(reportDir(), "in the way");
+    try {
+      const { host, notices, sent } = fakeHost(async (_cwd, name) => ({ name, uuid: "uuid-3" }));
+      new SessionCommands(host, fakeRunPerf).run("/performance");
+      await settle();
+      assert.equal(sent.length, 1, "the report still reaches the review session");
+      assert.ok(sent[0]?.text?.includes(REPORT));
+      assert.match(sent[0]?.text ?? "", /not saved: /);
+      assert.ok(notices.some((n) => n.includes("report delivered") && n.includes("not saved")), `notices: ${JSON.stringify(notices)}`);
+      assert.ok(!notices.some((n) => n.startsWith("performance failed")), "a failed save is not a failed analysis");
+    } finally {
+      fs.rmSync(reportDir(), { force: true });
+    }
+  });
 });

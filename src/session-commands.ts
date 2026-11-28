@@ -753,7 +753,17 @@ export class SessionCommands {
       this.h.notify("");
       this.h.infoPanel.show(`btw: ${question}\n\n${answer}`, [
         { key: "c", label: "copies", run: () => void this.h.copyText(answer).then((r) => this.h.notify(r === true ? "btw: answer copied" : `btw: copy failed (${r})`)) },
-        { key: "s", label: "saves to a file", run: () => this.h.notify(`btw: saved to ${saveBtw(question, answer)}`) },
+        {
+          key: "s",
+          label: "saves to a file",
+          run: () => {
+            try {
+              this.h.notify(`btw: saved to ${saveBtw(question, answer)}`);
+            } catch (err) {
+              this.fail("btw", err);
+            }
+          },
+        },
       ]);
       this.h.tui.requestRender();
     } catch (err) {
@@ -789,21 +799,27 @@ export class SessionCommands {
       this.h.notify("performance: analyzing the transcript...");
       const r = await this.runPerf({ piCli: resolveChildConfig(loadSettings().settings).piCli, file: key, model: asked, cwd: meta?.cwd });
       this.h.notify("");
-      // Auto-save: the report outlives the transient notify (and the analysis).
-      const saved = savePerformance(r.answer);
+      // Auto-save: the report outlives the transient notify (and the analysis). A failed save (full or read-only
+      // disk) is said, and the report still goes to the review session (ticket 343).
+      let saved: string;
+      try {
+        saved = `saved to ${savePerformance(r.answer)}`;
+      } catch (err) {
+        saved = `not saved: ${errText(err)}`;
+      }
       if (target) {
         try {
           await this.h.request({
             type: "message",
             to: target.uuid ?? target.name,
-            text: `The performance report (saved to ${saved}${r.truncated ? ", tail excerpt capped" : ""}):\n\n${r.answer}`,
+            text: `The performance report (${saved}${r.truncated ? ", tail excerpt capped" : ""}):\n\n${r.answer}`,
           });
-          this.h.notify(`performance: report delivered to ${target.name} (also saved to ${saved})`);
+          this.h.notify(`performance: report delivered to ${target.name} (${saved})`);
         } catch (err) {
-          this.h.notify(`performance: report not delivered: ${errText(err)} (saved to ${saved})`);
+          this.h.notify(`performance: report not delivered: ${errText(err)} (${saved})`);
         }
       } else {
-        this.h.notify(`performance: report saved to ${saved}`);
+        this.h.notify(`performance: report ${saved}`);
       }
     } catch (err) {
       this.fail("performance", err);

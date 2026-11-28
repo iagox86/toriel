@@ -7,6 +7,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { BRIDGE_NOTICE_PREFIX, type DaemonMessage, type HistoryTurn, type SessionMeta } from "../shared.ts";
+import { changedGoals, goalLineText } from "../goal-lines.ts";
+import type { GoalEvent, GoalSummary } from "../goals.ts";
 import { DIALOG_METHODS } from "../config.ts";
 import { answerValue, DEFAULT_GRANT_DURATIONS, type DialogRequest, grantRowFor, isPermissionPrompt, optionsNumberedAlready, withOwnLayout } from "../dialogs.ts";
 import { isCappedSurface } from "../permissions.ts";
@@ -154,6 +156,12 @@ export class Bridge {
   private discoverTimer?: NodeJS.Timeout;
   private groupId = "";
   private metas: SessionMeta[] = [];
+  /** The goal summaries of the last session list (undefined until the first), to see which goals changed (ticket 349). */
+  private goals: Record<string, GoalSummary> | undefined;
+  /** By session UUID: the newest goal event already posted (or older than the bridge), so each change is posted once. */
+  private readonly goalPosted = new Map<string, number>();
+  /** When the first session list came: goal events before it are history, not news. */
+  private goalsSince = 0;
   private chain: Promise<void> = Promise.resolve();
   private readonly dialogs = new Map<string, OpenDialog>(); // by dialog id
   private readonly shellCommands: string[] = []; // `!!` commands this bridge ran, so the injected result is not posted again
@@ -506,6 +514,7 @@ export class Bridge {
         await this.noteChanges(this.metas, msg.sessions);
         this.metas = msg.sessions;
         await this.syncSessions();
+        await this.noteGoals(msg.goals ?? {});
         return;
       case "notice":
         // what toriel says about a session outside its transcript (a mode switched, a schedule that ended, a grant that answered a prompt)
@@ -530,6 +539,39 @@ export class Bridge {
     const rec = this.channelOf(this.metaOf(session));
     if (rec && text.trim() && !text.startsWith(BRIDGE_NOTICE_PREFIX)) {
       await this.postLong(rec.roomId, `ℹ ${text.trim()}`);
+    }
+  }
+
+  /**
+   * A goal set, done or cleared in a published session gets one line in its channel, worded like the transcript's goal line
+   * (ticket 349, the chat side of 348). The session list says which goals changed; the daemon's goal history says what happened
+   * and who finished it. Events from before the bridge started are not news. A failed fetch or post is only logged: the goal
+   * state and the session are never touched, and the transcript keeps the truth.
+   */
+  private async noteGoals(next: Record<string, GoalSummary>): Promise<void> {
+    const prev = this.goals;
+    this.goals = next;
+    if (prev === undefined) {
+      this.goalsSince = Date.now();
+      return;
+    }
+    for (const uuid of changedGoals(prev, next)) {
+      const rec = this.state.channels[uuid];
+      if (!rec || rec.closed) {
+        this.goalPosted.set(uuid, Math.max(this.goalPosted.get(uuid) ?? 0, next[uuid]?.at ?? Date.now()));
+        continue;
+      }
+      try {
+        const events = (await this.daemon.request({ type: "goal", action: "history", sessionId: uuid })) as GoalEvent[] | undefined;
+        const since = this.goalPosted.get(uuid) ?? this.goalsSince;
+        const fresh = (Array.isArray(events) ? events : []).filter((e) => e.at > since);
+        for (const e of fresh) {
+          await this.adapter.post(rec.roomId, `${e.kind === "done" ? "✅" : "ℹ"} ${goalLineText(e)}`);
+          this.goalPosted.set(uuid, e.at);
+        }
+      } catch (err) {
+        this.log(`goal line for ${uuid} not posted: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
   }
 

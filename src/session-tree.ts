@@ -86,11 +86,12 @@ export function arrangeTree(list: SwitcherSession[], parentOf: ReadonlyMap<strin
   return out;
 }
 
-/** "3 children, 1 working, 1 parked" for a parent's row; empty for a session with none. */
+/** "3 children, 1 working, 1 parked" for a parent's row, plus "2 subagents queued" for spawns waiting for a slot (ticket 345); empty for a session with neither. */
 export function childNote(s: SwitcherSession): string {
   const n = s.descendants ?? 0;
+  const queued = s.spawnsQueued ? `${s.spawnsQueued} ${s.spawnsQueued === 1 ? "subagent" : "subagents"} queued` : "";
   if (n === 0) {
-    return "";
+    return queued;
   }
   const parts = [`${n} ${n === 1 ? "child" : "children"}`];
   if (s.descendantsWorking) {
@@ -101,6 +102,9 @@ export function childNote(s: SwitcherSession): string {
   }
   if (s.descendantsWaiting) {
     parts.push(`${s.descendantsWaiting} waiting on permission`);
+  }
+  if (queued) {
+    parts.push(queued);
   }
   return parts.join(", ");
 }

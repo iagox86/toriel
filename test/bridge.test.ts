@@ -438,6 +438,86 @@ describe("the bridge: commands that change a session say so in its channel", () 
   });
 });
 
+describe("the bridge: goal lines in a published session's channel (ticket 349)", () => {
+  type Goals = Record<string, { text: string; done: boolean; at: number }>;
+  const list = (t: Awaited<ReturnType<typeof setup>>, goals: Goals, metas = [meta()]) => t.daemon.push({ type: "sessions", sessions: metas, goals });
+  const bodies = (t: Awaited<ReturnType<typeof setup>>, roomId: string) => t.chat.postsIn(roomId).map((p) => p.body);
+  /** The daemon's goal history by session UUID, answered to the bridge's `goal history` request. */
+  const historyOf = (t: Awaited<ReturnType<typeof setup>>, log: Record<string, Array<Record<string, unknown>>>) =>
+    t.daemon.answers.set("goal", (c: Record<string, unknown>) => (c.action === "history" ? (log[String(c.sessionId)] ?? []) : undefined));
+
+  it("posts a set, a done by the agent and a clear, each once, worded like the transcript line", async () => {
+    const t = await setup();
+    const now = Date.now();
+    const log: Record<string, Array<Record<string, unknown>>> = { "uuid-1": [{ kind: "set", text: "green build", at: now - 60_000 }] };
+    historyOf(t, log);
+    // the goal already set when the bridge starts is old news
+    list(t, { "uuid-1": { text: "green build", done: false, at: now - 60_000 } });
+    await t.bridge.idle();
+    const room = t.chat.roomByName("fix-the-build");
+    assert.ok(room);
+    const start = bodies(t, room.id).length;
+    assert.equal(bodies(t, room.id).some((b) => b.includes("goal")), false, "nothing from before the bridge started");
+
+    log["uuid-1"]?.push({ kind: "set", text: "ship it", at: now + 1_000 });
+    list(t, { "uuid-1": { text: "ship it", done: false, at: now + 1_000 } });
+    await t.bridge.idle();
+    list(t, { "uuid-1": { text: "ship it", done: false, at: now + 1_000 } });
+    await t.bridge.idle();
+    log["uuid-1"]?.push({ kind: "done", text: "ship it", at: now + 2_000, by: "agent" });
+    list(t, { "uuid-1": { text: "ship it", done: true, at: now + 2_000 } });
+    await t.bridge.idle();
+    log["uuid-1"]?.push({ kind: "cleared", text: "ship it", at: now + 3_000 });
+    list(t, {});
+    await t.bridge.idle();
+    assert.deepEqual(bodies(t, room.id).slice(start), ["ℹ goal set: ship it", "✅ goal done: ship it (marked by the agent)", "ℹ goal cleared: ship it"]);
+  });
+
+  it("posts each event once even when several land between two lists", async () => {
+    const t = await setup();
+    const now = Date.now();
+    const log: Record<string, Array<Record<string, unknown>>> = { "uuid-1": [] };
+    historyOf(t, log);
+    list(t, {});
+    await t.bridge.idle();
+    const room = t.chat.roomByName("fix-the-build");
+    assert.ok(room);
+    const start = bodies(t, room.id).length;
+    log["uuid-1"]?.push({ kind: "set", text: "a", at: now + 1_000 }, { kind: "done", text: "a", at: now + 2_000, by: "user" });
+    list(t, { "uuid-1": { text: "a", done: true, at: now + 2_000 } });
+    await t.bridge.idle();
+    list(t, { "uuid-1": { text: "a", done: true, at: now + 5_000 } }); // a re-stamp with nothing new in the history
+    await t.bridge.idle();
+    assert.deepEqual(bodies(t, room.id).slice(start), ["ℹ goal set: a", "✅ goal done: a"]);
+  });
+
+  it("asks nothing and posts nothing for a session that is not published", async () => {
+    const t = await setup();
+    historyOf(t, { "uuid-2": [{ kind: "set", text: "x", at: Date.now() + 1 }] });
+    const other = meta({ id: 2, sessionId: "uuid-2", sessionName: "Other", published: undefined });
+    list(t, {}, [meta(), other]);
+    await t.bridge.idle();
+    list(t, { "uuid-2": { text: "x", done: false, at: Date.now() + 1 } }, [meta(), other]);
+    await t.bridge.idle();
+    assert.equal(t.daemon.of("goal").length, 0);
+    assert.equal(t.chat.posts.some((p) => p.body.includes("goal")), false);
+  });
+
+  it("only logs when the history cannot be read: the session and the bridge carry on", async () => {
+    const t = await setup();
+    list(t, {});
+    await t.bridge.idle();
+    t.daemon.failures.set("goal", "daemon busy");
+    list(t, { "uuid-1": { text: "x", done: false, at: Date.now() + 1 } });
+    await t.bridge.idle();
+    assert.ok(t.logs.some((l) => /goal line for uuid-1 not posted: daemon busy/.test(l)), t.logs.join("\n"));
+    assert.equal(t.chat.posts.some((p) => p.body.includes("goal")), false);
+    t.daemon.push({ type: "notice", session: 1, text: "still here" });
+    await t.bridge.idle();
+    assert.ok(t.chat.posts.some((p) => p.body === "ℹ still here"), "the bridge still posts other things");
+  });
+});
+
 describe("the bridge: output", () => {
   it("posts the assistant's text with a count of the tools that ran, and shows typing while it works", async () => {
     const t = await setup();

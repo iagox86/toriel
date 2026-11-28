@@ -100,9 +100,43 @@ export interface SubagentRecord {
   maxTurns?: number;
 }
 
+/** A spawn waiting for a free slot (tickets 341, 345): no session exists yet, so it is only a line on its parent's row and in its toriel_agents list. */
+export interface QueuedSpawn {
+  /** UUID of the session that asked for it. */
+  parent: string;
+  agent: string;
+  description: string;
+  since: number;
+}
+
+/** What toriel_agents list shows for a spawn still waiting: its place in the whole line (every session's waiting spawns, first come first served). */
+export function describeQueued(q: QueuedSpawn, place: number, now = Date.now()): string {
+  return `(waiting) ${q.agent}: ${q.description} [waiting for a free slot, ${place} in line, ${Math.round((now - q.since) / 1000)}s; it starts when a running subagent ends]`;
+}
+
 export class SubagentBook {
   private readonly records: SubagentRecord[] = [];
+  private readonly queue: QueuedSpawn[] = [];
   private nextHandle = 1;
+
+  /** A spawn starts waiting for a slot. */
+  enqueue(q: QueuedSpawn): QueuedSpawn {
+    this.queue.push(q);
+    return q;
+  }
+
+  /** It got its slot, or its caller went away. */
+  dequeue(q: QueuedSpawn): void {
+    const i = this.queue.indexOf(q);
+    if (i >= 0) {
+      this.queue.splice(i, 1);
+    }
+  }
+
+  /** One session's waiting spawns, each with its place in the whole line (1 = next). */
+  queuedFor(parent: string): Array<{ spawn: QueuedSpawn; place: number }> {
+    return this.queue.flatMap((spawn, i) => (spawn.parent === parent ? [{ spawn, place: i + 1 }] : []));
+  }
 
   add(init: Omit<SubagentRecord, "handle" | "state" | "startedAt" | "lastEventAt" | "turns" | "tokens">, now = Date.now()): SubagentRecord {
     const rec: SubagentRecord = { ...init, handle: this.nextHandle++, state: "running", startedAt: now, lastEventAt: now, turns: 0, tokens: 0 };

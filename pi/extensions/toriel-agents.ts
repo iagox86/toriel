@@ -85,7 +85,7 @@ export function agentDescription(types: string | undefined): string {
 }
 
 export const AGENTS_DESCRIPTION =
-  'Manage the subagents this session started with toriel_agent. action "list" shows them with state, turns and time; "status" and "result" take an id like #2; "wait" blocks until the id (or, with no id, all running ones) ends or timeoutSeconds passes; "stop" aborts one and returns what it had so far.';
+  'Manage the subagents this session started with toriel_agent. action "list" shows them with state, turns and time, and the ones still waiting for a free slot; "status" and "result" take an id like #2; "wait" blocks until the id (or, with no id, all running ones) ends or timeoutSeconds passes; "stop" aborts one and returns what it had so far.';
 
 type Reply = { content: Array<{ type: "text"; text: string }>; details: unknown };
 const text = (t: string, details: unknown): Reply => ({ content: [{ type: "text", text: t }], details });

@@ -79,7 +79,10 @@ export async function doctorMain(args: readonly string[], io: DoctorIo, opts: Do
   const { loadSessionAgents } = await import("./session-agents.ts");
   const { forkIds, loadLineage } = await import("./lineage.ts");
   const mcpUsage = () => scanMcpUsage(join(piAgentDir(opts.env ?? process.env), "sessions"), { agents: new Set(Object.keys(loadSessionAgents())), forks: forkIds(loadLineage()) });
-  const options = { probeLitellm, probeChat: probeChatServer, mcpUsage, ...opts, startup: [], tty: io.tty === true };
+  // and whether each model's calls report cache reads (ticket 311): the same session files
+  const { scanCacheReporting } = await import("./cache-reporting.ts");
+  const cacheReport = () => scanCacheReporting(join(piAgentDir(opts.env ?? process.env), "sessions"));
+  const options = { probeLitellm, probeChat: probeChatServer, mcpUsage, cacheReport, ...opts, startup: [], tty: io.tty === true };
   const checks = doctor.runDoctor(options);
   const style = io.color ? doctor.ANSI_STYLE : undefined;
   io.write(`${doctor.renderDoctor(checks, { style })}\n`);

@@ -63,6 +63,7 @@ function metaFor(s: DaemonSession, socket: net.Socket, presence: Presence, usage
     grants: granted > 0 ? granted : undefined,
     nextGrantExpiry: s.sessionId && grants ? grants.soonestExpiry(s.sessionId) : undefined,
     grantsSaved: saved > 0 ? saved : undefined,
+    spawnsQueued: s.sessionId ? subagents?.queuedFor(s.sessionId).length || undefined : undefined,
     subagent: sub ? { state: sub.state, delivered: sub.deliveredAt !== undefined, parent: sub.parent, tokens: sub.tokens, budget: sub.budget, turns: sub.turns, maxTurns: sub.maxTurns, note: sub.note || undefined } : undefined,
   };
 }

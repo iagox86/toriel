@@ -405,7 +405,7 @@ export class SwitcherActions {
       this.h.tui.requestRender();
       return;
     }
-    const result = moveSession(this.groups, this.h.switcher.sessions, s, delta);
+    const result = moveSession(this.groups, this.h.switcher.sessions, this.h.switcher.orderedAll, s, delta);
     // a session dragged into a folded group would vanish into it: unfold the group so it stays selected in view
     const into = this.groups.assignments[s.sessionId] ?? "(ungrouped)";
     if (result.changed && this.groups.collapsed?.includes(into)) {

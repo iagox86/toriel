@@ -158,7 +158,7 @@ describe("doctor checks", () => {
   it("finds nothing wrong with a complete setup", () => {
     const { opts, agentDir } = setup();
     fs.mkdirSync(path.join(agentDir, "feedback"), { recursive: true });
-    const all = { ...opts, feedbackDir: path.join(agentDir, "feedback"), mcpUsage: () => ({ sessions: 0, byServer: {}, declared: {} }) };
+    const all = { ...opts, feedbackDir: path.join(agentDir, "feedback"), mcpUsage: () => ({ sessions: 0, byServer: {}, declared: {} }), cacheReport: () => ({ byModel: {} }) };
     assert.deepEqual(collectFindings(all), []);
     const checks = runDoctor(all);
     assert.equal(exitCode(checks), 0);
@@ -295,6 +295,7 @@ describe("doctor checks", () => {
       })(),
       setup({ mcpExtra: { broken: { exposure: "direct" } } }).opts,
       { ...setup({ mcpExtra: { busy: { command: "x" } } }).opts, mcpUsage: () => ({ sessions: 20, byServer: { busy: 10 }, declared: {} }) },
+      { ...setup({}).opts, cacheReport: () => ({ byModel: { "litellm/local-model": { longSessions: 5, cachedCalls: 0 } } }) },
       staleSkill().opts,
       setup({ piMcpJson: { mcpServers: { freecad: { url: "http://127.0.0.1:39280/mcp" } } } }).opts,
       setup({ config: { authorizerChain: ["toriel-grants"], permission: { "*": "allow", external_directory_write: { "/tmp/*": "allow" }, path: { "*": "ask", [GRANTS_RULE]: "ask" } } }, settings: JSON.stringify({ scopeGuardAcceptedAllows: [{ surface: "external_directory_write", pattern: "/tmp/*" }, { surface: "*", pattern: "*" }] }) }).opts,
@@ -456,6 +457,20 @@ describe("doctor checks", () => {
     assert.deepEqual(collectFindings({ ...s.opts, startup: [] }).filter((f) => f.id === "mcp-exposure"), [], "not asked without the usage");
   });
 
+  it("cache-reporting: flags a model whose long sessions never reported a cache read, with the litellm hint and no automatic fix (ticket 311)", () => {
+    const s = setup({});
+    const report = { byModel: { "litellm/local-model": { longSessions: 4, cachedCalls: 0 }, "anthropic/sonnet": { longSessions: 9, cachedCalls: 120 }, "p/rare": { longSessions: 2, cachedCalls: 0 } } };
+    const found = collectFindings({ ...s.opts, startup: [], cacheReport: () => report }).filter((f) => f.id === "cache-reporting");
+    assert.equal(found.length, 1);
+    assert.match(found[0]?.message ?? "", /^litellm\/local-model reported no prompt-cache read in any call of its last 4 long sessions/);
+    assert.match(found[0]?.message ?? "", /subagent budgets then count the whole context on every call/);
+    assert.match(found[0]?.message ?? "", /provider openai with api_base <ollama>\/v1/);
+    assert.ok(found[0]?.manual && !found[0]?.fix, "a gateway config is not doctor's to edit");
+    assert.deepEqual(collectFindings({ ...s.opts, startup: [] }).filter((f) => f.id === "cache-reporting"), [], "not asked without the scan");
+    const check = runDoctor({ ...s.opts }).find((c) => c.id === "cache-reporting");
+    assert.equal(check?.state, "skipped", "the in-app /doctor does not read the session files");
+  });
+
   it("mcp-exposure: several servers advised in one run keep one backup holding the original", () => {
     const s = setup({ gitMcp: "deferred", gdbMcp: "deferred", ghidraMcp: "deferred", vikunjaMcp: "deferred", mcpExtra: { busy: { command: "x" }, idle: { command: "y", exposure: "direct" } } });
     const usage = { sessions: 20, byServer: { busy: 10 }, declared: { idle: 20 } };
@@ -533,7 +548,7 @@ describe("doctor checks", () => {
 
   it("skips the checks that need the permission package when it is not there, and says so", () => {
     const checks = runDoctor(setup({ noPackage: true }).opts);
-    assert.deepEqual(checks.filter((c) => c.state === "skipped").map((c) => c.id), ["grants-chain", "mcp-exposure", "feedback-size", "grants-path-rule", "scope-guard-short-circuit"]);
+    assert.deepEqual(checks.filter((c) => c.state === "skipped").map((c) => c.id), ["grants-chain", "mcp-exposure", "cache-reporting", "feedback-size", "grants-path-rule", "scope-guard-short-circuit"]);
     assert.match(renderDoctor(checks), /skipped {2}permission grants are switched on[\s\S]*needs pi-permission-system/);
   });
 
@@ -738,9 +753,9 @@ describe("doctor report", () => {
   });
 
   it("leaves the passing checks out of the compact report and counts them", () => {
-    const text = renderDoctor(runDoctor({ ...setup({ config: {} }).opts, mcpUsage: () => ({ sessions: 0, byServer: {}, declared: {} }) }), { compact: true });
+    const text = renderDoctor(runDoctor({ ...setup({ config: {} }).opts, mcpUsage: () => ({ sessions: 0, byServer: {}, declared: {} }), cacheReport: () => ({ byModel: {} }) }), { compact: true });
     assert.match(text, /Required: all 5 ok/);
-    assert.match(text, /Recommended: all 6 ok/);
+    assert.match(text, /Recommended: all 7 ok/);
     assert.doesNotMatch(text, / ok {7}/);
     assert.match(text, /Optional features[\s\S]*PROBLEM {2}permission grants[\s\S]*\(22 ok\)/);
   });

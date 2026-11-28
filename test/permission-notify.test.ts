@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { describe, it } from "node:test";
 import type { DialogRequest } from "../src/dialogs.ts";
-import { bodyOf, type Ask, type Notification, notifiable, notifySend, PermissionNotifier } from "../src/permission-notify.ts";
+import { bodyOf, escapeMarkup, oneLine, promptFields, type Ask, type Notification, notifiable, notifySend, PermissionNotifier } from "../src/permission-notify.ts";
 
 const perm = (id: string): DialogRequest => ({ id, method: "select", title: "Permission Required\ntool    : bash\ncommand : sudo -V", options: ["Yes", "No"] });
 const plan: DialogRequest = { id: "p1", method: "select", title: "Plan mode: approve this plan?\n\n1. do it", options: ["Approve", "Keep planning", "Reject"] };
@@ -17,7 +17,7 @@ describe("permission notifications (ticket 234)", () => {
   it("pings for a permission prompt in a session that is not on screen, naming it and the tool", () => {
     const { sent, notifier } = harness();
     assert.equal(notifier.consider(perm("a"), away), true);
-    assert.deepEqual(sent, [{ summary: "Permission request: Worker", body: "tool    : bash | command : sudo -V", critical: false }]);
+    assert.deepEqual(sent, [{ summary: "Worker needs permission", body: "<b>bash</b>\nsudo -V", critical: false, icon: "dialog-password" }]);
   });
 
   it("does not ping for the session on screen, when switched off, or for other dialogs", () => {
@@ -44,16 +44,47 @@ describe("permission notifications (ticket 234)", () => {
     notifier.consider(perm("a"), { ...away, focused: true });
     assert.deepEqual(sent, []);
     notifier.consider(plan, { ...away, critical: true, who: "Subagent: Planner" });
-    assert.deepEqual(sent, [{ summary: "Plan to approve: Subagent: Planner", body: "the agent has a plan for you to approve", critical: true }]);
+    assert.deepEqual(sent, [{ summary: "Subagent: Planner has a plan to approve", body: "the agent has a plan for you to approve", critical: true, icon: "dialog-question" }]);
   });
 
   it("recognises exactly permission prompts and plan approvals, and cuts a long body", () => {
     assert.equal(notifiable(perm("a")), "permission");
     assert.equal(notifiable(plan), "plan");
     assert.equal(notifiable({ id: "x", method: "select", title: "Permission Required", options: ["Allow"] }), undefined);
-    const long = { ...perm("a"), title: `Permission Required\ncommand : ${"x".repeat(1000)}` };
-    assert.ok(bodyOf(long).length <= 240);
-    assert.match(bodyOf(long), /…$/);
+    const long = { ...perm("a"), title: `Permission Required\ncommand : ${"x".repeat(500)}${"y".repeat(500)}` };
+    assert.ok(bodyOf(long).length <= 160);
+    assert.match(bodyOf(long), /^x+…y+$/, "cut in the middle: the head and the tail stay");
+  });
+});
+
+describe("the notification's look (ticket 335)", () => {
+  const prompt = (title: string): DialogRequest => ({ id: "a", method: "select", title, options: ["Yes", "No"] });
+
+  it("puts the tool in bold on its own line and the path or command under it", () => {
+    assert.equal(bodyOf(prompt("Permission Required\ntool    : write\npath    : /p/deep/docs/a.md")), "<b>write</b>\n/p/deep/docs/a.md");
+    assert.equal(bodyOf(prompt("Permission Required (Subagent)\ntool    : bash\ncommand : ls")), "<b>bash</b>\nls", "a forwarded subagent prompt reads the same");
+    assert.equal(bodyOf(prompt("Permission Required\ncommand : rm a")), "rm a", "no tool field: just the detail");
+  });
+
+  it("folds a multi-line command onto one line instead of joining raw dialog lines", () => {
+    const title = "Permission Required\ntool    : bash\ncommand : for f in *.ts; do\n  echo   $f\ndone";
+    assert.deepEqual(promptFields(title), [
+      { key: "tool", value: "bash" },
+      { key: "command", value: "for f in *.ts; do\n  echo   $f\ndone" },
+    ]);
+    assert.equal(bodyOf(prompt(title)), "<b>bash</b>\nfor f in *.ts; do echo $f done");
+  });
+
+  it("escapes what the dialog says, so a redirect or an ampersand cannot break the markup", () => {
+    assert.equal(escapeMarkup("a < b && c > d"), "a &lt; b &amp;&amp; c &gt; d");
+    assert.equal(bodyOf(prompt("Permission Required\ntool    : bash\ncommand : make 2>&1 </dev/null")), "<b>bash</b>\nmake 2&gt;&amp;1 &lt;/dev/null");
+  });
+
+  it("cuts a long line in the middle within the limit", () => {
+    assert.equal(oneLine("short  text\n"), "short text");
+    const cut = oneLine(`${"a".repeat(100)} ${"b".repeat(100)}`, 40);
+    assert.ok(cut.length <= 40, cut);
+    assert.match(cut, /^a+…b+$/);
   });
 });
 
@@ -65,9 +96,11 @@ describe("notifySend", () => {
       calls.push({ cmd, args, opts });
       return child;
     }) as never);
-    send({ summary: "-s", body: "b", critical: true });
+    send({ summary: "-s", body: "b", critical: true, icon: "dialog-password" });
+    send({ summary: "s", body: "b", critical: false });
     assert.equal(calls[0]?.cmd, "notify-send");
-    assert.deepEqual(calls[0]?.args, ["--app-name=toriel", "--urgency=critical", "--", "-s", "b"]);
+    assert.deepEqual(calls[0]?.args, ["--app-name=toriel", "--urgency=critical", "--icon=dialog-password", "--", "-s", "b"]);
+    assert.deepEqual(calls[1]?.args, ["--app-name=toriel", "--urgency=normal", "--", "s", "b"], "no icon: no flag");
     assert.deepEqual(calls[0]?.opts, { stdio: "ignore", detached: true });
   });
 

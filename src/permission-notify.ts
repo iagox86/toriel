@@ -7,15 +7,21 @@ import { isPermissionPrompt, type DialogRequest } from "./dialogs.ts";
 
 export interface Notification {
   summary: string;
+  /** Body markup (the freedesktop subset: `<b>`, escaped text); bodyOf escapes everything it takes from the dialog. */
   body: string;
   critical: boolean;
+  /** A freedesktop icon name from the installed theme, so toriel ships no icon file. */
+  icon?: string;
 }
 
 /** Sends one notification; never throws. */
 export type Notifier = (n: Notification) => void;
 
-const BODY_MAX = 240;
+/** The longest detail line (the command or path); a longer one keeps its head and tail with an ellipsis between. */
+const DETAIL_MAX = 160;
 const SEEN_MAX = 200;
+/** Standard icon-naming-spec names, present in every freedesktop theme (Adwaita, Breeze). */
+const ICONS = { permission: "dialog-password", plan: "dialog-question" } as const;
 
 /** The title of the plan-approval dialog (pi/extensions/lib/plan-mode.ts approvalTitle). */
 const PLAN_PREFIX = "Plan mode: approve this plan?";
@@ -28,11 +34,53 @@ export function notifiable(d: DialogRequest): "permission" | "plan" | undefined 
   return d.method === "select" && (d.title ?? "").startsWith(PLAN_PREFIX) ? "plan" : undefined;
 }
 
-/** What the notification says: the tool or action lines of the dialog, on one line, cut short. */
+/** Text for notification markup: notification servers that parse the body (GNOME, KDE) would take a command's `<` or `&` as markup and show nothing. */
+export function escapeMarkup(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/** Whitespace runs (a multi-line command's newlines included) as single spaces, and a long text cut in the middle, where a command's least telling part usually is. */
+export function oneLine(text: string, max = DETAIL_MAX): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  if (flat.length <= max) {
+    return flat;
+  }
+  const tail = Math.floor((max - 1) / 3);
+  return `${flat.slice(0, max - 1 - tail).trimEnd()}…${flat.slice(-tail).trimStart()}`;
+}
+
+/** The `key : value` fields of a permission prompt's title, in order; a line that is not a field continues the previous value (a multi-line command). */
+export function promptFields(title: string): Array<{ key: string; value: string }> {
+  const fields: Array<{ key: string; value: string }> = [];
+  for (const line of title.split("\n").slice(1)) {
+    const m = /^\s*([A-Za-z][\w -]*?)\s*:\s(.*)$/.exec(line);
+    const last = fields.at(-1);
+    if (m) {
+      fields.push({ key: (m[1] ?? "").trim(), value: (m[2] ?? "").trim() });
+    } else if (last) {
+      last.value = `${last.value}\n${line}`;
+    } else if (line.trim() !== "") {
+      fields.push({ key: "", value: line.trim() });
+    }
+  }
+  return fields;
+}
+
+/**
+ * What the notification says (ticket 335): the tool in bold on its own line, then the one thing it wants to touch (the command,
+ * path or whatever field comes first) on one line, cut in the middle when long. A plan approval says so. The command text is
+ * shown as is, also on a lock screen whose settings show notification bodies: a deliberate choice for a personal machine, where
+ * knowing what waits is the point (the desktop's own lock-screen setting can hide bodies).
+ */
 export function bodyOf(d: DialogRequest): string {
-  const lines = (d.title ?? "").split("\n").map((l) => l.trim()).filter((l) => l !== "");
-  const text = (notifiable(d) === "plan" ? ["the agent has a plan for you to approve"] : lines.slice(1)).join(" | ");
-  return text.length > BODY_MAX ? `${text.slice(0, BODY_MAX - 1)}…` : text || (lines[0] ?? "");
+  if (notifiable(d) === "plan") {
+    return "the agent has a plan for you to approve";
+  }
+  const fields = promptFields(d.title ?? "");
+  const tool = fields.find((f) => f.key === "tool")?.value;
+  const detail = fields.find((f) => f.key !== "tool" && f.value.trim() !== "");
+  const lines = [...(tool ? [`<b>${escapeMarkup(oneLine(tool, 60))}</b>`] : []), ...(detail ? [escapeMarkup(oneLine(detail.value))] : [])];
+  return lines.length > 0 ? lines.join("\n") : escapeMarkup(oneLine((d.title ?? "").split("\n")[0] ?? ""));
 }
 
 /** The real sender: `notify-send`, detached, its failure logged once per failure and otherwise ignored. */
@@ -47,7 +95,7 @@ export function notifySend(log: (line: string) => void = () => {}, run: typeof s
   };
   return (n) => {
     try {
-      const args = ["--app-name=toriel", `--urgency=${n.critical ? "critical" : "normal"}`, "--", n.summary, n.body];
+      const args = ["--app-name=toriel", `--urgency=${n.critical ? "critical" : "normal"}`, ...(n.icon ? [`--icon=${n.icon}`] : []), "--", n.summary, n.body];
       const child = run("notify-send", args, { stdio: "ignore", detached: true });
       child.on("error", (err) => say(`notify-send failed: ${err.message}`));
       child.unref();
@@ -87,7 +135,8 @@ export class PermissionNotifier {
     if (this.seen.size > SEEN_MAX) {
       this.seen.delete(this.seen.values().next().value as string);
     }
-    this.send({ summary: `${kind === "plan" ? "Plan to approve" : "Permission request"}: ${ask.who}`, body: bodyOf(d), critical: ask.critical });
+    // the summary is plain text everywhere (no markup), so the session name needs no escaping
+    this.send({ summary: kind === "plan" ? `${ask.who} has a plan to approve` : `${ask.who} needs permission`, body: bodyOf(d), critical: ask.critical, icon: ICONS[kind] });
     return true;
   }
 }

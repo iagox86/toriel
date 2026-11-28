@@ -96,6 +96,8 @@ export interface SwitcherSession {
   descendantsWorking?: number;
   descendantsParked?: number;
   descendantsWaiting?: number;
+  /** Subagent spawns this session asked for that wait for a free slot (ticket 345): counted on the row, never rows of their own. */
+  spawnsQueued?: number;
   /** First user message, shown in the description column when idle-ish. */
   description?: string;
 }

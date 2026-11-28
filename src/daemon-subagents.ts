@@ -21,6 +21,7 @@ import { formatReceived } from "./received.ts";
 import { scrubSecrets, verbLine } from "./subagent-exit.ts";
 import {
   childBudget,
+  describeQueued,
   describeRecord,
   expiredSubagents,
   abnormalEnd,
@@ -33,6 +34,7 @@ import {
   slotFree,
   resultText,
   SubagentBook,
+  type QueuedSpawn,
   type SubagentLimits,
   type SweepCandidate,
   type SubagentRecord,
@@ -311,7 +313,7 @@ export class SubagentManager {
    * a slot is free and nobody is ahead, otherwise in arrival order as subagents end (ticket 341). Rejects when `signal` aborts first
    * (the caller went away).
    */
-  private waitForSlot(signal: AbortSignal | undefined, label: string): Promise<void> {
+  private waitForSlot(signal: AbortSignal | undefined, label: string, queued: Omit<QueuedSpawn, "since">): Promise<void> {
     const cancelled = (): Error => new Error("cancelled while waiting for a free subagent slot");
     // an already-given-up caller takes no slot, fast path included
     if (signal?.aborted) {
@@ -322,10 +324,17 @@ export class SubagentManager {
       return Promise.resolve();
     }
     return new Promise<void>((resolve, reject) => {
+      // the parent's row and its toriel_agents list show the spawn while it waits (ticket 345); it leaves both when it starts or is dropped
+      const shown = this.book.enqueue({ ...queued, since: Date.now() });
+      const unshow = (): void => {
+        this.book.dequeue(shown);
+        this.ctx().hub.broadcastSessions();
+      };
       const entry = {
         go: (): void => {
           signal?.removeEventListener("abort", onAbort);
           this.reserved++;
+          unshow();
           resolve();
         },
       };
@@ -334,10 +343,12 @@ export class SubagentManager {
         if (i >= 0) {
           this.waiting.splice(i, 1);
         }
+        unshow();
         reject(cancelled());
       };
       signal?.addEventListener("abort", onAbort, { once: true });
       this.waiting.push(entry);
+      this.ctx().hub.broadcastSessions();
       log(`subagent spawn (${label}) waits for a free slot: ${this.book.running().length} running, limit ${this.limits.maxConcurrent}, ${this.waiting.length} waiting`);
     });
   }
@@ -424,7 +435,7 @@ export class SubagentManager {
     // since waiting could deadlock with its own parent holding a slot
     const held = parentDepth === 0;
     if (held) {
-      await this.waitForSlot(signal, `${base.name}: ${cmd.description}`);
+      await this.waitForSlot(signal, `${base.name}: ${cmd.description}`, { parent: parentUuid, agent: base.name, description: cmd.description });
     }
     let child: DaemonSession;
     let name: string;
@@ -611,9 +622,12 @@ export async function handleAgentsOp(ctx: DaemonContext, cmd: Cmd<"agents_op">, 
     return rec;
   };
   switch (cmd.action) {
-    case "list":
-      res(true, undefined, { text: mine.length === 0 ? "No subagents started by this session." : mine.map((r) => describeRecord(r)).join("\n") });
+    case "list": {
+      // spawns still waiting for a slot have no handle yet, but the caller should see they are queued, not lost (ticket 345)
+      const lines = [...mine.map((r) => describeRecord(r)), ...ctx.subagents.book.queuedFor(cmd.from).map((q) => describeQueued(q.spawn, q.place))];
+      res(true, undefined, { text: lines.length === 0 ? "No subagents started by this session." : lines.join("\n") });
       return;
+    }
     case "status":
       res(true, undefined, { text: describeRecord(pick()) });
       return;

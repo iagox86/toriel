@@ -169,6 +169,40 @@ describe("daemon: subagents", () => {
     }
   });
 
+  it("shows spawns waiting for a slot on the parent's row and in its toriel_agents list, until they start or their caller goes away (ticket 345)", async () => {
+    harness = await startDaemon();
+    const { c, uuid, session } = await parentSession(harness);
+    for (const n of [1, 2, 3]) {
+      await spawn(c, uuid, { task: `[hang] ${n}`, background: true });
+    }
+    const queued = (): unknown => c.sessions().find((s) => s.id === session)?.spawnsQueued;
+    assert.equal(queued(), undefined, "nothing waits while slots are free");
+    const gone = await harness.connect();
+    void spawn(gone, uuid, { task: "[hang] gone", description: "gone", background: true }).catch(() => undefined);
+    await until(() => queued() === 1);
+    const kept = spawn(c, uuid, { task: "[hang] kept", description: "kept", background: true });
+    await until(() => queued() === 2);
+    assert.equal(queued(), 2, "the parent's meta counts both waiting spawns");
+    const listed = await c.request({ type: "agents_op", from: uuid, action: "list" });
+    assert.match(listed.text, /^\(waiting\) worker: gone \[waiting for a free slot, 1 in line, \d+s; it starts when a running subagent ends\]$/m);
+    assert.match(listed.text, /^\(waiting\) worker: kept \[waiting for a free slot, 2 in line/m);
+    assert.match(listed.text, /^#1 worker: look \[running/m, "the running ones are listed as before");
+    gone.close();
+    await until(() => queued() === 1);
+    assert.equal(queued(), 1, "a dropped spawn leaves the row");
+    assert.doesNotMatch((await c.request({ type: "agents_op", from: uuid, action: "list" })).text, /gone/);
+    await c.request({ type: "agents_op", from: uuid, action: "stop", ref: "#1" });
+    await kept;
+    await until(() => queued() === undefined);
+    assert.equal(queued(), undefined, "a started spawn leaves the row: it is a session now");
+    const after = (await c.request({ type: "agents_op", from: uuid, action: "list" })).text;
+    assert.doesNotMatch(after, /\(waiting\)/);
+    assert.match(after, /^#4 worker: kept \[running/m);
+    for (const ref of ["#2", "#3", "#4"]) {
+      await c.request({ type: "agents_op", from: uuid, action: "stop", ref });
+    }
+  });
+
   it("cuts a subagent off at its token budget and returns what it had", async () => {
     harness = await startDaemon();
     const { c, uuid } = await parentSession(harness);
