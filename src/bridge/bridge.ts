@@ -19,7 +19,7 @@ import { CONNECT_HINTS, chatErrorText, describeChatError, isSetupCode, redactUrl
 import type { DaemonPort } from "./daemon-client.ts";
 import { oneLine } from "../util.ts";
 import { parseChatCommand } from "./chat-commands.ts";
-import { runChatCommand } from "./command-runner.ts";
+import { chatStateLabel, runChatCommand } from "./command-runner.ts";
 import { HISTORY_TURNS, quoteUser, renderHistory } from "./history.ts";
 import { parseLocalCommand } from "../local-command.ts";
 import { localCommandOf, localCommandPost } from "./local-command-post.ts";
@@ -833,16 +833,6 @@ export class Bridge {
     this.save();
   }
 
-  private stateLabel(meta: SessionMeta): string {
-    if (meta.pendingDialog) {
-      return "waiting for you";
-    }
-    if (!meta.active) {
-      return "asleep";
-    }
-    return meta.streaming ? "working" : "idle";
-  }
-
   /** Keep the channel's name and description in step with the session. */
   private async refreshChannel(meta: SessionMeta, rec: ChannelRecord): Promise<void> {
     const sessionId = meta.sessionId as string;
@@ -857,7 +847,7 @@ export class Bridge {
         }
       }
     }
-    const label = this.stateLabel(meta);
+    const label = chatStateLabel(meta);
     if (this.lastLabel.get(sessionId) !== label) {
       this.lastLabel.set(sessionId, label);
       await this.adapter.setDescription(rec.roomId, `${label} · ${meta.cwd} · ${meta.model} ${sessionTag(sessionId)}`).catch(() => undefined);
@@ -1279,6 +1269,11 @@ export class Bridge {
       }
       return;
     }
+    if (m.threadRootId) {
+      // as in a session's channel (ticket 289): a thread reply in the inbox or an empty channel must not start a session
+      await this.adapter.post(m.roomId, "I don't use threads: write in the channel itself and I will read it.", { replyTo: m.id });
+      return;
+    }
     if (await this.refuseCommand(m, text)) {
       return;
     }
@@ -1383,11 +1378,13 @@ export class Bridge {
     if (await this.refuseCommand(m, text, { meta, late })) {
       return;
     }
-    if (await this.answerPick(m.roomId, { text })) {
-      return;
-    }
+    // a dialog first (ticket 289): the session is blocked on it, while a !model or !think picker only waits; a reaction needs no
+    // order, it names the message it is on
     const d = this.dialogFor(m.roomId);
     if (d && (await this.answerFrom(d, { text }))) {
+      return;
+    }
+    if (await this.answerPick(m.roomId, { text })) {
       return;
     }
     if (!meta) {
